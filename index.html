@@ -1901,10 +1901,10 @@ function imprimirAgendaDia() {
 
   if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
   // Agregar CSS para salto de pagina solo entre paginas (NO antes de la primera)
-  styleCss += '.pagina + .pagina{page-break-before:always;}';
+  const fullCss = styleCss + '.pagina + .pagina{page-break-before:always;}';
   const container = document.createElement('div');
   container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
-  container.innerHTML = '<style>' + styleCss + '</style>' + paginas.join('');
+  container.innerHTML = '<style>' + fullCss + '</style>' + paginas.join('');
   document.body.appendChild(container);
   setTimeout(() => {
     const opt = {
