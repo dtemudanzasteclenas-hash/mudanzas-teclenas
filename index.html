@@ -1903,7 +1903,8 @@ function imprimirAgendaDia() {
   // Agregar CSS para salto de pagina solo entre paginas (NO antes de la primera)
   const fullCss = styleCss + '.pagina + .pagina{page-break-before:always;}';
   const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
+  // Posicionar en viewport real (no off-screen) para que html2canvas pueda capturar
+  container.style.cssText = 'position:fixed;left:0;top:0;width:216mm;background:#fff;z-index:-9999;pointer-events:none;';
   container.innerHTML = '<style>' + fullCss + '</style>' + paginas.join('');
   document.body.appendChild(container);
   setTimeout(() => {
@@ -1911,14 +1912,14 @@ function imprimirAgendaDia() {
       margin: 0,
       filename: 'Servicios_' + f + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: container.scrollWidth, windowHeight: container.scrollHeight },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['css'] }
     };
     html2pdf().set(opt).from(container).save().then(() => {
       container.remove();
     }).catch((e) => { console.error(e); container.remove(); alert('Error generando PDF: ' + e.message); });
-  }, 300);
+  }, 500);
 }
 
 // ==================== AGENDA GRID ====================
@@ -3298,7 +3299,7 @@ function imprimirPDF() {
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
     const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
+    container.style.cssText = 'position:fixed;left:0;top:0;width:216mm;background:#fff;z-index:-9999;pointer-events:none;';
     const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
     const styleMatch = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
     container.innerHTML = (styleMatch ? '<style>'+styleMatch[1]+'.pagina + .pagina{page-break-before:always;}</style>' : '') + (bodyMatch ? bodyMatch[1] : '');
@@ -3309,7 +3310,7 @@ function imprimirPDF() {
         margin: 0,
         filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: container.scrollWidth, windowHeight: container.scrollHeight },
         jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
         pagebreak: { mode: ['css'] }
       };
@@ -4942,7 +4943,7 @@ function descargarResumenMensual() {
 
   if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado.'); return; }
   const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
+  container.style.cssText = 'position:fixed;left:0;top:0;width:216mm;background:#fff;z-index:-9999;pointer-events:none;';
   container.innerHTML = html;
   document.body.appendChild(container);
   setTimeout(() => {
@@ -4950,7 +4951,7 @@ function descargarResumenMensual() {
       margin: 0,
       filename: 'Resumen_' + nombreMes.replace(/\s+/g,'_') + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: container.scrollWidth, windowHeight: container.scrollHeight },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['avoid-all','css'] }
     }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error: '+e.message); });
