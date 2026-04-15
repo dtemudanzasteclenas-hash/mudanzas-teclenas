@@ -270,6 +270,7 @@ tr:hover td{background:#f8fafd;}
   <button class="sb-btn" onclick="nav('programacion')"><span class="ic">🗂️</span>Prog. Diaria</button>
   <button class="sb-btn" onclick="nav('conciliacion')"><span class="ic">🏦</span>Conciliación CUSCA</button>
   <button class="sb-btn" onclick="openWAReader()"><span class="ic">💬</span>Leer WhatsApp</button>
+  <button class="sb-btn" onclick="nav('canceladas')"><span class="ic">🚫</span>Canceladas</button>
   <button class="sb-btn" onclick="nav('clientes')"><span class="ic">👥</span>Clientes</button>
   <button class="sb-btn" onclick="nav('comisiones')"><span class="ic">💰</span>Comisiones</button>
 </aside>
@@ -366,6 +367,16 @@ tr:hover td{background:#f8fafd;}
   <div class="card">
     <table><thead><tr><th>Código</th><th>Cliente</th><th>Teléfono</th><th>Fecha</th><th>Hora</th><th>Unidad</th><th>Servicios</th><th>Estado</th><th>Vendedor</th><th>Acciones</th></tr></thead>
     <tbody id="tb-res"></tbody></table>
+  </div>
+</section>
+
+<!-- CANCELADAS -->
+<section id="sec-canceladas" class="sec">
+  <div class="sec-title">🚫 <span>Reservaciones Canceladas</span></div>
+  <p style="color:var(--gris2);font-size:13px;margin-bottom:16px;">Servicios que fueron cancelados. Puedes retomar cualquiera si el cliente vuelve a llamar.</p>
+  <div class="card">
+    <table><thead><tr><th>Código</th><th>Cliente</th><th>Teléfono</th><th>Fecha</th><th>Hora</th><th>Carga</th><th>Descarga</th><th>Unidad</th><th>Acciones</th></tr></thead>
+    <tbody id="tb-canceladas"></tbody></table>
   </div>
 </section>
 
@@ -1624,13 +1635,15 @@ function nav(id) {
   else if (id==='conciliacion') renderConciliacion();
   else if (id==='clientes') renderCli();
   else if (id==='comisiones') renderComisiones();
+  else if (id==='canceladas') renderCanceladas();
   else renderAll();
 }
 
 // ==================== RENDER ====================
-function renderAll() { 
-  renderStats(); 
-  renderTable('tb-dash', reservas.slice(0,10), false); 
+function renderAll() {
+  renderStats();
+  const activas = reservas.filter(r => r.estado !== 'cancelado');
+  renderTable('tb-dash', activas.slice(0,10), false);
   renderTable('tb-res', reservas, true);
   if (typeof renderNotificaciones === 'function') renderNotificaciones();
 }
@@ -1672,6 +1685,76 @@ function renderTable(id, data, withTel) {
           <td><div class="flex gap2"><button class="btn btn-gh btn-sm" onclick="verRes(${idx})">👁 Ver</button><button class="btn btn-r btn-sm" onclick="eliminar(${idx})">🗑</button></div></td>
         </tr>`;
       }).join('');
+}
+
+// ==================== CANCELADAS ====================
+function renderCanceladas() {
+  const tb = document.getElementById('tb-canceladas'); if (!tb) return;
+  const canceladas = reservas.filter(r => r.estado === 'cancelado')
+    .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+  if (canceladas.length === 0) {
+    tb.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--gris2);padding:24px;">No hay reservaciones canceladas.</td></tr>';
+    return;
+  }
+  tb.innerHTML = canceladas.map(r => {
+    const idx = reservas.indexOf(r);
+    const unidadLabel = r.unidad === 'grande' ? 'Grande 7m/10t' : r.unidad === 'mediano' ? 'Mediano 5m/5t' : 'Pequeño 3m/2t';
+    const cargaCorta = r.carga && r.carga.length > 35 ? r.carga.substring(0,35)+'…' : (r.carga||'—');
+    const descCorta = r.descarga && r.descarga.length > 35 ? r.descarga.substring(0,35)+'…' : (r.descarga||'—');
+    return `<tr>
+      <td><span class="chip a" style="font-size:10px;">${r.codigo}</span></td>
+      <td><strong>${r.nombre} ${r.apellido}</strong></td>
+      <td>${r.tel}</td>
+      <td>${fmtFecha(r.fecha)}</td>
+      <td>${r.hora}</td>
+      <td style="font-size:11px;">${cargaCorta}</td>
+      <td style="font-size:11px;">${descCorta}</td>
+      <td style="font-size:11px;">${unidadLabel}</td>
+      <td><div class="flex gap2">
+        <button class="btn btn-gh btn-sm" onclick="verRes(${idx})" title="Ver detalles">👁 Ver</button>
+        <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;" onclick="retomarReserva(${idx})" title="Retomar servicio">♻️ Retomar</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function retomarReserva(idx) {
+  const r = reservas[idx];
+  if (!r) return;
+  const nombre = `${r.nombre} ${r.apellido}`;
+  // Preguntar nuevo estado
+  const nuevoEstado = prompt(
+    `Retomar reservación de ${nombre}\n\n` +
+    `¿Con qué estado deseas reactivarla?\n\n` +
+    `1 = Pendiente\n2 = Confirmado\n\nEscribe 1 o 2:`,
+    '2'
+  );
+  if (!nuevoEstado || (nuevoEstado !== '1' && nuevoEstado !== '2')) return;
+  r.estado = nuevoEstado === '1' ? 'pendiente' : 'confirmado';
+  // Preguntar si quiere cambiar la fecha
+  const cambiarFecha = confirm(`¿Deseas cambiar la fecha del servicio?\n\nFecha actual: ${fmtFecha(r.fecha)}\n\n(Aceptar = cambiar fecha, Cancelar = mantener fecha actual)`);
+  if (cambiarFecha) {
+    const nuevaFecha = prompt('Nueva fecha (formato YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+    if (nuevaFecha && /^\d{4}-\d{2}-\d{2}$/.test(nuevaFecha)) {
+      // Quitar de hidden de la fecha vieja
+      const oldF = r.fecha;
+      if (agGrid[oldF]?.hidden) {
+        agGrid[oldF].hidden = agGrid[oldF].hidden.filter(c => c !== r.codigo);
+        saveAgGrid();
+      }
+      r.fecha = nuevaFecha;
+    }
+  }
+  // Quitar de hidden de la agenda para que se re-auto-ubique
+  const f = r.fecha;
+  if (agGrid[f]?.hidden) {
+    agGrid[f].hidden = agGrid[f].hidden.filter(c => c !== r.codigo);
+    saveAgGrid();
+  }
+  saveSingle(r);
+  renderAll();
+  renderCanceladas();
+  alert(`✅ Reservación de ${nombre} retomada como "${r.estado}". Ya aparece en la agenda.`);
 }
 
 function renderStats() {
@@ -2004,11 +2087,35 @@ function renderAgenda() {
         if (agDragSource.row !== row) {
           showHoraModal(f, srcKey, dstKey, srcCodigo, row);
         } else {
-          // Swap if destination occupied
+          // Same-row drag: mover TODAS las celdas de esta reservacion a la nueva columna
+          const srcCol = parseInt(srcKey.split('__')[0]);
+          const dstCol = parseInt(dstKey.split('__')[0]);
           const dstCodigo = agGrid[f]?.cells?.[dstKey];
-          agGrid[f].cells[dstKey] = srcCodigo;
-          if (dstCodigo) agGrid[f].cells[srcKey] = dstCodigo;
-          else delete agGrid[f].cells[srcKey];
+          // Encontrar todas las celdas de srcCodigo en la columna origen
+          const srcCells = {};
+          Object.keys(agGrid[f].cells).forEach(k => {
+            if (agGrid[f].cells[k] === srcCodigo && parseInt(k.split('__')[0]) === srcCol) {
+              srcCells[k.split('__')[1]] = true; // row names
+            }
+          });
+          // Si hay swap, encontrar todas las celdas de dstCodigo en la columna destino
+          const dstCells = {};
+          if (dstCodigo) {
+            Object.keys(agGrid[f].cells).forEach(k => {
+              if (agGrid[f].cells[k] === dstCodigo && parseInt(k.split('__')[0]) === dstCol) {
+                dstCells[k.split('__')[1]] = true;
+              }
+            });
+          }
+          // Borrar todas las celdas viejas de ambas reservaciones
+          Object.keys(srcCells).forEach(rowName => { delete agGrid[f].cells[agCellKey(srcCol, rowName)]; });
+          Object.keys(dstCells).forEach(rowName => { delete agGrid[f].cells[agCellKey(dstCol, rowName)]; });
+          // Colocar srcCodigo en la columna destino
+          Object.keys(srcCells).forEach(rowName => { agGrid[f].cells[agCellKey(dstCol, rowName)] = srcCodigo; });
+          // Si habia swap, colocar dstCodigo en la columna origen
+          if (dstCodigo) {
+            Object.keys(dstCells).forEach(rowName => { agGrid[f].cells[agCellKey(srcCol, rowName)] = dstCodigo; });
+          }
           saveAgGrid();
           renderAgenda();
         }
@@ -2104,8 +2211,17 @@ function removeFromGrid(f, key) {
   const codigo = agGrid[f].cells[key];
   const r = codigo ? reservas.find(rv => rv.codigo === codigo) : null;
   const nombre = r ? `${r.nombre} ${r.apellido}` : 'esta reservación';
-  if (!confirm(`¿Quitar la reservación de ${nombre} de la agenda?\n\n(La reservación NO se elimina, solo se quita de esta vista.)`)) return;
-  // Si la reservación ocupa varias horas, quitarla de TODAS las celdas y marcarla oculta para que no se re-auto-ubique
+  // Dar 3 opciones: Cancelar servicio, Solo quitar de agenda, o No hacer nada
+  const opcion = prompt(
+    `¿Qué deseas hacer con la reservación de ${nombre}?\n\n` +
+    `1 = CANCELAR servicio (va a Reservaciones Canceladas)\n` +
+    `2 = Solo quitar de la agenda (la reservación queda activa)\n\n` +
+    `Escribe 1 o 2:`,
+    '2'
+  );
+  if (!opcion || (opcion !== '1' && opcion !== '2')) return;
+
+  // Quitar de TODAS las celdas de la agenda
   if (codigo) {
     Object.keys(agGrid[f].cells).forEach(k => {
       if (agGrid[f].cells[k] === codigo) delete agGrid[f].cells[k];
@@ -2116,7 +2232,16 @@ function removeFromGrid(f, key) {
     delete agGrid[f].cells[key];
   }
   saveAgGrid();
+
+  // Si eligio cancelar, marcar la reservacion como cancelada
+  if (opcion === '1' && r) {
+    r.estado = 'cancelado';
+    saveSingle(r);
+    alert(`✅ Reservación de ${nombre} cancelada. Puedes retomar desde "Canceladas" en el menú.`);
+  }
+
   renderAgenda();
+  renderAll();
 }
 
 function openWAReaderEnHora(hora) {
@@ -2182,15 +2307,41 @@ function confirmarHoraCambio() {
   const inp  = document.getElementById('hc-hora-custom');
   let horaFinal = sel.value === 'Otra hora' ? inp.value.trim() : sel.value;
   if (!horaFinal) { alert('Por favor ingresa un horario.'); return; }
-  // Update reservation hora
+  // Update reservation hora Y horasOcupadas
   const r = reservas.find(rv => rv.codigo === codigo);
-  if (r) { r.hora = horaFinal; saveSingle(r); }
-  // Move in grid
+  if (r) {
+    const oldHora = r.hora;
+    r.hora = horaFinal;
+    // Actualizar horasOcupadas: reemplazar la hora vieja por la nueva
+    if (r.horasOcupadas && r.horasOcupadas.length > 0) {
+      const oldRow = mapHoraToRow(oldHora);
+      const srcRow = srcKey.split('__')[1]; // row from which we dragged
+      // Buscar en horasOcupadas cual hora mapea al slot de origen
+      const idxToReplace = r.horasOcupadas.findIndex(h => mapHoraToRow(h) === srcRow);
+      if (idxToReplace >= 0) {
+        r.horasOcupadas[idxToReplace] = horaFinal;
+      } else {
+        r.horasOcupadas = [horaFinal];
+      }
+    } else {
+      r.horasOcupadas = [horaFinal];
+    }
+    saveSingle(r);
+  }
+  // Move in grid: mover TODAS las celdas de este codigo de columna origen a destino
   const day = getAgDay(f);
+  const srcCol = parseInt(srcKey.split('__')[0]);
+  const dstCol = parseInt(dstKey.split('__')[0]);
+  // Borrar todas las celdas de este codigo en la columna origen
+  Object.keys(day.cells).forEach(k => {
+    if (day.cells[k] === codigo && parseInt(k.split('__')[0]) === srcCol) {
+      delete day.cells[k];
+    }
+  });
+  // Colocar en la celda destino
   const dstCodigo = day.cells[dstKey];
   day.cells[dstKey] = codigo;
   if (dstCodigo) day.cells[srcKey] = dstCodigo;
-  else delete day.cells[srcKey];
   saveAgGrid();
   _pendingMove = null;
   document.getElementById('mo-hora-cambio').classList.remove('open');
