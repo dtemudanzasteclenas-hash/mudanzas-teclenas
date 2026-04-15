@@ -1900,8 +1900,10 @@ function imprimirAgendaDia() {
     '.firma-box{font-size:7pt;color:#555;}';
 
   if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
+  // Agregar CSS para salto de pagina solo entre paginas (NO antes de la primera)
+  styleCss += '.pagina + .pagina{page-break-before:always;}';
   const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
   container.innerHTML = '<style>' + styleCss + '</style>' + paginas.join('');
   document.body.appendChild(container);
   setTimeout(() => {
@@ -1909,9 +1911,9 @@ function imprimirAgendaDia() {
       margin: 0,
       filename: 'Servicios_' + f + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['css','legacy'], before: '.pagina' }
+      pagebreak: { mode: ['css'] }
     };
     html2pdf().set(opt).from(container).save().then(() => {
       container.remove();
@@ -3296,10 +3298,10 @@ function imprimirPDF() {
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
     const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
     const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
     const styleMatch = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
-    container.innerHTML = (styleMatch ? '<style>'+styleMatch[1]+'</style>' : '') + (bodyMatch ? bodyMatch[1] : '');
+    container.innerHTML = (styleMatch ? '<style>'+styleMatch[1]+'.pagina + .pagina{page-break-before:always;}</style>' : '') + (bodyMatch ? bodyMatch[1] : '');
     document.body.appendChild(container);
     if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); container.remove(); return; }
     setTimeout(() => {
@@ -3307,9 +3309,9 @@ function imprimirPDF() {
         margin: 0,
         filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
         jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-        pagebreak: { mode: ['css','legacy'], before: '.pagina' }
+        pagebreak: { mode: ['css'] }
       };
       html2pdf().set(opt).from(container).save().then(() => {
         container.remove();
@@ -4940,7 +4942,7 @@ function descargarResumenMensual() {
 
   if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado.'); return; }
   const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-9999;';
   container.innerHTML = html;
   document.body.appendChild(container);
   setTimeout(() => {
@@ -4948,7 +4950,7 @@ function descargarResumenMensual() {
       margin: 0,
       filename: 'Resumen_' + nombreMes.replace(/\s+/g,'_') + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['avoid-all','css'] }
     }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error: '+e.message); });
