@@ -1899,27 +1899,19 @@ function imprimirAgendaDia() {
     '.firma-row{display:flex;justify-content:space-between;margin-top:2mm;}' +
     '.firma-box{font-size:7pt;color:#555;}';
 
-  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
-  // Agregar CSS para salto de pagina solo entre paginas (NO antes de la primera)
-  const fullCss = styleCss + '.pagina + .pagina{page-break-before:always;}';
-  const container = document.createElement('div');
-  // Posicionar en viewport real (no off-screen) para que html2canvas pueda capturar
-  container.style.cssText = 'position:fixed;left:0;top:0;width:216mm;background:#fff;z-index:-9999;pointer-events:none;';
-  container.innerHTML = '<style>' + fullCss + '</style>' + paginas.join('');
-  document.body.appendChild(container);
-  setTimeout(() => {
-    const opt = {
-      margin: 0,
-      filename: 'Servicios_' + f + '.pdf',
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: container.scrollWidth, windowHeight: container.scrollHeight },
-      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['css'] }
-    };
-    html2pdf().set(opt).from(container).save().then(() => {
-      container.remove();
-    }).catch((e) => { console.error(e); container.remove(); alert('Error generando PDF: ' + e.message); });
-  }, 500);
+  // Abrir ventana nueva con el contenido y disparar print (Guardar como PDF desde el navegador)
+  const printCss = styleCss +
+    '@media print{@page{size:letter;margin:0;}.pagina{page-break-after:always;}.pagina:last-child{page-break-after:auto;}}' +
+    '.pagina + .pagina{page-break-before:always;}';
+  const fullHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Servicios ' + f + '</title>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700;800&family=Barlow+Condensed:wght@700;800;900&display=swap" rel="stylesheet">' +
+    '<style>' + printCss + '</style></head><body>' + paginas.join('') + '</body></html>';
+  const w = window.open('', '_blank');
+  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
+  w.document.write(fullHtml);
+  w.document.close();
+  // Esperar a que carguen las fuentes y luego imprimir
+  setTimeout(() => w.print(), 1200);
 }
 
 // ==================== AGENDA GRID ====================
@@ -3298,27 +3290,6 @@ function imprimirPDF() {
   </body></html>`;
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
-    const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;left:0;top:0;width:216mm;background:#fff;z-index:-9999;pointer-events:none;';
-    const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
-    const styleMatch = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
-    container.innerHTML = (styleMatch ? '<style>'+styleMatch[1]+'.pagina + .pagina{page-break-before:always;}</style>' : '') + (bodyMatch ? bodyMatch[1] : '');
-    document.body.appendChild(container);
-    if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); container.remove(); return; }
-    setTimeout(() => {
-      const opt = {
-        margin: 0,
-        filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: container.scrollWidth, windowHeight: container.scrollHeight },
-        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-        pagebreak: { mode: ['css'] }
-      };
-      html2pdf().set(opt).from(container).save().then(() => {
-        container.remove();
-      }).catch((e) => { console.error(e); container.remove(); alert('Error generando PDF: '+e.message); });
-    }, 300);
-    return;
   }
   const w = window.open('','_blank');
   if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
@@ -4941,21 +4912,13 @@ function descargarResumenMensual() {
     </table>
   </div>`;
 
-  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado.'); return; }
-  const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:0;top:0;width:216mm;background:#fff;z-index:-9999;pointer-events:none;';
-  container.innerHTML = html;
-  document.body.appendChild(container);
-  setTimeout(() => {
-    html2pdf().set({
-      margin: 0,
-      filename: 'Resumen_' + nombreMes.replace(/\s+/g,'_') + '.pdf',
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: container.scrollWidth, windowHeight: container.scrollHeight },
-      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['avoid-all','css'] }
-    }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error: '+e.message); });
-  }, 300);
+  const fullHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Resumen ' + nombreMes + '</title>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700;800&family=Barlow+Condensed:wght@700;800;900&display=swap" rel="stylesheet">' +
+    '<style>@media print{@page{size:letter;margin:8mm;}}</style></head><body>' + html + '</body></html>';
+  const w = window.open('', '_blank');
+  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
+  w.document.write(fullHtml.replace('</body>', '<script>setTimeout(()=>window.print(),1000);<\/script></body>'));
+  w.document.close();
 }
 
 // ==================== IMPRIMIR PD ====================
