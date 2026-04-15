@@ -1021,13 +1021,16 @@ function initSupabaseSDK() {
 }
 // Intentar ahora (puede que el SDK ya cargó)
 initSupabaseSDK();
-// Si no cargó por ser defer, reintentar después
-if (!sb) {
-  document.addEventListener('DOMContentLoaded', () => {
-    if (initSupabaseSDK()) initData();
-  });
-  setTimeout(() => { if (initSupabaseSDK()) initData(); }, 1500);
-}
+// Esperar DOM + reintentar SDK con espera progresiva antes de initData
+document.addEventListener('DOMContentLoaded', async () => {
+  if (!sb) {
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 300));
+      if (initSupabaseSDK()) break;
+    }
+  }
+  initData();
+});
 
 // ==================== SYNC SUPABASE (FUENTE PRINCIPAL) ====================
 let _syncTimers = {};
@@ -1582,8 +1585,7 @@ async function initData() {
   }
   renderAll();
 }
-// Ejecutar initData inmediatamente si ya hay Supabase
-initData();
+// initData() se llama desde DOMContentLoaded (ver arriba)
 
 if (reservas.length === 0) {
   // No cargar datos de ejemplo en v5.0 — se usa Supabase
