@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mudanzas Tecleñas – Sistema v5.1</title>
+<title>Mudanzas Tecleñas – Sistema v5.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -201,11 +201,118 @@ tr:hover td{background:#f8fafd;}
 
 /* VENDEDOR TAG */
 .vendedor-tag{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;color:var(--azul2);background:#e8eef9;padding:1px 7px;border-radius:10px;}
+
+/* ==================== MODO TV (dark, pantalla 41" horizontal, letras ~1 pulgada) ==================== */
+body.tv-mode{background:#05070f!important;color:#f1f5f9;overflow:hidden;}
+body.tv-mode .h,
+body.tv-mode .sb,
+body.tv-mode .user-badge,
+body.tv-mode .ag-legend,
+body.tv-mode #ag-sin-ubicar,
+body.tv-mode #sec-agenda>div:first-child,
+body.tv-mode #sec-programacion>div:first-child,
+body.tv-mode #pd-stats,
+body.tv-mode #pd-total-global,
+body.tv-mode .modal,
+body.tv-mode #pd-tab-cuaderno,
+body.tv-mode #tab-pizarra-btn,
+body.tv-mode #tab-cuaderno-btn,
+body.tv-mode #sec-agenda section,
+body.tv-mode #modo-tv-exit{display:none!important;}
+body.tv-mode.tv-show-exit #modo-tv-exit{display:flex!important;}
+body.tv-mode .sec{padding:0!important;margin:0!important;background:#05070f!important;}
+body.tv-mode .sec.active{display:block!important;}
+body.tv-mode #sec-agenda,
+body.tv-mode #sec-programacion{padding:0!important;padding-top:var(--tv-clock-h,110px)!important;height:100vh;box-sizing:border-box;overflow:hidden;}
+body.tv-mode #ag-grid-wrap{gap:0!important;padding:0 10px 10px;height:calc(100vh - var(--tv-clock-h,110px));box-sizing:border-box;}
+
+/* Exit button flotante */
+#modo-tv-exit{position:fixed;top:14px;right:14px;z-index:10000;background:#dc2626;color:#fff;border:none;padding:10px 16px;font-size:14px;font-weight:800;border-radius:10px;cursor:pointer;font-family:'Barlow',sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.4);display:none;align-items:center;gap:6px;}
+
+/* ---- RELOJ + FECHA arriba (solo modo TV) ---- */
+#tv-clock{display:none;}
+body.tv-mode #tv-clock{
+  display:flex;align-items:center;justify-content:center;
+  position:fixed;top:0;left:0;right:0;z-index:9998;
+  height:var(--tv-clock-h,110px);
+  background:#05070f;color:#fff;
+  font-family:'Barlow Condensed','Barlow',sans-serif;
+  font-size:80px;font-weight:900;letter-spacing:2px;line-height:1;
+  text-transform:uppercase;text-align:center;
+  border-bottom:3px solid #1e293b;
+  padding:0 20px;
+  white-space:nowrap;
+  overflow:hidden;
+}
+body.tv-mode #tv-clock .tv-sep{opacity:.4;margin:0 18px;}
+
+/* ---- AGENDA en modo TV: ocupar TODO el alto y ancho ---- */
+body.tv-mode #ag-cols{gap:8px!important;height:100%;align-items:stretch;}
+body.tv-mode #ag-cols>div{min-width:0!important;max-width:none!important;flex:1 1 0!important;display:flex;flex-direction:column;height:100%;}
+body.tv-mode #ag-cols>div>div:first-child{display:none!important;} /* ocultar "Col. N" header */
+body.tv-mode #ag-grid-wrap > div:first-child{justify-content:space-around;padding:10px 0 10px;}
+body.tv-mode #ag-grid-wrap > div:first-child > div:first-child{display:none!important;} /* spacer del label col */
+body.tv-mode #ag-grid-wrap > div:first-child > div{flex:1 1 0;height:auto!important;}
+body.tv-mode #ag-grid-wrap > div:first-child span{
+  color:#f8fafc!important;font-size:30px!important;font-weight:900!important;
+  writing-mode:vertical-rl!important;transform:rotate(180deg)!important;
+  font-family:'Barlow Condensed',sans-serif!important;letter-spacing:2px;
+}
+body.tv-mode #ag-grid-wrap > div:last-child{display:none!important;} /* botón + agregar col */
+body.tv-mode #ag-cols>div>div:not(:first-child){
+  flex:1 1 0!important;height:auto!important;
+  border-radius:14px!important;min-height:0;
+}
+body.tv-mode #ag-cols>div>div button{display:none!important;} /* ocultar ✕ en TV */
+/* Celdas vacías: apenas visibles en TV */
+body.tv-mode #ag-cols>div>div[style*="dashed"]{background:#0f172a!important;border-color:#1e293b!important;opacity:.4;}
+body.tv-mode #ag-cols>div>div[style*="dashed"] *{display:none!important;}
+/* Layout interno de la celda TV (class .tv-cell agregada por renderAgenda) */
+body.tv-mode .tv-cell{
+  height:100%;padding:18px 20px;display:flex;flex-direction:column;
+  gap:8px;color:#fff;box-sizing:border-box;justify-content:flex-start;
+  font-family:'Barlow Condensed','Barlow',sans-serif;text-transform:uppercase;
+}
+body.tv-mode .tv-carga,
+body.tv-mode .tv-descarga{font-size:28px;font-weight:900;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.5px;}
+body.tv-mode .tv-camion{font-size:22px;font-weight:800;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95;}
+body.tv-mode .tv-hora{font-size:22px;font-weight:900;background:rgba(0,0,0,.35);padding:3px 12px;border-radius:8px;display:inline-block;width:fit-content;letter-spacing:1px;}
+body.tv-mode .tv-tel{font-size:20px;font-weight:700;letter-spacing:1px;opacity:.92;margin-top:auto;}
+body.tv-mode .tv-nombre{font-size:18px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.88;}
+
+/* Colores de camión en modo TV */
+body.tv-mode #ag-cols>div>div[style*="192, 57, 43"],
+body.tv-mode #ag-cols>div>div[style*="#c0392b"]{background:#dc2626!important;}
+body.tv-mode #ag-cols>div>div[style*="230, 126, 34"],
+body.tv-mode #ag-cols>div>div[style*="#e67e22"]{background:#f97316!important;}
+body.tv-mode #ag-cols>div>div[style*="39, 174, 96"],
+body.tv-mode #ag-cols>div>div[style*="#27ae60"]{background:#16a34a!important;}
+body.tv-mode #ag-cols>div>div[style*="#6d28d9"]{background:#8b5cf6!important;}
+
+/* ---- PIZARRA (programación diaria) en modo TV ---- */
+body.tv-mode #pd-tab-pizarra{background:#05070f!important;border:none!important;padding:0 10px 10px!important;height:calc(100vh - var(--tv-clock-h,110px));box-sizing:border-box;overflow:hidden;}
+body.tv-mode #pd-pizarra{gap:12px!important;height:100%;}
+body.tv-mode #pd-pizarra>div{background:#0f172a!important;border-radius:14px!important;color:#f1f5f9!important;padding:14px 16px!important;min-width:0!important;flex:1 1 0!important;overflow:hidden;}
+body.tv-mode #pd-pizarra>div *{color:#f1f5f9!important;}
+body.tv-mode #pd-pizarra>div input,
+body.tv-mode #pd-pizarra>div select,
+body.tv-mode #pd-pizarra>div button{display:none!important;}
+body.tv-mode #pd-pizarra>div>div{font-size:18px!important;}
+body.tv-mode #pd-pizarra h1,
+body.tv-mode #pd-pizarra h2,
+body.tv-mode #pd-pizarra h3,
+body.tv-mode #pd-pizarra strong{font-size:26px!important;font-weight:900!important;}
+body.tv-mode #pd-pizarra>div>div:first-child{font-size:30px!important;font-weight:900!important;}
+/* Precios sutiles en pizarra TV */
+body.tv-mode #pd-pizarra [style*="color:#16a34a"],
+body.tv-mode #pd-pizarra [style*="color: #16a34a"]{font-size:14px!important;opacity:.75;font-weight:700!important;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
+<button id="modo-tv-exit" onclick="toggleTVMode()">✕ Salir Modo TV</button>
+<div id="tv-clock"></div>
 
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
@@ -270,7 +377,6 @@ tr:hover td{background:#f8fafd;}
   <button class="sb-btn" onclick="nav('programacion')"><span class="ic">🗂️</span>Prog. Diaria</button>
   <button class="sb-btn" onclick="nav('conciliacion')"><span class="ic">🏦</span>Conciliación CUSCA</button>
   <button class="sb-btn" onclick="openWAReader()"><span class="ic">💬</span>Leer WhatsApp</button>
-  <button class="sb-btn" onclick="nav('canceladas')"><span class="ic">🚫</span>Canceladas</button>
   <button class="sb-btn" onclick="nav('clientes')"><span class="ic">👥</span>Clientes</button>
   <button class="sb-btn" onclick="nav('comisiones')"><span class="ic">💰</span>Comisiones</button>
 </aside>
@@ -302,17 +408,21 @@ tr:hover td{background:#f8fafd;}
       <input type="date" id="ag-fecha" oninput="renderAgenda()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
       <button class="btn btn-gh btn-sm" onclick="agHoy()">Hoy</button>
       <button class="btn btn-p btn-sm" onclick="imprimirAgendaDia()" style="background:#16a34a;">📄 Descargar PDF del día</button>
+      <button class="btn btn-p btn-sm" onclick="toggleTVMode('agenda')" style="background:#0f172a;">🖥️ Modo TV</button>
     </div>
   </div>
 
   <!-- Leyenda -->
-  <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap;">
+  <div class="ag-legend" style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap;">
     <span style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;"><span style="width:12px;height:12px;border-radius:3px;background:#c0392b;display:inline-block;"></span>Grande</span>
     <span style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;"><span style="width:12px;height:12px;border-radius:3px;background:#e67e22;display:inline-block;"></span>Mediano</span>
     <span style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;"><span style="width:12px;height:12px;border-radius:3px;background:#27ae60;display:inline-block;"></span>Pequeño</span>
     <span style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;"><span style="width:12px;height:12px;border-radius:3px;background:#6d28d9;display:inline-block;"></span>Camión específico asignado</span>
     <span style="font-size:11px;color:var(--gris2);">💡 Arrastra los servicios para moverlos · Clic en celda vacía para nueva reservación</span>
   </div>
+
+  <!-- Banner de reservaciones SIN UBICAR para esta fecha -->
+  <div id="ag-sin-ubicar" style="display:none;background:#fffbeb;border:1.5px solid #fbbf24;border-radius:10px;padding:10px 14px;margin-bottom:14px;"></div>
 
   <!-- Grid container -->
   <div style="overflow-x:auto;">
@@ -370,16 +480,6 @@ tr:hover td{background:#f8fafd;}
   </div>
 </section>
 
-<!-- CANCELADAS -->
-<section id="sec-canceladas" class="sec">
-  <div class="sec-title">🚫 <span>Reservaciones Canceladas</span></div>
-  <p style="color:var(--gris2);font-size:13px;margin-bottom:16px;">Servicios que fueron cancelados. Puedes retomar cualquiera si el cliente vuelve a llamar.</p>
-  <div class="card">
-    <table><thead><tr><th>Código</th><th>Cliente</th><th>Teléfono</th><th>Fecha</th><th>Hora</th><th>Carga</th><th>Descarga</th><th>Unidad</th><th>Acciones</th></tr></thead>
-    <tbody id="tb-canceladas"></tbody></table>
-  </div>
-</section>
-
 <!-- CLIENTES -->
 <section id="sec-clientes" class="sec">
   <div class="sec-title">👥 <span>Clientes</span></div>
@@ -415,6 +515,7 @@ tr:hover td{background:#f8fafd;}
       <button class="btn btn-gh btn-sm" onclick="pdHoy()">Hoy</button>
       <button class="btn btn-p btn-sm" onclick="abrirModalColumna()">+ Agregar equipo</button>
       <button class="btn btn-gh btn-sm" onclick="imprimirPD()">🖨️ Imprimir</button>
+      <button class="btn btn-p btn-sm" onclick="toggleTVMode('pizarra')" style="background:#0f172a;">🖥️ Modo TV</button>
     </div>
   </div>
 
@@ -1032,21 +1133,32 @@ function initSupabaseSDK() {
 }
 // Intentar ahora (puede que el SDK ya cargó)
 initSupabaseSDK();
-// Esperar DOM + reintentar SDK con espera progresiva antes de initData
-document.addEventListener('DOMContentLoaded', async () => {
-  if (!sb) {
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 300));
-      if (initSupabaseSDK()) break;
-    }
-  }
-  initData();
-});
+// Si no cargó por ser defer, reintentar después
+if (!sb) {
+  document.addEventListener('DOMContentLoaded', () => {
+    if (initSupabaseSDK()) initData();
+  });
+  setTimeout(() => { if (initSupabaseSDK()) initData(); }, 1500);
+}
 
 // ==================== SYNC SUPABASE (FUENTE PRINCIPAL) ====================
 let _syncTimers = {};
 let _lastSyncTimestamps = {}; // Track timestamps for conflict resolution
 let _syncInProgress = false;
+let _lsWarned = false;
+function safeSetLS(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    console.error('localStorage.setItem failed for', key, e);
+    if (!_lsWarned) {
+      _lsWarned = true;
+      alert('⚠️ Espacio local agotado. Los datos se están sincronizando con la nube pero no se guardan localmente. Cierra pestañas o limpia caché si el problema persiste.');
+    }
+    return false;
+  }
+}
 
 function syncToSupabase(key, data) {
   if (!sb) return;
@@ -1088,7 +1200,7 @@ async function syncAllFromSupabase(silent) {
       const local = pdData || {};
       Object.keys(pd).forEach(f => { local[f] = pd[f]; });
       pdData = local;
-      localStorage.setItem('mt_pd3', JSON.stringify(pdData));
+      safeSetLS('mt_pd3', JSON.stringify(pdData));
     }
 
     // Cargar agGrid
@@ -1097,7 +1209,7 @@ async function syncAllFromSupabase(silent) {
       const local = agGrid || {};
       Object.keys(ag).forEach(f => { local[f] = ag[f]; });
       agGrid = local;
-      localStorage.setItem('mt_aggrid', JSON.stringify(agGrid));
+      safeSetLS('mt_aggrid', JSON.stringify(agGrid));
     }
 
     // Cargar conciliación
@@ -1106,7 +1218,7 @@ async function syncAllFromSupabase(silent) {
       const local = concData || {};
       Object.keys(conc).forEach(f => { local[f] = conc[f]; });
       concData = local;
-      localStorage.setItem('mt_conc', JSON.stringify(concData));
+      safeSetLS('mt_conc', JSON.stringify(concData));
     }
 
     if (!silent) console.log('✅ Datos sincronizados desde Supabase');
@@ -1118,6 +1230,11 @@ async function syncAllFromSupabase(silent) {
 
 // ==================== AUTO-REFRESH (MULTI-DISPOSITIVO) ====================
 let _refreshInterval = null;
+
+window.addEventListener('beforeunload', () => {
+  if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; }
+  Object.values(_syncTimers).forEach(t => clearTimeout(t));
+});
 
 function startAutoRefresh() {
   if (_refreshInterval) return;
@@ -1143,10 +1260,10 @@ function startAutoRefresh() {
         const sbRes = await loadReservasFromSupabase();
         if (sbRes !== null && sbRes.length > 0) {
           reservas = sbRes;
-          localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+          safeSetLS('mt2_reservas', JSON.stringify(reservas));
         }
-        // Re-render si estamos viendo datos afectados
-        renderAll();
+        // Re-render TODAS las vistas (la TV puede estar mostrando agenda, pizarra, etc.)
+        renderAllSections();
       }
     } catch(e) { /* silencioso */ }
   }, 30000);
@@ -1167,33 +1284,57 @@ function updateSyncIndicator() {
 }
 
 // Supabase Realtime — escuchar cambios de otros dispositivos
+// Re-renderiza TODAS las vistas visibles (agenda TV, pizarra, cuaderno, etc.)
+// para que cualquier cambio recibido por realtime se refleje donde sea que esté el usuario.
+function renderAllSections() {
+  try { renderAll(); } catch(e) { console.warn('renderAll err:', e); }
+  try { renderAgenda(); } catch(e) { /* agenda puede no estar lista */ }
+  try { renderPD(); } catch(e) { /* pizarra puede no estar lista */ }
+  try { renderConciliacion(); } catch(e) {}
+  try { renderCli(); } catch(e) {}
+  try { if (typeof renderComisiones === 'function') renderComisiones(); } catch(e) {}
+  try { if (typeof renderNotificaciones === 'function') renderNotificaciones(); } catch(e) {}
+}
+
+// Sync completo (app_data + reservaciones) y render de todas las vistas.
+// Usado por realtime y polling para mantener la TV al día sin interacción manual.
+let _fullSyncTimer = null;
+function scheduleFullSyncAndRender(delay = 600) {
+  clearTimeout(_fullSyncTimer);
+  _fullSyncTimer = setTimeout(async () => {
+    if (!supabaseOK) { renderAllSections(); return; }
+    try {
+      // Primero traer app_data (agGrid con posiciones asignadas por el origen)
+      await syncAllFromSupabase(true);
+      // Luego reservaciones
+      const sbRes = await loadReservasFromSupabase();
+      if (sbRes !== null && sbRes.length > 0) {
+        reservas = sbRes;
+        safeSetLS('mt2_reservas', JSON.stringify(reservas));
+      }
+    } catch(e) { console.warn('fullSync error:', e); }
+    renderAllSections();
+    updateSyncIndicator();
+  }, delay);
+}
+
 function startRealtimeSync() {
   if (!sb) return;
   try {
-    // Escuchar cambios en app_data
+    // Escuchar cambios en app_data (agGrid/pizarra/conciliación)
     sb.channel('app_data_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, async (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, (payload) => {
         console.log('📡 Cambio detectado en app_data:', payload.new?.id);
-        // Esperar un momento para no interferir con nuestro propio save
-        setTimeout(async () => {
-          await syncAllFromSupabase(true);
-          renderAll();
-        }, 500);
+        scheduleFullSyncAndRender(500);
       })
       .subscribe();
 
     // Escuchar cambios en reservaciones
     sb.channel('reservaciones_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservaciones' }, async (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservaciones' }, (payload) => {
         console.log('📡 Cambio en reservaciones detectado');
-        setTimeout(async () => {
-          const sbRes = await loadReservasFromSupabase();
-          if (sbRes !== null && sbRes.length > 0) {
-            reservas = sbRes;
-            localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
-            renderAll();
-          }
-        }, 500);
+        // Delay un poco mayor: esperar a que también llegue la posición de agGrid del dispositivo origen
+        scheduleFullSyncAndRender(800);
       })
       .subscribe();
 
@@ -1210,9 +1351,9 @@ async function forceSync() {
     const sbRes = await loadReservasFromSupabase();
     if (sbRes !== null && sbRes.length > 0) {
       reservas = sbRes;
-      localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+      safeSetLS('mt2_reservas', JSON.stringify(reservas));
     }
-    renderAll();
+    renderAllSections();
   } catch(e) { console.warn('Force sync error:', e); }
   finally { if (btn) { btn.disabled = false; btn.textContent = '🔄'; } }
 }
@@ -1221,7 +1362,7 @@ async function forceSync() {
 async function checkSupabase() {
   if (!sb) return false;
   try {
-    const { data, error } = await sb.from('app_data').select('id').limit(1);
+    const { data, error } = await sb.from('usuarios').select('nombre').limit(1);
     if (error) throw error;
     supabaseOK = true;
     console.log('✅ Supabase conectado');
@@ -1450,7 +1591,11 @@ const USUARIOS = [
   { nombre: 'Roberto', pin: '0109', rol: 'vendedor' },
   { nombre: 'Luis', pin: '0102', rol: 'vendedor' }
 ];
-let usuarioActual = JSON.parse(sessionStorage.getItem('mt_usuario') || 'null');
+let usuarioActual = null;
+try {
+  const _u = sessionStorage.getItem('mt_usuario');
+  if (_u) usuarioActual = JSON.parse(_u);
+} catch(e) { usuarioActual = null; }
 
 // PIN input navigation — usando delegación de eventos (no depende de timing)
 let _pinSetup = false;
@@ -1493,22 +1638,45 @@ setTimeout(() => {
   if (usuarioActual && !_pinSetup) mostrarApp();
 }, 200);
 
+let _loginAttempts = 0;
+let _loginLockedUntil = 0;
 function intentarLogin() {
+  const errEl = document.getElementById('login-error');
+  const now = Date.now();
+  if (now < _loginLockedUntil) {
+    const s = Math.ceil((_loginLockedUntil - now) / 1000);
+    errEl.textContent = `🔒 Demasiados intentos. Espera ${s}s`;
+    ['pin1','pin2','pin3','pin4'].forEach(id => { document.getElementById(id).value = ''; });
+    return;
+  }
   const pin = ['pin1','pin2','pin3','pin4'].map(id => document.getElementById(id).value).join('');
-  if (pin.length < 4) { document.getElementById('login-error').textContent = 'Ingresa los 4 dígitos'; return; }
+  if (pin.length < 4) { errEl.textContent = 'Ingresa los 4 dígitos'; return; }
   const user = USUARIOS.find(u => u.pin === pin);
   if (!user) {
-    document.getElementById('login-error').textContent = '❌ PIN incorrecto';
+    _loginAttempts++;
+    if (_loginAttempts >= 5) {
+      _loginLockedUntil = now + 60000; // 1 min cooldown
+      _loginAttempts = 0;
+      errEl.textContent = '🔒 Bloqueado 60s por intentos fallidos';
+    } else {
+      errEl.textContent = `❌ PIN incorrecto (${_loginAttempts}/5)`;
+    }
     ['pin1','pin2','pin3','pin4'].forEach(id => { document.getElementById(id).value = ''; });
     document.getElementById('pin1').focus();
     return;
   }
+  _loginAttempts = 0;
+  _loginLockedUntil = 0;
   usuarioActual = { nombre: user.nombre, rol: user.rol };
-  sessionStorage.setItem('mt_usuario', JSON.stringify(usuarioActual));
+  try { sessionStorage.setItem('mt_usuario', JSON.stringify(usuarioActual)); } catch(e) {}
   mostrarApp();
 }
 
 function mostrarApp() {
+  if (!usuarioActual || !usuarioActual.nombre) {
+    document.getElementById('login-screen').style.display = 'flex';
+    return;
+  }
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('user-badge').style.display = 'flex';
   document.getElementById('user-avatar').textContent = usuarioActual.nombre.charAt(0);
@@ -1544,7 +1712,7 @@ async function initData() {
     if (sbReservas !== null) {
       if (sbReservas.length > 0) {
         reservas = sbReservas;
-        localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+        safeSetLS('mt2_reservas', JSON.stringify(reservas));
         console.log('📦 ' + reservas.length + ' reservaciones cargadas de Supabase');
       } else if (reservas.length > 0) {
         // Hay datos locales pero no en Supabase — subir los locales
@@ -1558,7 +1726,7 @@ async function initData() {
         const sbComentarios = await loadComentariosFromSupabase();
         if (sbComentarios !== null && Object.keys(sbComentarios).length > 0) {
           comentarios = sbComentarios;
-          localStorage.setItem('mt_comentarios', JSON.stringify(comentarios));
+          safeSetLS('mt_comentarios', JSON.stringify(comentarios));
         }
       } catch(e) { console.warn('Error cargando comentarios:', e); }
       // Sincronizar datos de admin diaria, agenda y conciliación
@@ -1596,19 +1764,20 @@ async function initData() {
   }
   renderAll();
 }
-// initData() se llama desde DOMContentLoaded (ver arriba)
+// Ejecutar initData inmediatamente si ya hay Supabase
+initData();
 
 if (reservas.length === 0) {
   // No cargar datos de ejemplo en v5.0 — se usa Supabase
 }
 
 function save() {
-  localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+  safeSetLS('mt2_reservas', JSON.stringify(reservas));
   // No sync automático de todo — usar saveSingle para cambios individuales
 }
 
 function saveSingle(r) {
-  localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+  safeSetLS('mt2_reservas', JSON.stringify(reservas));
   if (supabaseOK) {
     saveReservaToSupabase(r).catch(e => console.warn('Sync error:', e));
   }
@@ -1635,15 +1804,13 @@ function nav(id) {
   else if (id==='conciliacion') renderConciliacion();
   else if (id==='clientes') renderCli();
   else if (id==='comisiones') renderComisiones();
-  else if (id==='canceladas') renderCanceladas();
   else renderAll();
 }
 
 // ==================== RENDER ====================
-function renderAll() {
-  renderStats();
-  const activas = reservas.filter(r => r.estado !== 'cancelado');
-  renderTable('tb-dash', activas.slice(0,10), false);
+function renderAll() { 
+  renderStats(); 
+  renderTable('tb-dash', reservas.slice(0,10), false); 
   renderTable('tb-res', reservas, true);
   if (typeof renderNotificaciones === 'function') renderNotificaciones();
 }
@@ -1685,76 +1852,6 @@ function renderTable(id, data, withTel) {
           <td><div class="flex gap2"><button class="btn btn-gh btn-sm" onclick="verRes(${idx})">👁 Ver</button><button class="btn btn-r btn-sm" onclick="eliminar(${idx})">🗑</button></div></td>
         </tr>`;
       }).join('');
-}
-
-// ==================== CANCELADAS ====================
-function renderCanceladas() {
-  const tb = document.getElementById('tb-canceladas'); if (!tb) return;
-  const canceladas = reservas.filter(r => r.estado === 'cancelado')
-    .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
-  if (canceladas.length === 0) {
-    tb.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--gris2);padding:24px;">No hay reservaciones canceladas.</td></tr>';
-    return;
-  }
-  tb.innerHTML = canceladas.map(r => {
-    const idx = reservas.indexOf(r);
-    const unidadLabel = r.unidad === 'grande' ? 'Grande 7m/10t' : r.unidad === 'mediano' ? 'Mediano 5m/5t' : 'Pequeño 3m/2t';
-    const cargaCorta = r.carga && r.carga.length > 35 ? r.carga.substring(0,35)+'…' : (r.carga||'—');
-    const descCorta = r.descarga && r.descarga.length > 35 ? r.descarga.substring(0,35)+'…' : (r.descarga||'—');
-    return `<tr>
-      <td><span class="chip a" style="font-size:10px;">${r.codigo}</span></td>
-      <td><strong>${r.nombre} ${r.apellido}</strong></td>
-      <td>${r.tel}</td>
-      <td>${fmtFecha(r.fecha)}</td>
-      <td>${r.hora}</td>
-      <td style="font-size:11px;">${cargaCorta}</td>
-      <td style="font-size:11px;">${descCorta}</td>
-      <td style="font-size:11px;">${unidadLabel}</td>
-      <td><div class="flex gap2">
-        <button class="btn btn-gh btn-sm" onclick="verRes(${idx})" title="Ver detalles">👁 Ver</button>
-        <button class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;" onclick="retomarReserva(${idx})" title="Retomar servicio">♻️ Retomar</button>
-      </div></td>
-    </tr>`;
-  }).join('');
-}
-
-function retomarReserva(idx) {
-  const r = reservas[idx];
-  if (!r) return;
-  const nombre = `${r.nombre} ${r.apellido}`;
-  // Preguntar nuevo estado
-  const nuevoEstado = prompt(
-    `Retomar reservación de ${nombre}\n\n` +
-    `¿Con qué estado deseas reactivarla?\n\n` +
-    `1 = Pendiente\n2 = Confirmado\n\nEscribe 1 o 2:`,
-    '2'
-  );
-  if (!nuevoEstado || (nuevoEstado !== '1' && nuevoEstado !== '2')) return;
-  r.estado = nuevoEstado === '1' ? 'pendiente' : 'confirmado';
-  // Preguntar si quiere cambiar la fecha
-  const cambiarFecha = confirm(`¿Deseas cambiar la fecha del servicio?\n\nFecha actual: ${fmtFecha(r.fecha)}\n\n(Aceptar = cambiar fecha, Cancelar = mantener fecha actual)`);
-  if (cambiarFecha) {
-    const nuevaFecha = prompt('Nueva fecha (formato YYYY-MM-DD):', new Date().toISOString().slice(0,10));
-    if (nuevaFecha && /^\d{4}-\d{2}-\d{2}$/.test(nuevaFecha)) {
-      // Quitar de hidden de la fecha vieja
-      const oldF = r.fecha;
-      if (agGrid[oldF]?.hidden) {
-        agGrid[oldF].hidden = agGrid[oldF].hidden.filter(c => c !== r.codigo);
-        saveAgGrid();
-      }
-      r.fecha = nuevaFecha;
-    }
-  }
-  // Quitar de hidden de la agenda para que se re-auto-ubique
-  const f = r.fecha;
-  if (agGrid[f]?.hidden) {
-    agGrid[f].hidden = agGrid[f].hidden.filter(c => c !== r.codigo);
-    saveAgGrid();
-  }
-  saveSingle(r);
-  renderAll();
-  renderCanceladas();
-  alert(`✅ Reservación de ${nombre} retomada como "${r.estado}". Ya aparece en la agenda.`);
 }
 
 function renderStats() {
@@ -1899,19 +1996,24 @@ function imprimirAgendaDia() {
     '.firma-row{display:flex;justify-content:space-between;margin-top:2mm;}' +
     '.firma-box{font-size:7pt;color:#555;}';
 
-  // Abrir ventana nueva con el contenido y disparar print (Guardar como PDF desde el navegador)
-  const printCss = styleCss +
-    '@media print{@page{size:letter;margin:0;}.pagina{page-break-after:always;}.pagina:last-child{page-break-after:auto;}}' +
-    '.pagina + .pagina{page-break-before:always;}';
-  const fullHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Servicios ' + f + '</title>' +
-    '<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700;800&family=Barlow+Condensed:wght@700;800;900&display=swap" rel="stylesheet">' +
-    '<style>' + printCss + '</style></head><body>' + paginas.join('') + '</body></html>';
-  const w = window.open('', '_blank');
-  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
-  w.document.write(fullHtml);
-  w.document.close();
-  // Esperar a que carguen las fuentes y luego imprimir
-  setTimeout(() => w.print(), 1200);
+  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
+  const container = document.createElement('div');
+  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+  container.innerHTML = '<style>' + styleCss + '</style>' + paginas.join('');
+  document.body.appendChild(container);
+  setTimeout(() => {
+    const opt = {
+      margin: 0,
+      filename: 'Servicios_' + f + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['css','legacy'], before: '.pagina' }
+    };
+    html2pdf().set(opt).from(container).save().then(() => {
+      container.remove();
+    }).catch((e) => { console.error(e); container.remove(); alert('Error generando PDF: ' + e.message); });
+  }, 300);
 }
 
 // ==================== AGENDA GRID ====================
@@ -1920,7 +2022,7 @@ let agGrid; try { agGrid = JSON.parse(localStorage.getItem('mt_aggrid') || '{}')
 const AG_ROWS = ['8:00 AM', '11:00 AM', '2:30 PM', 'Nocturno'];
 let agDragSource = null; // { fecha, col, row }
 
-function saveAgGrid() { localStorage.setItem('mt_aggrid', JSON.stringify(agGrid)); syncToSupabase('mt_aggrid', agGrid); }
+function saveAgGrid() { safeSetLS('mt_aggrid', JSON.stringify(agGrid)); syncToSupabase('mt_aggrid', agGrid); }
 
 // Mapear hora personalizada al slot estándar más cercano (global)
 function mapHoraToRow(h) {
@@ -1979,52 +2081,32 @@ function renderAgenda() {
 
   // mapHoraToRow es ahora global (definida arriba)
 
-  // Auto-assign unplaced to empty cells, matching by hora
+  // UBICACIÓN MANUAL: solo ubicamos si hay celda destino designada (col+row) por el usuario.
+  // Las reservaciones sin destino se muestran en el banner "Sin ubicar" para arrastrar manualmente.
+  let anyPlaced = false;
   if (unplaced.length > 0) {
     unplaced.forEach(r => {
-      // Si la reservación fue creada desde una casilla de la agenda, usar esa fila
-      let targetRow = null;
-      if (window._agendaTargetRow && !placed.has(r.codigo)) {
-        targetRow = window._agendaTargetRow;
-      }
+      // Solo ubicar si hay target explícito (usuario hizo clic en celda específica al crear)
+      const tCol = (typeof window._agendaTargetCol === 'number') ? window._agendaTargetCol : null;
+      const tRow = window._agendaTargetRow || null;
+      if (tCol === null || tRow === null) return;
 
-      // Determinar la fila de la agenda para esta reservación
-      const getRow = (h) => {
-        if (targetRow) return targetRow;
-        return mapHoraToRow(h);
-      };
-      
-      // Determine all horas this reservation occupies
       const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
-      
-      // Find a column where ALL required horas are free
-      let assignedCol = -1;
-      for (let c = 0; c < numCols; c++) {
-        const allFree = horas.every(h => {
-          const row = getRow(h);
-          return !cells[agCellKey(c, row)];
-        });
-        if (allFree) { assignedCol = c; break; }
+      // Primario = fila exacta designada; secundarios usan mapHoraToRow
+      const rowsToFill = horas.map((h, idx) => ({ h, row: idx === 0 ? tRow : mapHoraToRow(h) }));
+
+      // Verificar que todas las celdas destino estén libres en la columna designada
+      const todasLibres = rowsToFill.every(({ row }) => !cells[agCellKey(tCol, row)]);
+      if (todasLibres) {
+        rowsToFill.forEach(({ row }) => { cells[agCellKey(tCol, row)] = r.codigo; });
+        anyPlaced = true;
       }
-      
-      if (assignedCol >= 0) {
-        // Place in all required horas in same column
-        horas.forEach(h => {
-          const row = getRow(h);
-          cells[agCellKey(assignedCol, row)] = r.codigo;
-        });
-      } else {
-        // Fallback: place in first available cell for primary hora
-        const row = getRow(r.hora);
-        for (let c = 0; c < numCols; c++) {
-          const k = agCellKey(c, row);
-          if (!cells[k]) { cells[k] = r.codigo; break; }
-        }
-      }
+      // Si NO están libres, la reservación queda sin ubicar y aparece en el banner
     });
-    // Limpiar el target row después de ubicar
+    // Limpiar target después de intentar ubicar
+    window._agendaTargetCol = null;
     window._agendaTargetRow = null;
-    saveAgGrid();
+    if (anyPlaced) saveAgGrid();
   }
 
   // Rellenar horarios faltantes para reservaciones parcialmente ubicadas
@@ -2073,44 +2155,32 @@ function renderAgenda() {
         e.preventDefault();
         cell.style.outline = 'none';
         if (!agDragSource) return;
-        const srcKey = agCellKey(agDragSource.col, agDragSource.row);
         const dstKey = agCellKey(col, row);
+
+        // Caso 1: arrastre desde banner "Sin ubicar"
+        if (agDragSource.fromSinUbicar && agDragSource.codigo) {
+          if (agGrid[f]?.cells?.[dstKey]) {
+            alert('Esa celda ya está ocupada. Arrastra a una celda vacía.');
+            agDragSource = null; return;
+          }
+          if (!agGrid[f]) agGrid[f] = { numCols: (getAgDay(f).numCols), cells: {}, hidden: [] };
+          agGrid[f].cells[dstKey] = agDragSource.codigo;
+          saveAgGrid();
+          renderAgenda();
+          agDragSource = null; return;
+        }
+
+        // Caso 2: arrastre entre celdas del grid
+        const srcKey = agCellKey(agDragSource.col, agDragSource.row);
         const srcCodigo = agGrid[f]?.cells?.[srcKey];
         if (!srcCodigo) return;
-
-        // Moving to different row = must confirm/change time
         if (agDragSource.row !== row) {
           showHoraModal(f, srcKey, dstKey, srcCodigo, row);
         } else {
-          // Same-row drag: mover TODAS las celdas de esta reservacion a la nueva columna
-          const srcCol = parseInt(srcKey.split('__')[0]);
-          const dstCol = parseInt(dstKey.split('__')[0]);
           const dstCodigo = agGrid[f]?.cells?.[dstKey];
-          // Encontrar todas las celdas de srcCodigo en la columna origen
-          const srcCells = {};
-          Object.keys(agGrid[f].cells).forEach(k => {
-            if (agGrid[f].cells[k] === srcCodigo && parseInt(k.split('__')[0]) === srcCol) {
-              srcCells[k.split('__')[1]] = true; // row names
-            }
-          });
-          // Si hay swap, encontrar todas las celdas de dstCodigo en la columna destino
-          const dstCells = {};
-          if (dstCodigo) {
-            Object.keys(agGrid[f].cells).forEach(k => {
-              if (agGrid[f].cells[k] === dstCodigo && parseInt(k.split('__')[0]) === dstCol) {
-                dstCells[k.split('__')[1]] = true;
-              }
-            });
-          }
-          // Borrar todas las celdas viejas de ambas reservaciones
-          Object.keys(srcCells).forEach(rowName => { delete agGrid[f].cells[agCellKey(srcCol, rowName)]; });
-          Object.keys(dstCells).forEach(rowName => { delete agGrid[f].cells[agCellKey(dstCol, rowName)]; });
-          // Colocar srcCodigo en la columna destino
-          Object.keys(srcCells).forEach(rowName => { agGrid[f].cells[agCellKey(dstCol, rowName)] = srcCodigo; });
-          // Si habia swap, colocar dstCodigo en la columna origen
-          if (dstCodigo) {
-            Object.keys(dstCells).forEach(rowName => { agGrid[f].cells[agCellKey(srcCol, rowName)] = dstCodigo; });
-          }
+          agGrid[f].cells[dstKey] = srcCodigo;
+          if (dstCodigo) agGrid[f].cells[srcKey] = dstCodigo;
+          else delete agGrid[f].cells[srcKey];
           saveAgGrid();
           renderAgenda();
         }
@@ -2118,7 +2188,13 @@ function renderAgenda() {
       });
 
       if (r) {
-        // Service card — no price, bigger address, name + phone
+        // En modo TV, ocultar canceladas
+        const isTV = document.body.classList.contains('tv-mode');
+        if (isTV && r.estado === 'cancelado') {
+          cell.style.cssText += 'background:#0f172a;border:2px dashed #1e293b;opacity:.3;';
+          colDiv.appendChild(cell);
+          return;
+        }
         const bg = r.camionEspecifico
           ? '#6d28d9'
           : r.unidad === 'grande' ? '#c0392b' : r.unidad === 'mediano' ? '#e67e22' : '#27ae60';
@@ -2131,7 +2207,7 @@ function renderAgenda() {
           const _customH = r.horasOcupadas.find(h => !AG_ROWS.includes(h));
           if (_customH) _displayHora = _customH;
         }
-        const horaCustom = (_displayHora !== row) ? `<div style="font-size:9px;font-weight:800;background:rgba(0,0,0,.3);display:inline-block;padding:1px 6px;border-radius:3px;margin-bottom:2px;">🕐 ${_displayHora}</div>` : '';
+        const hayHoraCustom = (_displayHora !== row);
         cell.style.background = bg;
         cell.draggable = true;
         cell.addEventListener('dragstart', e => {
@@ -2140,33 +2216,55 @@ function renderAgenda() {
           setTimeout(()=>cell.style.opacity='.5',0);
         });
         cell.addEventListener('dragend', () => { cell.style.opacity='1'; agDragSource = null; });
-        cell.innerHTML = `
-          <div style="padding:7px 9px;height:100%;display:flex;flex-direction:column;color:#fff;cursor:grab;box-sizing:border-box;gap:3px;">
-            <div onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;flex:1;min-height:0;">
-              ${horaCustom}
-              <div style="font-size:10.5px;font-weight:700;line-height:1.35;margin-bottom:3px;">📦 ${cS}</div>
-              <div style="font-size:10.5px;font-weight:700;line-height:1.35;">🏠 ${dS}</div>
-            </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:4px;border-top:1px solid rgba(255,255,255,.2);flex-shrink:0;">
-              <div>
-                <div style="font-size:10px;font-weight:700;opacity:.9;">📞 ${r.tel}</div>
-                <div style="font-size:10px;opacity:.85;">${nombre}</div>
-                ${r.camionEspecifico ? `<div style="font-size:10px;font-weight:800;color:rgba(255,255,255,.95);margin-top:2px;">🔑 ${NOMBRES_CAMION[r.camionEspecifico] || r.camionEspecifico}</div>` : ''}
+
+        // Etiqueta de tamaño/camión (para modo TV)
+        const camLabel = r.camionEspecifico
+          ? (NOMBRES_CAMION[r.camionEspecifico] || r.camionEspecifico)
+          : (r.unidad === 'grande' ? '🚛 Camión grande'
+             : r.unidad === 'mediano' ? '🚚 Camión mediano'
+             : '🚐 Camión pequeño');
+
+        if (isTV) {
+          // Layout TV: orden carga → descarga → camión → hora → tel → nombre
+          cell.innerHTML = `
+            <div class="tv-cell" onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;">
+              <div class="tv-carga">📦 ${cS}</div>
+              <div class="tv-descarga">🏠 ${dS}</div>
+              <div class="tv-camion">${camLabel}</div>
+              ${hayHoraCustom ? `<div class="tv-hora">🕐 ${_displayHora}</div>` : ''}
+              <div class="tv-tel">📞 ${r.tel}</div>
+              <div class="tv-nombre">${nombre}</div>
+            </div>`;
+        } else {
+          const horaCustom = hayHoraCustom ? `<div style="font-size:9px;font-weight:800;background:rgba(0,0,0,.3);display:inline-block;padding:1px 6px;border-radius:3px;margin-bottom:2px;">🕐 ${_displayHora}</div>` : '';
+          cell.innerHTML = `
+            <div style="padding:7px 9px;height:100%;display:flex;flex-direction:column;color:#fff;cursor:grab;box-sizing:border-box;gap:3px;">
+              <div onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;flex:1;min-height:0;">
+                ${horaCustom}
+                <div style="font-size:10.5px;font-weight:700;line-height:1.35;margin-bottom:3px;">📦 ${cS}</div>
+                <div style="font-size:10.5px;font-weight:700;line-height:1.35;">🏠 ${dS}</div>
               </div>
-              <button onclick="event.stopPropagation();removeFromGrid('${f}','${agCellKey(col,row)}')" style="background:rgba(0,0,0,.25);border:none;color:#fff;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;flex-shrink:0;">✕</button>
-            </div>
-          </div>`;
+              <div style="display:flex;justify-content:space-between;align-items:center;padding-top:4px;border-top:1px solid rgba(255,255,255,.2);flex-shrink:0;">
+                <div>
+                  <div style="font-size:10px;font-weight:700;opacity:.9;">📞 ${r.tel}</div>
+                  <div style="font-size:10px;opacity:.85;">${nombre}</div>
+                  ${r.camionEspecifico ? `<div style="font-size:10px;font-weight:800;color:rgba(255,255,255,.95);margin-top:2px;">🔑 ${NOMBRES_CAMION[r.camionEspecifico] || r.camionEspecifico}</div>` : ''}
+                </div>
+                <button onclick="event.stopPropagation();removeFromGrid('${f}','${agCellKey(col,row)}')" style="background:rgba(0,0,0,.25);border:none;color:#fff;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;flex-shrink:0;">✕</button>
+              </div>
+            </div>`;
+        }
       } else {
         // Empty cell — two options
         cell.style.cssText += 'background:#f0f4ff;border:2px dashed #c7d5f0;cursor:pointer;';
         cell.innerHTML = `
           <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:8px;">
             <div style="font-size:11px;font-weight:800;color:#8899cc;margin-bottom:2px;">Nueva reservación</div>
-            <button onclick="event.stopPropagation();openNuevaEnHora('${row}')"
+            <button onclick="event.stopPropagation();openNuevaEnCelda(${col},'${row}')"
               style="width:100%;background:#1a3a6b;color:#fff;border:none;border-radius:6px;padding:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">
               ✏️ Ingresar manualmente
             </button>
-            <button onclick="event.stopPropagation();openWAReaderEnHora('${row}')"
+            <button onclick="event.stopPropagation();openWAReaderEnCelda(${col},'${row}')"
               style="width:100%;background:#25D366;color:#fff;border:none;border-radius:6px;padding:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">
               💬 Lector de WhatsApp
             </button>
@@ -2180,7 +2278,138 @@ function renderAgenda() {
 
     container.appendChild(colDiv);
   }
+
+  // Render del banner "Sin ubicar"
+  renderSinUbicar(f);
 }
+
+// ==================== SIN UBICAR (banner arriba de la agenda) ====================
+function renderSinUbicar(f) {
+  const banner = document.getElementById('ag-sin-ubicar');
+  if (!banner) return;
+  const day = getAgDay(f);
+  const hidden = new Set(day.hidden || []);
+  const placedCodes = new Set(Object.values(day.cells).filter(Boolean));
+  const sinUbicar = reservas.filter(r =>
+    r.fecha === f && r.estado !== 'cancelado' && !placedCodes.has(r.codigo) && !hidden.has(r.codigo)
+  );
+  if (sinUbicar.length === 0) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  const chips = sinUbicar.map(r => {
+    const bg = r.camionEspecifico ? '#6d28d9'
+             : r.unidad === 'grande' ? '#c0392b'
+             : r.unidad === 'mediano' ? '#e67e22'
+             : '#27ae60';
+    const nombre = `${r.nombre} ${r.apellido||''}`.trim();
+    return `<div draggable="true"
+        data-codigo="${r.codigo}"
+        onclick="verRes(${reservas.indexOf(r)})"
+        ondragstart="agSinUbicarDragStart(event,'${r.codigo}')"
+        style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:grab;margin:3px;">
+        <span>📦 ${nombre}</span>
+        <span style="opacity:.85;font-size:11px;">${r.hora}</span>
+      </div>`;
+  }).join('');
+  banner.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:13px;font-weight:800;color:#92400e;">⚠️ ${sinUbicar.length} sin ubicar:</div>
+      <div style="flex:1;">${chips}</div>
+      <div style="font-size:11px;color:#92400e;font-style:italic;">Arrastra a una celda vacía del grid</div>
+    </div>`;
+}
+
+// Drag desde el chip "sin ubicar" hacia una celda vacía
+function agSinUbicarDragStart(e, codigo) {
+  agDragSource = { fromSinUbicar: true, codigo };
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+// ==================== MODO TV (pantalla completa oscura) ====================
+let _tvModeSection = null;
+let _tvClockInterval = null;
+let _origAlert = null;
+
+function startTVClock() {
+  const update = () => {
+    const el = document.getElementById('tv-clock');
+    if (!el) return;
+    const now = new Date();
+    const dias = ['DOMINGO','LUNES','MARTES','MIÉRCOLES','JUEVES','VIERNES','SÁBADO'];
+    const meses = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+    const dia = dias[now.getDay()];
+    const mes = meses[now.getMonth()];
+    const d = now.getDate();
+    let h = now.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if (h === 0) h = 12;
+    const m = String(now.getMinutes()).padStart(2,'0');
+    const s = String(now.getSeconds()).padStart(2,'0');
+    el.innerHTML = `${dia} ${d} DE ${mes}<span class="tv-sep">·</span>${h}:${m}:${s} ${ampm}`;
+  };
+  update();
+  if (_tvClockInterval) clearInterval(_tvClockInterval);
+  _tvClockInterval = setInterval(update, 1000);
+}
+
+function stopTVClock() {
+  if (_tvClockInterval) { clearInterval(_tvClockInterval); _tvClockInterval = null; }
+}
+
+function toggleTVMode(section) {
+  const body = document.body;
+  if (body.classList.contains('tv-mode')) {
+    // ---- Salir del modo TV ----
+    body.classList.remove('tv-mode');
+    body.classList.remove('tv-show-exit');
+    stopTVClock();
+    // Restaurar alerts
+    if (_origAlert) { window.alert = _origAlert; _origAlert = null; }
+    // Salir de pantalla completa
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(()=>{});
+    }
+    if (_tvModeSection === 'agenda') renderAgenda();
+    else if (_tvModeSection === 'pizarra') renderPD();
+    _tvModeSection = null;
+    return;
+  }
+  // ---- Entrar al modo TV ----
+  _tvModeSection = section || 'agenda';
+  if (_tvModeSection === 'agenda') { nav('agenda'); }
+  else if (_tvModeSection === 'pizarra') { nav('programacion'); }
+  body.classList.add('tv-mode');
+  body.classList.add('tv-show-exit');
+  startTVClock();
+  // Suprimir alerts mientras está en TV (solo log a consola)
+  _origAlert = window.alert;
+  window.alert = function(msg) { console.log('[TV alert silenciado]', msg); };
+  // Activar pantalla completa real del navegador (requiere gesto del usuario — el clic al botón lo cumple)
+  try {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+    if (req) req.call(el).catch(()=>{});
+  } catch(e) { /* no fatal */ }
+  // Re-renderizar con layout TV
+  if (_tvModeSection === 'agenda') renderAgenda();
+  else if (_tvModeSection === 'pizarra') renderPD();
+}
+
+// ESC para salir del modo TV (además, el navegador saldrá solo de fullscreen con ESC)
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.body.classList.contains('tv-mode')) {
+    // Dejar que el navegador maneje el ESC del fullscreen, pero también salir del modo TV
+    setTimeout(() => {
+      if (document.body.classList.contains('tv-mode')) toggleTVMode();
+    }, 50);
+  }
+});
+
+// Si el usuario sale del fullscreen manualmente (ESC/F11), también salir del modo TV
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && document.body.classList.contains('tv-mode')) {
+    toggleTVMode();
+  }
+});
 
 function delAgCol(col) {
   const f = document.getElementById('ag-fecha').value || new Date().toISOString().slice(0,10);
@@ -2206,49 +2435,31 @@ function removeFromGrid(f, key) {
   const codigo = agGrid[f].cells[key];
   const r = codigo ? reservas.find(rv => rv.codigo === codigo) : null;
   const nombre = r ? `${r.nombre} ${r.apellido}` : 'esta reservación';
-  // Dar 3 opciones: Cancelar servicio, Solo quitar de agenda, o No hacer nada
-  const opcion = prompt(
-    `¿Qué deseas hacer con la reservación de ${nombre}?\n\n` +
-    `1 = CANCELAR servicio (va a Reservaciones Canceladas)\n` +
-    `2 = Solo quitar de la agenda (la reservación queda activa)\n\n` +
-    `Escribe 1 o 2:`,
-    '2'
-  );
-  if (!opcion || (opcion !== '1' && opcion !== '2')) return;
-
-  // Quitar de TODAS las celdas de la agenda
+  if (!confirm(`¿Quitar la reservación de ${nombre} de la agenda?\n\n(Pasa a "Sin ubicar" para que la reubiques manualmente. No se elimina.)`)) return;
+  // Quitar de TODAS las celdas de esta fecha (por si ocupaba varios horarios)
   if (codigo) {
     Object.keys(agGrid[f].cells).forEach(k => {
       if (agGrid[f].cells[k] === codigo) delete agGrid[f].cells[k];
     });
-    if (!agGrid[f].hidden) agGrid[f].hidden = [];
-    if (!agGrid[f].hidden.includes(codigo)) agGrid[f].hidden.push(codigo);
+    // NO agregar a hidden[] — queremos que aparezca en el banner "Sin ubicar"
   } else {
     delete agGrid[f].cells[key];
   }
   saveAgGrid();
-
-  // Si eligio cancelar, marcar la reservacion como cancelada
-  if (opcion === '1' && r) {
-    r.estado = 'cancelado';
-    saveSingle(r);
-    alert(`✅ Reservación de ${nombre} cancelada. Puedes retomar desde "Canceladas" en el menú.`);
-  }
-
   renderAgenda();
-  renderAll();
 }
 
-function openWAReaderEnHora(hora) {
-  // Heredar fecha de la agenda antes de abrir
-  const agFecha = document.getElementById('ag-fecha');
-  if (agFecha && agFecha.value) _waTargetFecha = agFecha.value;
+function openWAReaderEnCelda(col, hora) {
   openWAReader();
   window._waTargetHora = hora;
+  window._waTargetCol = col;
 }
+// Compatibilidad con llamadas viejas
+function openWAReaderEnHora(hora) { openWAReaderEnCelda(null, hora); }
 
-function openNuevaEnHora(hora) {
-  // Guardar en qué fila de la agenda se hizo clic (para ubicar la reservación ahí)
+function openNuevaEnCelda(col, hora) {
+  // Guardar columna Y fila designada para ubicación manual exacta
+  window._agendaTargetCol = col;
   window._agendaTargetRow = hora;
   openNueva();
   setTimeout(() => {
@@ -2304,41 +2515,15 @@ function confirmarHoraCambio() {
   const inp  = document.getElementById('hc-hora-custom');
   let horaFinal = sel.value === 'Otra hora' ? inp.value.trim() : sel.value;
   if (!horaFinal) { alert('Por favor ingresa un horario.'); return; }
-  // Update reservation hora Y horasOcupadas
+  // Update reservation hora
   const r = reservas.find(rv => rv.codigo === codigo);
-  if (r) {
-    const oldHora = r.hora;
-    r.hora = horaFinal;
-    // Actualizar horasOcupadas: reemplazar la hora vieja por la nueva
-    if (r.horasOcupadas && r.horasOcupadas.length > 0) {
-      const oldRow = mapHoraToRow(oldHora);
-      const srcRow = srcKey.split('__')[1]; // row from which we dragged
-      // Buscar en horasOcupadas cual hora mapea al slot de origen
-      const idxToReplace = r.horasOcupadas.findIndex(h => mapHoraToRow(h) === srcRow);
-      if (idxToReplace >= 0) {
-        r.horasOcupadas[idxToReplace] = horaFinal;
-      } else {
-        r.horasOcupadas = [horaFinal];
-      }
-    } else {
-      r.horasOcupadas = [horaFinal];
-    }
-    saveSingle(r);
-  }
-  // Move in grid: mover TODAS las celdas de este codigo de columna origen a destino
+  if (r) { r.hora = horaFinal; saveSingle(r); }
+  // Move in grid
   const day = getAgDay(f);
-  const srcCol = parseInt(srcKey.split('__')[0]);
-  const dstCol = parseInt(dstKey.split('__')[0]);
-  // Borrar todas las celdas de este codigo en la columna origen
-  Object.keys(day.cells).forEach(k => {
-    if (day.cells[k] === codigo && parseInt(k.split('__')[0]) === srcCol) {
-      delete day.cells[k];
-    }
-  });
-  // Colocar en la celda destino
   const dstCodigo = day.cells[dstKey];
   day.cells[dstKey] = codigo;
   if (dstCodigo) day.cells[srcKey] = dstCodigo;
+  else delete day.cells[srcKey];
   saveAgGrid();
   _pendingMove = null;
   document.getElementById('mo-hora-cambio').classList.remove('open');
@@ -2847,12 +3032,7 @@ function guardar() {
   // Also refresh agenda to show the new reservation
   const agFecha = document.getElementById('ag-fecha');
   if (agFecha) { agFecha.value = r.fecha; renderAgenda(); }
-
-  // Ofrecer enviar confirmacion por WhatsApp
-  const enviarWA = confirm(`✅ Reservación ${r.codigo} guardada correctamente.\n\n¿Desea enviar la confirmación por WhatsApp al cliente?`);
-  if (enviarWA) {
-    enviarConfirmacionWARes(r);
-  }
+  alert(`✅ Reservación ${r.codigo} guardada correctamente.`);
 }
 
 // ==================== VER RESERVACIÓN ====================
@@ -2924,7 +3104,7 @@ let comentarios; try { comentarios = JSON.parse(localStorage.getItem('mt_comenta
 let _comentTag = '';
 
 function saveComentarios() {
-  localStorage.setItem('mt_comentarios', JSON.stringify(comentarios));
+  safeSetLS('mt_comentarios', JSON.stringify(comentarios));
 }
 
 function setComentTag(tag) {
@@ -2947,6 +3127,7 @@ function cargarComentarios() {
   if (coms.length === 0) {
     el.innerHTML = '<div style="background:#f8fafd;border-radius:8px;padding:14px;text-align:center;color:var(--gris2);font-size:13px;">Sin comentarios para este cliente.</div>';
   } else {
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     el.innerHTML = coms.map((c, i) => {
       const tagColors = {
         '⚠️ Precaución': {bg:'#fee2e2',color:'#991b1b',border:'#fca5a5'},
@@ -2958,11 +3139,11 @@ function cargarComentarios() {
       return `<div style="background:${tc.bg};border:1.5px solid ${tc.border};border-radius:8px;padding:10px 14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div>
-            ${c.tag ? `<span style="font-size:11px;font-weight:800;color:${tc.color};">${c.tag}</span>` : ''}
-            <div style="font-size:13px;color:${tc.color};margin-top:4px;line-height:1.5;">${c.texto}</div>
-            <div style="font-size:10px;color:${tc.color};opacity:.7;margin-top:4px;">${c.fecha} · ${c.reservacion || ''}</div>
+            ${c.tag ? `<span style="font-size:11px;font-weight:800;color:${tc.color};">${esc(c.tag)}</span>` : ''}
+            <div style="font-size:13px;color:${tc.color};margin-top:4px;line-height:1.5;white-space:pre-wrap;">${esc(c.texto)}</div>
+            <div style="font-size:10px;color:${tc.color};opacity:.7;margin-top:4px;">${esc(c.fecha)} · ${esc(c.reservacion || '')}</div>
           </div>
-          <button onclick="eliminarComentario('${tel}',${i})" style="background:rgba(0,0,0,.1);border:none;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;color:${tc.color};flex-shrink:0;">🗑</button>
+          <button onclick="eliminarComentario('${esc(tel)}',${i})" style="background:rgba(0,0,0,.1);border:none;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;color:${tc.color};flex-shrink:0;">🗑</button>
         </div>
       </div>`;
     }).join('');
@@ -3297,6 +3478,27 @@ function imprimirPDF() {
   </body></html>`;
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+    const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
+    const styleMatch = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
+    container.innerHTML = (styleMatch ? '<style>'+styleMatch[1]+'</style>' : '') + (bodyMatch ? bodyMatch[1] : '');
+    document.body.appendChild(container);
+    if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); container.remove(); return; }
+    setTimeout(() => {
+      const opt = {
+        margin: 0,
+        filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+        pagebreak: { mode: ['css','legacy'], before: '.pagina' }
+      };
+      html2pdf().set(opt).from(container).save().then(() => {
+        container.remove();
+      }).catch((e) => { console.error(e); container.remove(); alert('Error generando PDF: '+e.message); });
+    }, 300);
+    return;
   }
   const w = window.open('','_blank');
   if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
@@ -3382,7 +3584,7 @@ let pdData; try { pdData = JSON.parse(localStorage.getItem('mt_pd3') || '{}'); }
 let editColIdx = null;
 let pdTabActual = 'pizarra';
 
-function savePD() { localStorage.setItem('mt_pd3', JSON.stringify(pdData)); syncToSupabase('mt_pd3', pdData); }
+function savePD() { safeSetLS('mt_pd3', JSON.stringify(pdData)); syncToSupabase('mt_pd3', pdData); }
 function pdHoy() { document.getElementById('pd-fecha').valueAsDate = new Date(); renderPD(); }
 function getPDFecha() { return document.getElementById('pd-fecha').value || new Date().toISOString().slice(0,10); }
 
@@ -3478,11 +3680,14 @@ function renderPD() {
 
   // If no columnas yet, still show totals from reservations
   if (day.columnas.length === 0) {
-    resDiaTotals.forEach(r => { totalServicios += parseFloat(r.costo)||0; });
+    resDiaTotals.forEach(r => {
+      if (r.estado === 'cancelado') return;
+      totalServicios += parseFloat(r.costo)||0;
+    });
   }
 
   const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
-  const totalPersonal = day.columnas.reduce((s,col)=>s+(col.miembros||[]).reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
+  const totalPersonal = day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
   const linkNeto = totalLink * 0.95;
   const neto = totalServicios - totalGastos - totalPersonal;
 
@@ -3926,7 +4131,7 @@ function renderStats2(f) {
     else if(m==='LINK') totalLink+=c; else if(m==='PENDIENTE') totalPendiente+=c;
   });});
   const totalGastos=day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
-  const totalPersonal=day.columnas.reduce((s,col)=>s+(col.miembros||[]).reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
+  const totalPersonal=day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
   const linkNeto=totalLink*0.95; const neto=totalServicios-totalGastos-totalPersonal;
   const statsEl=document.getElementById('pd-stats');
   if(statsEl) statsEl.innerHTML=`
@@ -3958,7 +4163,7 @@ function abrirModalColumna(editIdx=null) {
   // Empleados checkboxes
   const empCont = document.getElementById('col-empleados');
   empCont.innerHTML = EMPLEADOS.map((emp,i) => {
-    const selMiembro = col ? (col.miembros||[]).find(m=>m.nombre===emp) : null;
+    const selMiembro = col ? col.miembros.find(m=>m.nombre===emp) : null;
     const enOtro = asignadosOtros.has(emp);
     const enOtroEquipo = enOtro ? day.columnas.find((c2,ci) => ci !== editIdx && c2.miembros.some(m=>m.nombre===emp)) : null;
     const equipoNombre = enOtroEquipo ? enOtroEquipo.nombre : '';
@@ -4128,7 +4333,7 @@ function renderCuaderno() {
   const cuadPers = document.getElementById('cuad-personal');
   if (cuadPers) {
     const pagos = [];
-    day.columnas.forEach(col => (col.miembros||[]).forEach(m => { if(parseFloat(m.pago)>0) pagos.push({nombre:m.nombre,monto:parseFloat(m.pago),equipo:col.nombre}); }));
+    day.columnas.forEach(col => col.miembros.forEach(m => { if(parseFloat(m.pago)>0) pagos.push({nombre:m.nombre,monto:parseFloat(m.pago),equipo:col.nombre}); }));
     const totalPers = pagos.reduce((s,p)=>s+p.monto,0);
     if (pagos.length===0) {
       cuadPers.innerHTML = '<div style="font-size:12px;color:var(--gris2);">Sin pagos registrados.</div>';
@@ -4233,7 +4438,7 @@ function renderCuaderno() {
     });
   });
   const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
-  const totalPersonal = day.columnas.reduce((s,col)=>s+(col.miembros||[]).reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
+  const totalPersonal = day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
   const neto = totalIngresos - totalGastos - totalPersonal;
   const ti=document.getElementById('tot-ingresos'); if(ti) ti.textContent='$'+totalIngresos.toFixed(2);
   const tg=document.getElementById('tot-gastos2'); if(tg) tg.textContent='$'+totalGastos.toFixed(2);
@@ -4636,7 +4841,7 @@ function cobrarPendiente(codigo, fechaOriginal) {
     fecha: fechaCobro
   });
 
-  savePD(); localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+  savePD(); safeSetLS('mt2_reservas', JSON.stringify(reservas));
   recalcCerramos();
   renderNotificaciones();
   if (pdTabActual === 'cuaderno') renderCuaderno();
@@ -4669,7 +4874,7 @@ function delCobroPendiente(i) {
       delete res._metodoCobro;
     }
     day.cobrosPendientes.splice(i, 1);
-    savePD(); localStorage.setItem('mt2_reservas', JSON.stringify(reservas));
+    savePD(); safeSetLS('mt2_reservas', JSON.stringify(reservas));
     recalcCerramos();
     renderNotificaciones();
     if (pdTabActual === 'cuaderno') renderCuaderno();
@@ -4698,9 +4903,8 @@ function calcIngresosServiciosPorCuenta(day) {
   // LINK → NO se suma hoy (cae al día siguiente en CUSCATLAN)
   const ing = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, '_LINK_PENDIENTE':0};
   day.columnas.forEach(col => {
-    if (!col.slots) return;
     const contados = new Set();
-    [...HORARIOS, 'otra'].forEach(h => {
+    HORARIOS.forEach(h => {
       const codigo = col.slots[h]?.reservaCodigo;
       let c = parseFloat(col.slots[h]?.costo)||0;
       const res = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
@@ -4723,10 +4927,16 @@ function recalcCerramos() {
   // Ingresos de servicios por cuenta (LINK queda en _LINK_PENDIENTE, no se suma hoy)
   const ingServ = calcIngresosServiciosPorCuenta(day);
 
-  // LINK del día anterior → entra hoy a CUSCATLAN
+  // LINK del día anterior → entra hoy a CUSCATLAN (servicios + cobros pendientes)
   const fAyer = getFechaAnterior(f);
   const dayAyer = pdData[fAyer] ? getDayData(fAyer) : null;
-  const linkAyer = dayAyer ? calcIngresosServiciosPorCuenta(dayAyer)['_LINK_PENDIENTE'] : 0;
+  let linkAyer = 0;
+  if (dayAyer) {
+    linkAyer = calcIngresosServiciosPorCuenta(dayAyer)['_LINK_PENDIENTE'] || 0;
+    (dayAyer.cobrosPendientes||[]).forEach(cb => {
+      if (cb.metodo === 'LINK') linkAyer += (parseFloat(cb.monto)||0) * 0.95;
+    });
+  }
 
   // Otros ingresos por destino
   const ingOtros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
@@ -4743,7 +4953,7 @@ function recalcCerramos() {
   });
 
   // Personal + propinas (siempre de CAJA CHICA)
-  const totalPersonal = day.columnas.reduce((s,col) => s + (col.miembros||[]).reduce((sm,m) => sm + (parseFloat(m.pago)||0), 0), 0);
+  const totalPersonal = day.columnas.reduce((s,col) => s + col.miembros.reduce((sm,m) => sm + (parseFloat(m.pago)||0), 0), 0);
   const totalPropinas = day.columnas.reduce((s,col) => s + (col.propinas||[]).reduce((sp,p) => sp + (parseFloat(p)||0), 0), 0);
 
   // Movimientos entre cuentas
@@ -4819,7 +5029,7 @@ function descargarResumenMensual() {
         if (m==='LINK') c *= 0.95;
         if (m!=='PENDIENTE') ingDia += c;
       });
-      persDia += (col.miembros||[]).reduce((s,m2)=>s+(parseFloat(m2.pago)||0),0);
+      persDia += col.miembros.reduce((s,m2)=>s+(parseFloat(m2.pago)||0),0);
       propDia += (col.propinas||[]).reduce((s,p)=>s+(parseFloat(p)||0),0);
     });
 
@@ -4919,13 +5129,21 @@ function descargarResumenMensual() {
     </table>
   </div>`;
 
-  const fullHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Resumen ' + nombreMes + '</title>' +
-    '<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700;800&family=Barlow+Condensed:wght@700;800;900&display=swap" rel="stylesheet">' +
-    '<style>@media print{@page{size:letter;margin:8mm;}}</style></head><body>' + html + '</body></html>';
-  const w = window.open('', '_blank');
-  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
-  w.document.write(fullHtml.replace('</body>', '<script>setTimeout(()=>window.print(),1000);<\/script></body>'));
-  w.document.close();
+  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado.'); return; }
+  const container = document.createElement('div');
+  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+  container.innerHTML = html;
+  document.body.appendChild(container);
+  setTimeout(() => {
+    html2pdf().set({
+      margin: 0,
+      filename: 'Resumen_' + nombreMes.replace(/\s+/g,'_') + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['avoid-all','css'] }
+    }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error: '+e.message); });
+  }, 300);
 }
 
 // ==================== IMPRIMIR PD ====================
@@ -5140,7 +5358,7 @@ function elimEquipo(i) { elimColumna(i); }
 // ==================== CONCILIACIÓN BANCARIA CUSCATLÁN ====================
 let concData; try { concData = JSON.parse(localStorage.getItem('mt_conc') || '{}'); } catch(e) { concData = {}; }
 
-function saveConc() { localStorage.setItem('mt_conc', JSON.stringify(concData)); syncToSupabase('mt_conc', concData); }
+function saveConc() { safeSetLS('mt_conc', JSON.stringify(concData)); syncToSupabase('mt_conc', concData); }
 function concHoy() { document.getElementById('conc-fecha').valueAsDate = new Date(); renderConciliacion(); }
 function getConcFecha() { return document.getElementById('conc-fecha')?.value || new Date().toISOString().slice(0,10); }
 
@@ -5396,28 +5614,39 @@ function irAConcFecha(f) {
 }
 
 // ==================== LECTOR WHATSAPP ====================
-let _waTargetFecha = null; // Fecha heredada de la agenda
-
 function openWAReader() {
   document.getElementById('mo-wa-reader').classList.add('open');
   document.getElementById('wa-paso1').style.display = 'block';
+  document.getElementById('wa-paso2').style.display = 'none';
+  document.getElementById('wa-paso3').style.display = 'none';
   document.getElementById('wa-input').value = '';
-  // Guardar fecha de la agenda si esta abierta
-  const agFecha = document.getElementById('ag-fecha');
-  if (agFecha && agFecha.value) _waTargetFecha = agFecha.value;
+  document.getElementById('wa-fecha').valueAsDate = new Date();
 }
 function closeWAReader() { document.getElementById('mo-wa-reader').classList.remove('open'); }
+function volverPaso1() {
+  document.getElementById('wa-paso1').style.display = 'block';
+  document.getElementById('wa-paso2').style.display = 'none';
+}
+function nuevoLector() {
+  document.getElementById('wa-paso1').style.display = 'block';
+  document.getElementById('wa-paso2').style.display = 'none';
+  document.getElementById('wa-paso3').style.display = 'none';
+  document.getElementById('wa-input').value = '';
+}
 
 function analizarWA() {
   const texto = document.getElementById('wa-input').value.trim();
   if (!texto) { alert('Por favor pega el texto del chat primero.'); return; }
 
-  let nombre = '', apellido = '', tel = '', carga = '', descarga = '', notas = '';
+  let nombre = '', tel = '', carga = '', descarga = '', notas = '';
 
+  // Split into clean lines
   const lineas = texto.split('\n').map(l => l.trim()).filter(Boolean);
 
+  // First pass: look for labeled fields
   lineas.forEach(linea => {
     const lc = linea.toLowerCase();
+    // Strip leading dash/bullet and label
     const sinBullet = linea.replace(/^[-•*]\s*/, '');
     const sinEtiqueta = sinBullet.replace(/^[^:]+:\s*/, '').trim();
     const valor = sinEtiqueta || sinBullet;
@@ -5435,77 +5664,75 @@ function analizarWA() {
     }
   });
 
-  if (!nombre && lineas[0]) nombre = lineas[0].replace(/^[-•*]\s*/, '').trim();
+  // Second pass: positional fallback if labels not found
+  // Format: line 0 = nombre, line 1 = tel, line 2 = carga, line 3+ = descarga
+  if (!nombre && lineas[0]) {
+    nombre = lineas[0].replace(/^[-•*]\s*/, '').trim();
+  }
   if (!tel && lineas[1]) {
     const l1 = lineas[1].replace(/^[-•*]\s*/, '').trim();
+    // If it looks like a phone number (contains mostly digits)
     const digitsOnly = l1.replace(/\D/g,'');
-    if (digitsOnly.length >= 7) tel = digitsOnly.length === 8 ? digitsOnly.replace(/(\d{4})(\d{4})/, '$1-$2') : l1;
+    if (digitsOnly.length >= 7) {
+      tel = digitsOnly.length === 8 ? digitsOnly.replace(/(\d{4})(\d{4})/, '$1-$2') : l1;
+    }
   }
-  if (!carga && lineas[2]) carga = lineas[2].replace(/^[-•*]\s*/, '').trim();
+  if (!carga && lineas[2]) {
+    carga = lineas[2].replace(/^[-•*]\s*/, '').trim();
+  }
   if (!descarga) {
+    // Join remaining lines as descarga
     const resto = lineas.slice(carga ? 3 : 2);
     if (resto.length > 0) descarga = resto.map(l => l.replace(/^[-•*]\s*/,'')).join(' ');
   }
 
-  // Separar nombre y apellido
-  const partes = nombre.split(' ');
-  const primerNombre = partes[0] || '';
-  apellido = partes.length > 1 ? partes.slice(1).join(' ') : '';
+  // Populate fields
+  document.getElementById('wa-nombre').value = nombre;
+  document.getElementById('wa-tel').value = tel;
+  document.getElementById('wa-carga').value = carga;
+  document.getElementById('wa-descarga').value = descarga;
+  document.getElementById('wa-obs').value = notas;
+  document.getElementById('wa-fecha').valueAsDate = new Date();
 
-  // Cerrar WA reader y abrir formulario manual pre-llenado
-  closeWAReader();
-  openNueva();
+  actualizarPreviewWA();
 
-  setTimeout(() => {
-    // Pre-llenar datos extraidos en el formulario manual
-    document.getElementById('f-nombre').value = primerNombre;
-    document.getElementById('f-apellido').value = apellido;
-    document.getElementById('f-tel').value = tel;
-    document.getElementById('f-carga').value = carga;
-    document.getElementById('f-descarga').value = descarga;
-    document.getElementById('f-obs').value = notas;
+  // Live preview updates
+  ['wa-nombre','wa-tel','wa-carga','wa-descarga','wa-fecha','wa-hora','wa-unidad','wa-costo'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.removeEventListener('input', actualizarPreviewWA);
+    el.removeEventListener('change', actualizarPreviewWA);
+    el.addEventListener('input', actualizarPreviewWA);
+    el.addEventListener('change', actualizarPreviewWA);
+  });
 
-    // Usar fecha de la agenda (si se abrio desde ahi) o hoy
-    if (_waTargetFecha) {
-      document.getElementById('f-fecha').value = _waTargetFecha;
-      _waTargetFecha = null;
-    }
-
-    // Si se abrio desde una hora especifica de la agenda, marcar esa hora
-    if (window._waTargetHora) {
-      const h8 = document.getElementById('f-h-8'); if(h8) h8.checked = false;
-      const h11 = document.getElementById('f-h-11'); if(h11) h11.checked = false;
-      const h230 = document.getElementById('f-h-230'); if(h230) h230.checked = false;
-      const hora = window._waTargetHora;
-      if (hora === '8:00 AM' && h8) h8.checked = true;
-      else if (hora === '11:00 AM' && h11) h11.checked = true;
-      else if (hora === '2:30 PM' && h230) h230.checked = true;
-      updateHoraLabels();
-      window._waTargetHora = null;
-    }
-
-    // Disparar busqueda de cliente por telefono
-    if (tel) buscarCliente();
-  }, 150);
+  document.getElementById('wa-paso1').style.display = 'none';
+  document.getElementById('wa-paso2').style.display = 'block';
 }
 
-// Generar mensaje de confirmacion WhatsApp para una reservacion
-function generarMsgWA(r) {
+function actualizarPreviewWA() {
+  const nombre = document.getElementById('wa-nombre').value || '[Nombre]';
+  const fecha = document.getElementById('wa-fecha').value;
+  const hora = getHoraValue('wa-hora','wa-hora-custom');
+  const unidad = document.getElementById('wa-unidad').value;
+  const costo = document.getElementById('wa-costo').value;
+  const carga = document.getElementById('wa-carga').value || '[Dirección de carga]';
+  const descarga = document.getElementById('wa-descarga').value || '[Dirección de descarga]';
+  const personal = '5';
+
   const unidadTextos = {
-    'pequeño': 'Camión Pequeño (furgón de 3 metros / 2 toneladas)',
-    'mediano': 'Camión Mediano (furgón de 5 metros / 5 toneladas)',
-    'grande':  'Camión Grande (furgón de 7 metros / 10 toneladas)'
+    pequeño: 'Camión Pequeño (furgón de 3 metros / 2 toneladas)',
+    mediano: 'Camión Mediano (furgón de 5 metros / 5 toneladas)',
+    grande:  'Camión Grande (furgón de 7 metros / 10 toneladas)'
   };
-  const unidadWA = unidadTextos[r.unidad] || r.unidad;
-  const fechaLabel = r.fecha ? new Date(r.fecha+'T12:00:00').toLocaleDateString('es-SV',{day:'2-digit',month:'long',year:'numeric'}) : '[Fecha]';
-  const costoLabel = r.costo ? '$'+parseFloat(r.costo).toFixed(2) : '[Costo]';
-  const hora = r.hora || '8:00 AM';
-  const personal = r.personal || '5';
+  const unidadWA = unidadTextos[unidad] || unidad;
+  const fechaLabel = fecha ? new Date(fecha+'T12:00:00').toLocaleDateString('es-SV',{day:'2-digit',month:'long',year:'numeric'}) : '[Fecha]';
+  const costoLabel = costo ? '$'+parseFloat(costo).toFixed(2) : '[Costo]';
 
-  return `Buen día, su mudanza queda totalmente programada para el día *${fechaLabel}* en el horario *${hora}*, en nuestra unidad *${unidadWA}*, con *${personal} hombres totalmente capacitados* a su servicio por un costo de *${costoLabel}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.
+  const msg = `Buen día, su mudanza queda totalmente programada para el día *${fechaLabel}* en el horario *${hora}*, en nuestra unidad *${unidadWA}*, con *${personal} hombres totalmente capacitados* a su servicio por un costo de *${costoLabel}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.
 
-📦 *Carga:* ${r.carga || ''}
-🏠 *Descarga:* ${r.descarga || ''}
+📦 *Carga:* ${carga}
+🏠 *Descarga:* ${descarga}
 
 El pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.
 
@@ -5521,12 +5748,74 @@ _(Se adjuntan las imágenes de nuestra Guía para una mudanza exitosa)_
 Cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊
 
 *Mudanzas Tecleñas* | 📞 2229-8822 | 📱 6198-4772`;
+
+  document.getElementById('wa-preview-msg').textContent = msg;
 }
 
-function enviarConfirmacionWARes(r) {
-  const tel = (r.tel || '').replace(/\D/g,'');
-  if (!tel) { alert('No hay número de teléfono registrado.'); return; }
-  const msg = generarMsgWA(r);
+function agendarDesdeWA() {
+  const nombre = document.getElementById('wa-nombre').value.trim();
+  const tel    = document.getElementById('wa-tel').value.trim();
+  const carga  = document.getElementById('wa-carga').value.trim();
+  const desc   = document.getElementById('wa-descarga').value.trim();
+  const fecha  = document.getElementById('wa-fecha').value;
+  const unidad = document.getElementById('wa-unidad').value;
+
+  const errores = [];
+  if (!nombre) errores.push('• Nombre del cliente');
+  if (!tel)    errores.push('• Teléfono');
+  if (!carga)  errores.push('• Dirección de carga');
+  if (!desc)   errores.push('• Dirección de descarga');
+  if (!fecha)  errores.push('• Fecha del servicio');
+  if (!unidad) errores.push('• Unidad');
+  if (errores.length) { alert('Faltan datos:\n\n'+errores.join('\n')); return; }
+
+  let costo = document.getElementById('wa-costo').value.trim();
+  if (costo && !isNaN(parseFloat(costo))) costo = parseFloat(costo).toFixed(2);
+
+  const partes = nombre.split(' ');
+  const apellido = partes.length > 1 ? partes.slice(1).join(' ') : '';
+
+  const horaPrincipal = getHoraValue('wa-hora','wa-hora-custom');
+  const r = {
+    codigo: genCod(),
+    nombre: partes[0], apellido,
+    tel, email: '',
+    fecha,
+    hora: horaPrincipal,
+    horasOcupadas: [horaPrincipal],
+    unidad, rampa: '',
+    costo,
+    tipoCliente: 'Consumidor Final',
+    personal: '5',
+    carga, descarga: desc,
+    obs: document.getElementById('wa-obs').value,
+    estado: 'confirmado',
+    servicios: ['transporte'],
+    embalaje: null, empaque: null,
+    vendedor: usuarioActual ? usuarioActual.nombre : ''
+  };
+
+  reservas.unshift(r);
+  saveSingle(r);
+  registrarClienteEnSupabase(r).catch(e => console.warn('Error registrando cliente:', e));
+  // Propagar destino del lector WA (col+row) al target de agenda para ubicación manual
+  if (typeof window._waTargetCol === 'number') window._agendaTargetCol = window._waTargetCol;
+  if (window._waTargetHora) window._agendaTargetRow = window._waTargetHora;
+  window._waTargetCol = null;
+  window._waTargetHora = null;
+  renderAll();
+  const agFecha = document.getElementById('ag-fecha');
+  if (agFecha) { agFecha.value = r.fecha; renderAgenda(); }
+
+  document.getElementById('wa-exito-cod').textContent = `Reservación ${r.codigo} creada`;
+  document.getElementById('wa-paso2').style.display = 'none';
+  document.getElementById('wa-paso3').style.display = 'block';
+}
+
+function enviarConfirmacionWA() {
+  const tel = document.getElementById('wa-tel').value.replace(/\D/g,'');
+  const msg = document.getElementById('wa-preview-msg').textContent;
+  if (!tel) { alert('Ingresa el número de teléfono primero.'); return; }
   window.open(`https://wa.me/503${tel}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
@@ -5572,13 +5861,14 @@ function renderComisiones() {
     return d.getMonth() === (mes-1) && d.getFullYear() === anio;
   });
 
-  // Count per vendedor
+  // Count per vendedor (excluyendo canceladas del monto)
   const conteo = {};
-  vendedores.forEach(v => { conteo[v] = { total: 0, reservas: [] }; });
+  vendedores.forEach(v => { conteo[v] = { total: 0, monto: 0, reservas: [] }; });
   resMes.forEach(r => {
     const v = r.vendedor || '';
     if (conteo[v]) {
       conteo[v].total++;
+      if (r.estado !== 'cancelado') conteo[v].monto += parseFloat(r.costo)||0;
       conteo[v].reservas.push(r);
     }
   });
@@ -5593,20 +5883,21 @@ function renderComisiones() {
       <div style="font-size:11px;font-weight:700;color:var(--gris2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">👤 ${v}</div>
       <div style="font-family:'Barlow Condensed',sans-serif;font-size:32px;font-weight:800;color:${color};">${c.total}</div>
       <div style="font-size:12px;color:var(--gris2);margin-top:2px;">servicios agendados</div>
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gris1);font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:800;color:${color};">$${c.total.toFixed(2)}</div>
-      <div style="font-size:11px;color:var(--gris2);">comisión del mes</div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gris1);font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:800;color:${color};">$${c.monto.toFixed(2)}</div>
+      <div style="font-size:11px;color:var(--gris2);">volumen del mes</div>
     </div>`;
   }).join('');
 
   // Total row
   const totalServicios = resMes.length;
+  const totalMonto = resMes.reduce((s,r) => s + (r.estado === 'cancelado' ? 0 : (parseFloat(r.costo)||0)), 0);
   const sinVendedor = resMes.filter(r => !r.vendedor).length;
   cards.innerHTML += `<div style="background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--shadow);border-left:4px solid var(--rojo);">
     <div style="font-size:11px;font-weight:700;color:var(--gris2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">📊 TOTAL MES</div>
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:32px;font-weight:800;color:var(--rojo);">${totalServicios}</div>
     <div style="font-size:12px;color:var(--gris2);margin-top:2px;">servicios totales</div>
-    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gris1);font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:800;color:var(--rojo);">$${totalServicios.toFixed(2)}</div>
-    <div style="font-size:11px;color:var(--gris2);">comisiones totales${sinVendedor > 0 ? ` (${sinVendedor} sin vendedor)` : ''}</div>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--gris1);font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:800;color:var(--rojo);">$${totalMonto.toFixed(2)}</div>
+    <div style="font-size:11px;color:var(--gris2);">volumen total${sinVendedor > 0 ? ` (${sinVendedor} sin vendedor)` : ''}</div>
   </div>`;
 
   // Detail table
@@ -5796,7 +6087,70 @@ function alertaPendientesUrgentes() {
       </div>
     </div>
 
-    <!-- Paso 2 y 3 eliminados: el flujo ahora va directo al formulario manual -->
+    <!-- PASO 2: Confirmación de datos extraídos -->
+    <div id="wa-paso2" style="display:none;">
+      <div style="background:#d1fae5;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#065f46;font-weight:600;">
+        ✅ Datos extraídos correctamente. Revisa y completa la información antes de agendar.
+      </div>
+
+      <div class="sec-div">Datos del cliente</div>
+      <div class="grid2">
+        <div class="fg"><label>Nombre *</label><input type="text" id="wa-nombre" placeholder="Nombre del cliente"></div>
+        <div class="fg"><label>Teléfono *</label><input type="text" id="wa-tel" placeholder="0000-0000"></div>
+      </div>
+      <div class="grid2">
+        <div class="fg"><label>Dirección de carga *</label><input type="text" id="wa-carga" placeholder="Dirección de carga"></div>
+        <div class="fg"><label>Dirección de descarga *</label><input type="text" id="wa-descarga" placeholder="Dirección de descarga"></div>
+      </div>
+
+      <div class="sec-div" style="margin-top:14px;">Completar reservación</div>
+      <div class="grid2">
+        <div class="fg"><label>Fecha del servicio *</label><input type="date" id="wa-fecha"></div>
+        <div class="fg"><label>Hora</label>
+          <select id="wa-hora" onchange="toggleHoraPersonalizada('wa-hora','wa-hora-custom')">
+            <option value="8:00 AM">8:00 AM</option>
+            <option value="11:00 AM">11:00 AM</option>
+            <option value="2:30 PM">2:30 PM</option>
+            <option value="Otra hora">Otra hora...</option>
+          </select>
+          <input type="text" id="wa-hora-custom" placeholder="Ej: 1:00 PM, 6:00 AM..." style="display:none;margin-top:6px;border:1.5px solid #128c7e;border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;" oninput="actualizarPreviewWA()">
+        </div>
+        <div class="fg"><label>Unidad</label>
+          <select id="wa-unidad">
+            <option value="pequeño">Camión Pequeño – 3m / 2 ton</option>
+            <option value="mediano">Camión Mediano – 5m / 5 ton</option>
+            <option value="grande">Camión Grande – 7m / 10 ton</option>
+          </select>
+        </div>
+        <div class="fg"><label>Costo</label><input type="text" id="wa-costo" placeholder="$0.00"></div>
+      </div>
+      <div class="fg"><label>Observaciones</label><textarea id="wa-obs" rows="2" placeholder="Notas adicionales..."></textarea></div>
+
+      <!-- Preview mensaje de confirmación -->
+      <div class="sec-div" style="margin-top:14px;">Vista previa — Mensaje de confirmación WhatsApp</div>
+      <div style="background:#e5ddd5;border-radius:10px;padding:12px;">
+        <div id="wa-preview-msg" style="background:#fff;border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;"></div>
+      </div>
+
+      <div class="flex gap2 mt3" style="justify-content:space-between;align-items:center;">
+        <button class="btn btn-gh" onclick="volverPaso1()">← Volver</button>
+        <div class="flex gap2">
+          <button class="btn" style="background:#128c7e;color:#fff;" onclick="agendarDesdeWA()">📋 Agendar reservación</button>
+          <button class="btn btn-w" onclick="enviarConfirmacionWA()">📱 Enviar confirmación por WhatsApp</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PASO 3: Éxito -->
+    <div id="wa-paso3" style="display:none;text-align:center;padding:20px 0;">
+      <div style="font-size:48px;margin-bottom:12px;">✅</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;color:var(--azul);margin-bottom:6px;" id="wa-exito-cod"></div>
+      <div style="font-size:14px;color:var(--gris2);margin-bottom:20px;">La reservación fue creada exitosamente.</div>
+      <div class="flex gap2" style="justify-content:center;">
+        <button class="btn btn-p" onclick="closeWAReader()">Ver reservaciones</button>
+        <button class="btn btn-gh" onclick="nuevoLector()">+ Procesar otro mensaje</button>
+      </div>
+    </div>
 
   </div>
 </div>
