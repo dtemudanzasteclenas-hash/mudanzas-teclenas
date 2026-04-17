@@ -205,7 +205,10 @@ tr:hover td{background:#f8fafd;}
 /* ==================== MODO TV (dark, pantalla 41" horizontal, letras ~1 pulgada) ==================== */
 body.tv-mode{background:#05070f!important;color:#f1f5f9;overflow:hidden;}
 body.tv-mode .h,
+body.tv-mode .sidebar,
 body.tv-mode .sb,
+body.tv-mode header,
+body.tv-mode .h-nav,
 body.tv-mode .user-badge,
 body.tv-mode .ag-legend,
 body.tv-mode #ag-sin-ubicar,
@@ -269,16 +272,16 @@ body.tv-mode #ag-cols>div>div[style*="dashed"]{background:#0f172a!important;bord
 body.tv-mode #ag-cols>div>div[style*="dashed"] *{display:none!important;}
 /* Layout interno de la celda TV (class .tv-cell agregada por renderAgenda) */
 body.tv-mode .tv-cell{
-  height:100%;padding:18px 20px;display:flex;flex-direction:column;
-  gap:8px;color:#fff;box-sizing:border-box;justify-content:flex-start;
+  height:100%;padding:20px 22px;display:flex;flex-direction:column;
+  gap:10px;color:#fff;box-sizing:border-box;justify-content:flex-start;
   font-family:'Barlow Condensed','Barlow',sans-serif;text-transform:uppercase;
 }
 body.tv-mode .tv-carga,
-body.tv-mode .tv-descarga{font-size:28px;font-weight:900;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.5px;}
-body.tv-mode .tv-camion{font-size:22px;font-weight:800;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95;}
-body.tv-mode .tv-hora{font-size:22px;font-weight:900;background:rgba(0,0,0,.35);padding:3px 12px;border-radius:8px;display:inline-block;width:fit-content;letter-spacing:1px;}
-body.tv-mode .tv-tel{font-size:20px;font-weight:700;letter-spacing:1px;opacity:.92;margin-top:auto;}
-body.tv-mode .tv-nombre{font-size:18px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.88;}
+body.tv-mode .tv-descarga{font-size:32px;font-weight:900;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.5px;}
+body.tv-mode .tv-nombre{font-size:22px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.92;margin-top:4px;}
+body.tv-mode .tv-bottom{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;}
+body.tv-mode .tv-hora{font-size:24px;font-weight:900;background:rgba(0,0,0,.35);padding:4px 14px;border-radius:10px;display:inline-block;letter-spacing:1px;}
+body.tv-mode .tv-costo{font-size:20px;font-weight:900;opacity:.85;letter-spacing:1px;}
 
 /* Colores de camión en modo TV */
 body.tv-mode #ag-cols>div>div[style*="192, 57, 43"],
@@ -472,7 +475,12 @@ body.tv-mode #pd-pizarra [style*="color: #16a34a"]{font-size:14px!important;opac
         <option value="cancelado">Cancelado</option>
       </select>
     </div>
-    <button class="btn btn-p" onclick="openNueva()">+ Nueva reservación</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-gh btn-sm" onclick="exportarReservas()" title="Descarga un JSON con todas las reservaciones para migrar a otro dispositivo">📤 Exportar JSON</button>
+      <button class="btn btn-gh btn-sm" onclick="document.getElementById('import-reservas-input').click()" title="Importa reservaciones desde un JSON previamente exportado">📥 Importar JSON</button>
+      <input type="file" id="import-reservas-input" accept=".json" style="display:none" onchange="importarReservas(this.files[0])">
+      <button class="btn btn-p" onclick="openNueva()">+ Nueva reservación</button>
+    </div>
   </div>
   <div class="card">
     <table><thead><tr><th>Código</th><th>Cliente</th><th>Teléfono</th><th>Fecha</th><th>Hora</th><th>Unidad</th><th>Servicios</th><th>Estado</th><th>Vendedor</th><th>Acciones</th></tr></thead>
@@ -1146,6 +1154,8 @@ let _syncTimers = {};
 let _lastSyncTimestamps = {}; // Track timestamps for conflict resolution
 let _syncInProgress = false;
 let _lsWarned = false;
+let _lastReservasTs = null;
+let _lastReservasCount = null;
 function safeSetLS(key, value) {
   try {
     localStorage.setItem(key, value);
@@ -1250,20 +1260,37 @@ function startAutoRefresh() {
         const local = _lastSyncTimestamps[row.id];
         if (!local || new Date(row.updated_at) > new Date(local)) needsRefresh = true;
       });
-      // También verificar reservaciones
-      const { data: resData } = await sb.from('reservaciones').select('codigo').limit(1);
+      // Verificar reservaciones: detectar si cambió el count o el created_at más reciente
+      const { data: resData } = await sb.from('reservaciones')
+        .select('codigo,created_at,updated_at')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      let resChanged = false;
+      if (resData && resData.length > 0) {
+        const lastTs = resData[0].updated_at || resData[0].created_at;
+        if (!_lastReservasTs || lastTs > _lastReservasTs) {
+          resChanged = true;
+          _lastReservasTs = lastTs;
+        }
+      }
+      // Contar reservaciones para detectar borrados o cambios no reflejados en timestamp
+      const { count: resCount } = await sb.from('reservaciones')
+        .select('*', { count: 'exact', head: true });
+      if (typeof resCount === 'number' && resCount !== _lastReservasCount) {
+        resChanged = true;
+        _lastReservasCount = resCount;
+      }
 
-      if (needsRefresh) {
-        console.log('🔄 Cambios detectados en otro dispositivo, sincronizando...');
+      if (needsRefresh || resChanged) {
+        console.log('🔄 Cambios detectados en otro dispositivo, sincronizando...', {appData:needsRefresh, reservas:resChanged});
         await syncAllFromSupabase(true);
-        // Recargar reservaciones
         const sbRes = await loadReservasFromSupabase();
         if (sbRes !== null && sbRes.length > 0) {
           reservas = sbRes;
           safeSetLS('mt2_reservas', JSON.stringify(reservas));
         }
-        // Re-render TODAS las vistas (la TV puede estar mostrando agenda, pizarra, etc.)
         renderAllSections();
+        updateSyncIndicator();
       }
     } catch(e) { /* silencioso */ }
   }, 30000);
@@ -2225,15 +2252,17 @@ function renderAgenda() {
              : '🚐 Camión pequeño');
 
         if (isTV) {
-          // Layout TV: orden carga → descarga → camión → hora → tel → nombre
+          // Layout TV minimalista: SOLO carga, descarga, nombre, costo, hora (si es manual)
+          const costoVal = parseFloat(r.costo) || 0;
           cell.innerHTML = `
             <div class="tv-cell" onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;">
               <div class="tv-carga">📦 ${cS}</div>
               <div class="tv-descarga">🏠 ${dS}</div>
-              <div class="tv-camion">${camLabel}</div>
-              ${hayHoraCustom ? `<div class="tv-hora">🕐 ${_displayHora}</div>` : ''}
-              <div class="tv-tel">📞 ${r.tel}</div>
               <div class="tv-nombre">${nombre}</div>
+              <div class="tv-bottom">
+                ${hayHoraCustom ? `<div class="tv-hora">🕐 ${_displayHora}</div>` : '<div></div>'}
+                ${costoVal > 0 ? `<div class="tv-costo">$${costoVal.toFixed(2)}</div>` : ''}
+              </div>
             </div>`;
         } else {
           const horaCustom = hayHoraCustom ? `<div style="font-size:9px;font-weight:800;background:rgba(0,0,0,.3);display:inline-block;padding:1px 6px;border-radius:3px;margin-bottom:2px;">🕐 ${_displayHora}</div>` : '';
@@ -2322,6 +2351,55 @@ function renderSinUbicar(f) {
 function agSinUbicarDragStart(e, codigo) {
   agDragSource = { fromSinUbicar: true, codigo };
   e.dataTransfer.effectAllowed = 'move';
+}
+
+// ==================== EXPORTAR / IMPORTAR RESERVACIONES ====================
+function exportarReservas() {
+  if (!reservas || reservas.length === 0) { alert('No hay reservaciones que exportar.'); return; }
+  const blob = new Blob([JSON.stringify(reservas, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const fecha = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `reservaciones_mudanzas_teclenas_${fecha}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  alert(`✅ Exportadas ${reservas.length} reservaciones.`);
+}
+
+async function importarReservas(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (!Array.isArray(data)) { alert('❌ El archivo no tiene el formato correcto (debe ser un array de reservaciones).'); return; }
+    const existentes = new Set(reservas.map(r => r.codigo));
+    const nuevas = data.filter(r => r && r.codigo && !existentes.has(r.codigo));
+    const actualizadas = data.filter(r => r && r.codigo && existentes.has(r.codigo));
+    if (!confirm(`Se detectaron ${data.length} reservaciones en el archivo.\n\n• ${nuevas.length} nuevas se agregarán\n• ${actualizadas.length} existentes se actualizarán\n\n¿Continuar?`)) return;
+    // Agregar nuevas
+    nuevas.forEach(r => reservas.unshift(r));
+    // Actualizar existentes (merge)
+    actualizadas.forEach(nr => {
+      const i = reservas.findIndex(r => r.codigo === nr.codigo);
+      if (i >= 0) reservas[i] = { ...reservas[i], ...nr };
+    });
+    safeSetLS('mt2_reservas', JSON.stringify(reservas));
+    // Subir a Supabase
+    if (supabaseOK) {
+      let ok = 0, err = 0;
+      for (const r of [...nuevas, ...actualizadas]) {
+        try { await saveReservaToSupabase(r); ok++; } catch(e) { err++; console.warn('Error subiendo', r.codigo, e); }
+      }
+      alert(`✅ Importación completada:\n• Nuevas: ${nuevas.length}\n• Actualizadas: ${actualizadas.length}\n• Sincronizadas con la nube: ${ok}\n• Errores de sync: ${err}`);
+    } else {
+      alert(`✅ Importadas localmente:\n• Nuevas: ${nuevas.length}\n• Actualizadas: ${actualizadas.length}\n\n⚠️ Supabase no está conectado — se sincronizarán cuando recupere conexión.`);
+    }
+    renderAllSections();
+  } catch (e) {
+    alert('❌ Error leyendo el archivo: ' + e.message);
+  }
 }
 
 // ==================== MODO TV (pantalla completa oscura) ====================
@@ -3361,19 +3439,19 @@ function imprimirPDF() {
       <table class="info-table">
         <tr>
           <td class="lbl">Nombre:</td>
-          <td class="val" colspan="3">${nombreCompleto}</td>
+          <td class="val-big" colspan="3">${nombreCompleto}</td>
         </tr>
         <tr>
           <td class="lbl">Teléfono/s:</td>
-          <td class="val" colspan="3">${tels}</td>
+          <td class="val-big" colspan="3">${tels}</td>
         </tr>
         <tr>
           <td class="lbl">Lugar de carga:</td>
-          <td class="val addr" colspan="3">${r.carga}</td>
+          <td class="addr" colspan="3">${r.carga}</td>
         </tr>
         <tr>
           <td class="lbl">Lugar de descarga:</td>
-          <td class="val addr" colspan="3">${r.descarga}</td>
+          <td class="addr" colspan="3">${r.descarga}</td>
         </tr>
         <tr>
           <td class="lbl">Camión:</td>
@@ -3406,10 +3484,9 @@ function imprimirPDF() {
   }
 
   const fullHtml = `<!DOCTYPE html><html><head><title>${r.codigo}</title>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body{font-family:'Barlow',sans-serif;background:#fff;}
+    html,body{font-family:Arial,Helvetica,sans-serif;background:#fff;color:#000;}
 
     @page { size: letter portrait; margin: 0; }
 
@@ -3433,6 +3510,7 @@ function imprimirPDF() {
       flex-direction: column;
       gap: 3mm;
       overflow: hidden;
+      text-transform: uppercase;
     }
 
     .bloque + .bloque {
@@ -3441,30 +3519,30 @@ function imprimirPDF() {
     }
 
     .top-bar{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #d42b2b;padding-bottom:2.5mm;margin-bottom:2mm;}
-    .empresa-nom{font-family:'Barlow Condensed',sans-serif;font-size:18pt;font-weight:900;color:#1a3a6b;line-height:1;}
-    .empresa-nom span{color:#d42b2b;}
-    .empresa-tel{font-size:7pt;color:#555;margin-top:1mm;}
+    .logo-text-print{font-family:Arial,Helvetica,sans-serif;font-size:20pt;font-weight:900;color:#1a3a6b;line-height:1;letter-spacing:.5px;}
+    .empresa-tel{font-size:9pt;color:#333;margin-top:1mm;font-weight:700;}
     .codigo-blk{text-align:right;}
-    .cod-lbl{font-size:6.5pt;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.05em;}
-    .cod-val{font-family:'Barlow Condensed',sans-serif;font-size:12pt;font-weight:800;color:#d42b2b;}
+    .cod-lbl{font-size:8pt;font-weight:700;color:#888;letter-spacing:.05em;}
+    .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:14pt;font-weight:900;color:#d42b2b;}
 
-    .seccion-titulo{font-family:'Barlow Condensed',sans-serif;font-size:8pt;font-weight:800;color:#1a3a6b;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.8mm;margin-bottom:1.5mm;}
+    .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:10pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.8mm;margin-bottom:1.5mm;}
     .conf-titulo{color:#d42b2b;border-color:#d42b2b;margin-top:2mm;}
 
-    .info-table{width:100%;border-collapse:collapse;font-size:7.5pt;}
-    .info-table tr td{padding:1mm 1.5mm;vertical-align:top;border:none;}
-    .info-table .lbl{font-weight:700;color:#444;white-space:nowrap;width:28mm;}
-    .info-table .val{color:#111;font-weight:600;}
-    .info-table .addr{font-weight:700;color:#1a3a6b;}
+    .info-table{width:100%;border-collapse:collapse;font-size:11pt;}
+    .info-table tr td{padding:1.3mm 1.8mm;vertical-align:top;border:none;}
+    .info-table .lbl{font-weight:700;color:#444;white-space:nowrap;width:32mm;font-size:9pt;}
+    .info-table .val{color:#000;font-weight:700;font-size:11pt;}
+    .info-table .val-big{color:#000;font-weight:900;font-size:13pt;line-height:1.25;}
+    .info-table .addr{font-weight:900;color:#1a3a6b;font-size:13pt;line-height:1.25;}
 
-    .obs-box{background:#f4f6fa;border-left:3px solid #1a3a6b;padding:1.5mm 2.5mm;font-size:7pt;line-height:1.4;border-radius:0 3px 3px 0;}
-    .obs-lbl{font-weight:700;color:#444;text-transform:uppercase;font-size:6.5pt;letter-spacing:.04em;}
+    .obs-box{background:#f4f6fa;border-left:3px solid #1a3a6b;padding:1.5mm 2.5mm;font-size:9pt;line-height:1.4;border-radius:0 3px 3px 0;}
+    .obs-lbl{font-weight:700;color:#444;font-size:8pt;letter-spacing:.04em;}
 
-    .conf-body{font-size:7pt;line-height:1.4;}
-    .conf-dir{font-weight:700;color:#1a3a6b;font-size:7pt;}
-    .conf-texto{margin:1.5mm 0;color:#333;}
+    .conf-body{font-size:9pt;line-height:1.4;}
+    .conf-dir{font-weight:900;color:#1a3a6b;font-size:12pt;margin-bottom:1mm;}
+    .conf-texto{margin:1.5mm 0;color:#333;font-size:8pt;text-transform:none;}
     .firma-row{display:flex;justify-content:space-between;margin-top:2mm;}
-    .firma-box{font-size:7pt;color:#555;}
+    .firma-box{font-size:9pt;color:#333;font-weight:700;}
 
     @media print {
       body{background:#fff;}
@@ -3478,26 +3556,37 @@ function imprimirPDF() {
   </body></html>`;
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
+    if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
+    // FIX PDF en blanco: construir un contenedor con el documento completo (incluyendo estilos inline)
+    // y NO usar innerHTML con extracción regex. Dejamos que el navegador renderice el DOM real.
     const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
-    const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
+    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-1;';
+    // Extraer sólo lo que va adentro del <body> y el <style>
     const styleMatch = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
-    container.innerHTML = (styleMatch ? '<style>'+styleMatch[1]+'</style>' : '') + (bodyMatch ? bodyMatch[1] : '');
+    const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
+    // IMPORTANTE: inyectamos el <style> DENTRO del contenedor pero también aplicamos los estilos
+    // directamente vía un elemento <style> separado dentro del div (funciona con html2canvas)
+    const styleEl = document.createElement('style');
+    styleEl.textContent = styleMatch ? styleMatch[1] : '';
+    container.appendChild(styleEl);
+    const bodyDiv = document.createElement('div');
+    bodyDiv.innerHTML = bodyMatch ? bodyMatch[1] : '';
+    container.appendChild(bodyDiv);
     document.body.appendChild(container);
-    if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); container.remove(); return; }
+    // Esperar a que el DOM se asiente y las fonts default (Arial) estén disponibles
     setTimeout(() => {
       const opt = {
         margin: 0,
         filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true },
         jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-        pagebreak: { mode: ['css','legacy'], before: '.pagina' }
+        pagebreak: { mode: ['css','legacy'] }
       };
-      html2pdf().set(opt).from(container).save().then(() => {
+      html2pdf().set(opt).from(bodyDiv).save().then(() => {
         container.remove();
-      }).catch((e) => { console.error(e); container.remove(); alert('Error generando PDF: '+e.message); });
-    }, 300);
+      }).catch((e) => { console.error('PDF error:', e); container.remove(); alert('Error generando PDF: ' + (e.message || e)); });
+    }, 500);
     return;
   }
   const w = window.open('','_blank');
