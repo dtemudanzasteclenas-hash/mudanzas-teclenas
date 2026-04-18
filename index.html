@@ -432,6 +432,7 @@ body.tv-mode #pd-pizarra [style*="color: #16a34a"]{font-size:10px!important;opac
       <input type="date" id="ag-fecha" oninput="renderAgenda()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
       <button class="btn btn-gh btn-sm" onclick="agHoy()">Hoy</button>
       <button class="btn btn-p btn-sm" onclick="forceSync()" style="background:#0ea5e9;" title="Descarga los datos más recientes desde la nube">🔄 Actualizar</button>
+      <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#dc2626;" title="Limpia el caché local y recarga todo desde la nube (usalo si ves reservaciones incompletas)">🧹 Limpiar caché</button>
       <button class="btn btn-p btn-sm" onclick="imprimirAgendaDia()" style="background:#16a34a;">📄 Descargar PDF del día</button>
       <button class="btn btn-p btn-sm" onclick="toggleTVMode('agenda')" style="background:#0f172a;">🖥️ Modo TV</button>
     </div>
@@ -1401,10 +1402,35 @@ async function forceSync() {
     if (sbRes !== null && sbRes.length > 0) {
       reservas = sbRes;
       safeSetLS('mt2_reservas', JSON.stringify(reservas));
+      console.log('🔄 forceSync: ' + reservas.length + ' reservaciones');
     }
     renderAllSections();
   } catch(e) { console.warn('Force sync error:', e); }
   finally { if (btn) { btn.disabled = false; btn.textContent = '🔄'; } }
+}
+
+// Hard reset: limpia localStorage de datos volátiles y re-baja todo de Supabase
+async function hardReloadDatos() {
+  if (!confirm('⚠️ Se borrará el caché local y se volverá a descargar TODO desde la nube.\n\nEsto NO borra datos — solo fuerza un refresco. ¿Continuar?')) return;
+  try {
+    ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc'].forEach(k => localStorage.removeItem(k));
+    reservas = [];
+    agGrid = {};
+    pdData = {};
+    concData = {};
+    if (!supabaseOK) {
+      const ok = await checkSupabase();
+      if (!ok) { alert('❌ No hay conexión con la nube. Revisa tu internet e intenta de nuevo.'); return; }
+    }
+    const sbRes = await loadReservasFromSupabase();
+    if (sbRes !== null) { reservas = sbRes; safeSetLS('mt2_reservas', JSON.stringify(reservas)); }
+    await syncAllFromSupabase(false);
+    renderAllSections();
+    alert(`✅ Datos recargados: ${reservas.length} reservaciones, ${Object.keys(agGrid).length} fechas en agenda.`);
+  } catch(e) {
+    alert('❌ Error: ' + (e.message || e));
+    console.error(e);
+  }
 }
 
 // Estado de conexión
@@ -1425,13 +1451,15 @@ async function checkSupabase() {
 
 // ==================== SUPABASE: RESERVACIONES ====================
 async function loadReservasFromSupabase() {
-  if (!sb || !supabaseOK) return null;
+  if (!sb || !supabaseOK) { console.warn('⚠️ loadReservasFromSupabase: sb no inicializado o offline'); return null; }
   try {
     const { data, error } = await sb
       .from('reservaciones')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(5000);
     if (error) throw error;
+    console.log('📡 loadReservasFromSupabase: ' + (data?.length || 0) + ' filas desde Supabase');
     // Convertir formato Supabase → formato local
     return (data || []).map(r => ({
       codigo: r.codigo,
@@ -1745,6 +1773,19 @@ function cerrarSesion() {
 
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
+// Version de la app — si cambia, limpia cache local de datos volatiles
+const APP_VERSION = '2026-04-17-v3';
+(function checkAppVersion() {
+  try {
+    const stored = localStorage.getItem('mt_app_version');
+    if (stored !== APP_VERSION) {
+      console.log('🔄 Versión nueva detectada. Limpiando caché local de datos...');
+      // Limpiar solo datos de sync (no PIN, no comentarios)
+      ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc'].forEach(k => localStorage.removeItem(k));
+      localStorage.setItem('mt_app_version', APP_VERSION);
+    }
+  } catch(e) {}
+})();
 let reservas; try { reservas = JSON.parse(localStorage.getItem('mt2_reservas') || '[]'); } catch(e) { reservas = []; }
 let verIdx = null;
 let srvActivos = new Set(['transporte']);
