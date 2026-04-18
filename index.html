@@ -278,7 +278,20 @@ body.tv-mode .tv-cell{
   height:100%;padding:14px 16px;display:flex;flex-direction:column;
   gap:6px;color:#fff;box-sizing:border-box;justify-content:space-between;
   font-family:'Barlow Condensed','Barlow',sans-serif;text-transform:uppercase;
+  position:relative;
 }
+/* Badge G/M/P/Específico arriba a la derecha */
+body.tv-mode .tv-badge{
+  position:absolute;top:8px;right:10px;
+  min-width:32px;height:32px;padding:0 8px;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.18);color:#fff;
+  border:2px solid rgba(255,255,255,.55);
+  border-radius:8px;
+  font-family:'Barlow Condensed','Barlow',sans-serif;
+  font-weight:900;font-size:22px;letter-spacing:1px;line-height:1;
+}
+body.tv-mode .tv-badge-esp{background:rgba(255,255,255,.25);}
 body.tv-mode .tv-carga,
 body.tv-mode .tv-descarga{font-size:19px;font-weight:800;line-height:1.2;letter-spacing:.3px;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
@@ -2265,12 +2278,20 @@ function renderAgenda() {
 
         if (isTV) {
           // Layout TV: carga (2 líneas), descarga (2 líneas), nombre, hora/costo
-          // No usamos truncation JS — CSS clamp permite 2 líneas
           const cFullTV = r.carga || '—';
           const dFullTV = r.descarga || '—';
           const costoVal = parseFloat(r.costo) || 0;
+          // Badge G/M/P o específico — se ubica en esquina superior derecha
+          let badgeLetra, badgeTitle;
+          if (r.camionEspecifico) {
+            badgeLetra = '🔑';
+            badgeTitle = NOMBRES_CAMION[r.camionEspecifico] || r.camionEspecifico;
+          } else if (r.unidad === 'grande') { badgeLetra = 'G'; badgeTitle = 'Grande'; }
+          else if (r.unidad === 'mediano') { badgeLetra = 'M'; badgeTitle = 'Mediano'; }
+          else { badgeLetra = 'P'; badgeTitle = 'Pequeño'; }
           cell.innerHTML = `
             <div class="tv-cell" onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;">
+              <div class="tv-badge tv-badge-${r.camionEspecifico ? 'esp' : r.unidad}" title="${badgeTitle}">${badgeLetra}</div>
               <div class="tv-carga">📦 ${cFullTV}</div>
               <div class="tv-descarga">🏠 ${dFullTV}</div>
               <div class="tv-nombre">${nombre}</div>
