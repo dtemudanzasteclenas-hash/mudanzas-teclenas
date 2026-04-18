@@ -1269,36 +1269,47 @@ async function syncAllFromSupabase(silent) {
   if (!sb || _syncInProgress) return;
   _syncInProgress = true;
   try {
-    // Cargar pdData — Supabase es fuente principal, merge completo
+    // hardReplace=true: reemplazo TOTAL de localStorage por lo que venga de Supabase
+    // (usado al abrir la página). Si false, merge por fecha (para no perder cambios offline).
+    const hardReplace = arguments[1] === true;
+
     const pd = await loadFromSupabase('mt_pd3');
     if (pd) {
-      // Supabase gana: sobrescribir datos locales con los de Supabase
-      // pero preservar cambios locales de fechas que no están en Supabase
-      const local = pdData || {};
-      Object.keys(pd).forEach(f => { local[f] = pd[f]; });
-      pdData = local;
+      if (hardReplace) {
+        pdData = pd;
+      } else {
+        const local = pdData || {};
+        Object.keys(pd).forEach(f => { local[f] = pd[f]; });
+        pdData = local;
+      }
       safeSetLS('mt_pd3', JSON.stringify(pdData));
     }
 
-    // Cargar agGrid
     const ag = await loadFromSupabase('mt_aggrid');
     if (ag) {
-      const local = agGrid || {};
-      Object.keys(ag).forEach(f => { local[f] = ag[f]; });
-      agGrid = local;
+      if (hardReplace) {
+        agGrid = ag;
+      } else {
+        const local = agGrid || {};
+        Object.keys(ag).forEach(f => { local[f] = ag[f]; });
+        agGrid = local;
+      }
       safeSetLS('mt_aggrid', JSON.stringify(agGrid));
     }
 
-    // Cargar conciliación
     const conc = await loadFromSupabase('mt_conc');
     if (conc) {
-      const local = concData || {};
-      Object.keys(conc).forEach(f => { local[f] = conc[f]; });
-      concData = local;
+      if (hardReplace) {
+        concData = conc;
+      } else {
+        const local = concData || {};
+        Object.keys(conc).forEach(f => { local[f] = conc[f]; });
+        concData = local;
+      }
       safeSetLS('mt_conc', JSON.stringify(concData));
     }
 
-    if (!silent) console.log('✅ Datos sincronizados desde Supabase');
+    if (!silent) console.log('✅ Datos sincronizados desde Supabase' + (hardReplace ? ' (hard replace)' : ''));
     updateSyncIndicator();
     return true;
   } catch(e) { console.warn('syncAllFromSupabase error:', e.message); return false; }
@@ -1933,7 +1944,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-17-v7';
+const APP_VERSION = '2026-04-17-v8';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -1957,23 +1968,31 @@ async function initData() {
   _initDataRan = true;
   const connected = await checkSupabase();
   if (connected) {
+    // AUTO-LIMPIEZA AL ABRIR (equivalente a clic en "🧹 Limpiar caché"):
+    // descartamos el estado local y tomamos Supabase como única fuente de verdad.
+    // Así siempre ves la info más reciente sin tener que limpiar caché manualmente.
+    console.log('🔄 Iniciando sincronización completa con la nube...');
+    const localReservasAntes = reservas.length;
+
     const sbReservas = await loadReservasFromSupabase();
     if (sbReservas !== null) {
       if (sbReservas.length > 0) {
+        // Reemplazo TOTAL de reservas (no merge)
         reservas = sbReservas;
         safeSetLS('mt2_reservas', JSON.stringify(reservas));
-        console.log('📦 ' + reservas.length + ' reservaciones cargadas de Supabase');
-      } else if (reservas.length > 0) {
-        // Hay datos locales pero no en Supabase — subir los locales
-        console.log('☁️ Subiendo ' + reservas.length + ' reservaciones locales a Supabase...');
+        console.log('📦 ' + reservas.length + ' reservaciones cargadas de Supabase (antes tenías ' + localReservasAntes + ')');
+      } else if (localReservasAntes > 0) {
+        // Hay datos locales pero Supabase está vacío — subir los locales (primera vez)
+        console.log('☁️ Subiendo ' + localReservasAntes + ' reservaciones locales a Supabase...');
         await saveAllReservasToSupabase();
       }
     }
-    // CRÍTICO: sincronizar agGrid/pdData/concData ANTES del primer render completo
-    // para que la agenda muestre las reservaciones ya ubicadas desde otro dispositivo
-    try { await syncAllFromSupabase(); console.log('☁️ app_data sincronizado (agGrid/pdData/concData)'); } catch(e) { console.warn('Error sync admin:', e); }
+    // HARD REPLACE: reemplazar agGrid/pdData/concData completos con Supabase (true = hardReplace)
+    try { await syncAllFromSupabase(false, true); console.log('☁️ app_data hard-replace desde Supabase'); } catch(e) { console.warn('Error sync admin:', e); }
     // Re-render TODAS las vistas con los datos frescos
     try { if (typeof renderAllSections === 'function') renderAllSections(); } catch(e) { console.warn('render err:', e); }
+    // Notificar al usuario con toast
+    try { if (typeof showSaveToast === 'function') showSaveToast('☁️ Datos cargados desde la nube · ' + reservas.length + ' reservaciones', 'ok'); } catch(e) {}
     // Comentarios en background (no bloqueantes)
     setTimeout(async () => {
       try {
