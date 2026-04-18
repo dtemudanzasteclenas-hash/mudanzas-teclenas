@@ -355,7 +355,8 @@ body.tv-mode .tv-pz-carga,
 body.tv-mode .tv-pz-descarga{
   font-size:12px;font-weight:700;line-height:1.2;color:#fff;
   text-transform:uppercase;letter-spacing:.2px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;word-break:break-word;
 }
 body.tv-mode .tv-pz-meta{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:1px;}
 body.tv-mode .tv-pz-nombre{font-size:11px;font-weight:700;color:#e2e8f0;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
@@ -1932,7 +1933,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-17-v6';
+const APP_VERSION = '2026-04-17-v7';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
