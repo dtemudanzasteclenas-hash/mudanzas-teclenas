@@ -1944,7 +1944,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-17-v8';
+const APP_VERSION = '2026-04-17-v9';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -4393,26 +4393,24 @@ function buildColumna2(col, idx, f) {
     return `
     <div data-pd-slot="${hi}" style="border-top:1.5px solid #e8eef9;">
       <button onclick="toggleSlot('${sid}')"
-        style="width:100%;display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;background:none;border:none;cursor:pointer;text-align:left;">
-        <div style="flex:1;">
-          <span style="font-size:12px;font-weight:900;color:${asignadaR?'#16a34a':color};text-transform:uppercase;letter-spacing:.07em;">${asignadaR && !HORARIOS.includes(asignadaR.hora) && mapHoraToRow(asignadaR.hora)===h ? asignadaR.hora : h}</span>
+        style="width:100%;display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;background:none;border:none;cursor:pointer;text-align:left;gap:8px;">
+        <div style="flex:1 1 0;min-width:0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;font-weight:900;color:${asignadaR?'#16a34a':color};text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">${asignadaR && !HORARIOS.includes(asignadaR.hora) && mapHoraToRow(asignadaR.hora)===h ? asignadaR.hora : h}</span>
+            ${asignadaR ? `<span style="display:inline-flex;align-items:center;gap:5px;flex-shrink:0;">
+              <span style="background:#16a34a;color:#fff;font-size:9px;font-weight:800;border-radius:20px;padding:1px 7px;">✓</span>
+              <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:900;color:#16a34a;">$${asignadaR.costo}</span>
+            </span>` : (cnt>0 ? `<span style="background:${color};color:#fff;font-size:9px;font-weight:800;border-radius:20px;padding:1px 7px;flex-shrink:0;">${cnt}</span>` : '')}
+          </div>
           ${asignadaR ? `
-          <div style="margin-top:4px;">
-            <div style="font-size:12px;font-weight:700;color:#1a2236;">${asignadaR.nombre} ${asignadaR.apellido}</div>
-            <div style="font-size:11px;color:#6b7280;">📦 ${asignadaR.carga.substring(0,35)}${asignadaR.carga.length>35?'…':''}</div>
-            <div style="font-size:11px;color:#6b7280;">🏠 ${asignadaR.descarga.substring(0,35)}${asignadaR.descarga.length>35?'…':''}</div>
+          <div style="margin-top:5px;">
+            <div style="font-size:12px;font-weight:700;color:#1a2236;line-height:1.25;word-break:break-word;">${asignadaR.nombre} ${asignadaR.apellido||''}</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:900;color:#1e4fa0;letter-spacing:.03em;line-height:1.2;margin-top:2px;word-break:break-word;">📞 ${asignadaR.tel}</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:3px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;">📦 ${asignadaR.carga}</div>
+            <div style="font-size:11px;color:#6b7280;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;">🏠 ${asignadaR.descarga}</div>
           </div>` : ''}
         </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;padding-left:8px;margin-top:2px;">
-          ${asignadaR
-            ? `<div style="display:flex;align-items:center;gap:6px;">
-                 <span style="background:#16a34a;color:#fff;font-size:9px;font-weight:800;border-radius:20px;padding:1px 7px;">✓</span>
-                 <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:900;color:#16a34a;">$${asignadaR.costo}</span>
-               </div>
-               <div style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:900;color:#1e4fa0;letter-spacing:.03em;">📞 ${asignadaR.tel}</div>`
-            : cnt>0 ? `<span style="background:${color};color:#fff;font-size:9px;font-weight:800;border-radius:20px;padding:1px 7px;">${cnt}</span>` : ''}
-          <span id="${sid}-arrow" style="font-size:12px;color:${asignadaR?'#16a34a':color};transition:transform .2s;margin-top:2px;">▼</span>
-        </div>
+        <span id="${sid}-arrow" style="font-size:12px;color:${asignadaR?'#16a34a':color};transition:transform .2s;margin-top:2px;flex-shrink:0;">▼</span>
       </button>
       <div id="${sid}" style="display:none;padding-bottom:8px;">
         ${asignadaHtml}
