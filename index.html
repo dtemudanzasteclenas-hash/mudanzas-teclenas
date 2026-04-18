@@ -1944,7 +1944,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-17-v9';
+const APP_VERSION = '2026-04-18-v10';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3760,10 +3760,10 @@ function imprimirPDF() {
           <td class="lbl">Fecha:</td>
           <td class="val">${fmtFecha(r.fecha)}</td>
         </tr>
-        ${r.vendedor ? `<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3" style="color:#1e4fa0;">${r.vendedor}</td></tr>` : ''}
+        ${r.vendedor ? `<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3">${r.vendedor}</td></tr>` : ''}
       </table>
 
-      ${obsText ? `<div class="obs-box"><span class="obs-lbl">Observaciones:</span><br>${obsText.replace(/\n/g,'<br>')}</div>` : ''}
+      ${obsText ? `<div class="obs-box"><span class="obs-lbl">Observaciones:</span><div class="obs-texto">${obsText.replace(/\n/g,'<br>')}</div></div>` : ''}
 
       <div class="seccion-titulo conf-titulo">UNIDAD REVISADA EN FURGÓN Y CABINA</div>
       <div class="conf-body">
@@ -3788,53 +3788,62 @@ function imprimirPDF() {
       min-height: 279mm;
       display: flex;
       flex-direction: column;
-      padding: 8mm 10mm;
+      padding: 4mm 5mm; /* margen reducido para aprovechar espacio */
       gap: 0;
     }
 
     .bloque {
       width: 100%;
-      height: 120mm;
+      height: 134mm; /* aumentado: 2 bloques × 134 + 3mm gap = 271mm cabe en 279 */
       border: 1.5px solid #1a3a6b;
       border-radius: 6px;
-      padding: 5mm 6mm 4mm;
+      padding: 4mm 5mm 3mm;
       page-break-inside: avoid;
       display: flex;
       flex-direction: column;
-      gap: 3mm;
+      gap: 2.5mm;
       overflow: hidden;
       text-transform: uppercase;
     }
 
     .bloque + .bloque {
-      margin-top: 4mm;
+      margin-top: 3mm;
       border-top: 2px dashed #1a3a6b;
     }
 
-    .top-bar{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #d42b2b;padding-bottom:2mm;margin-bottom:2mm;}
-    .logo-text-print{font-family:Arial,Helvetica,sans-serif;font-size:16pt;font-weight:900;color:#1a3a6b;line-height:1;letter-spacing:.5px;}
-    .empresa-tel{font-size:8pt;color:#333;margin-top:0.8mm;font-weight:700;}
+    .top-bar{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #d42b2b;padding-bottom:1.8mm;margin-bottom:1.8mm;}
+    .logo-text-print{font-family:Arial,Helvetica,sans-serif;font-size:17pt;font-weight:900;color:#1a3a6b;line-height:1;letter-spacing:.5px;}
+    .empresa-tel{font-size:9pt;color:#333;margin-top:0.8mm;font-weight:700;}
     .codigo-blk{text-align:right;}
-    .cod-lbl{font-size:7pt;font-weight:700;color:#888;letter-spacing:.05em;}
-    .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:12pt;font-weight:900;color:#d42b2b;}
+    .cod-lbl{font-size:8pt;font-weight:700;color:#888;letter-spacing:.05em;}
+    .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:13pt;font-weight:900;color:#d42b2b;}
 
-    .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:9pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.6mm;margin-bottom:1.2mm;}
+    .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:10pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.6mm;margin-bottom:1.5mm;}
     .conf-titulo{color:#d42b2b;border-color:#d42b2b;margin-top:1.5mm;}
 
+    /* Todos los valores unificados: 13pt, bold 900, azul #1a3a6b, mayúsculas, wrap permitido */
     .info-table{width:100%;border-collapse:collapse;}
-    .info-table tr td{padding:1mm 1.5mm;vertical-align:top;border:none;}
-    .info-table .lbl{font-weight:700;color:#444;white-space:nowrap;width:32mm;font-size:8pt;}
-    .info-table .val{color:#000;font-weight:700;font-size:11pt;}
-    .info-table .val-big{color:#000;font-weight:900;font-size:12pt;line-height:1.25;}
-    .info-table .addr{font-weight:900;color:#1a3a6b;font-size:12pt;line-height:1.25;}
+    .info-table tr td{padding:1.1mm 1.5mm;vertical-align:top;border:none;}
+    .info-table .lbl{font-weight:700;color:#555;white-space:nowrap;width:32mm;font-size:9pt;letter-spacing:.03em;}
+    .info-table .val,
+    .info-table .val-big,
+    .info-table .addr{
+      color:#1a3a6b;
+      font-weight:900;
+      font-size:13pt;
+      line-height:1.3;
+      word-break:break-word;
+      white-space:normal;
+    }
 
-    .obs-box{background:#f4f6fa;border-left:3px solid #1a3a6b;padding:1.2mm 2mm;font-size:8.5pt;line-height:1.35;border-radius:0 3px 3px 0;}
-    .obs-lbl{font-weight:700;color:#444;font-size:7.5pt;letter-spacing:.04em;}
+    .obs-box{background:#f4f6fa;border-left:3px solid #1a3a6b;padding:1.8mm 2.5mm;line-height:1.3;border-radius:0 3px 3px 0;margin-top:1.5mm;}
+    .obs-lbl{font-weight:900;color:#1a3a6b;font-size:9pt;letter-spacing:.04em;}
+    .obs-texto{font-size:11pt;font-weight:900;color:#1a3a6b;line-height:1.3;margin-top:1mm;word-break:break-word;}
 
-    .conf-body{font-size:8.5pt;line-height:1.35;}
-    .conf-texto{margin:1.5mm 0;color:#333;font-size:8pt;text-transform:none;line-height:1.45;}
-    .firma-row{display:flex;justify-content:space-between;margin-top:3mm;gap:6mm;}
-    .firma-box{font-size:9pt;color:#333;font-weight:700;flex:1;}
+    .conf-body{font-size:11pt;line-height:1.3;}
+    .conf-texto{margin:1.5mm 0;color:#1a2236;font-size:10pt;font-weight:700;text-transform:none;line-height:1.45;}
+    .firma-row{display:flex;justify-content:space-between;margin-top:3mm;gap:6mm;align-items:flex-end;}
+    .firma-box{font-size:11pt;color:#1a2236;font-weight:900;flex:1;letter-spacing:.3px;}
 
     @media print {
       body{background:#fff;}
