@@ -1774,7 +1774,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-17-v3';
+const APP_VERSION = '2026-04-17-v4';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2003,8 +2003,11 @@ function agHoy() { document.getElementById('ag-fecha').valueAsDate = new Date();
 function imprimirAgendaDia() {
   const f = document.getElementById('ag-fecha')?.value || new Date().toISOString().slice(0,10);
   const resDia = reservas.filter(r => r.fecha === f);
-  
+
   if (resDia.length === 0) { alert('No hay servicios agendados para esta fecha.'); return; }
+
+  // Helper para escapar HTML de cualquier campo con input del cliente (evita XSS en el PDF)
+  const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
   // Deduplicate multi-hora
   const vistos = new Set();
@@ -2039,24 +2042,22 @@ function imprimirAgendaDia() {
 
     return '<div class="bloque">' +
       '<div class="top-bar"><div class="empresa-blk"><span class="logo-text-print">MUDANZAS TECLEÑAS</span><div class="empresa-tel">☎ 2229-8822 | 📱 6198-4772</div></div>' +
-      '<div class="codigo-blk"><div class="cod-lbl">CÓDIGO</div><div class="cod-val">' + r.codigo + '</div></div></div>' +
+      '<div class="codigo-blk"><div class="cod-lbl">CÓDIGO</div><div class="cod-val">' + esc(r.codigo) + '</div></div></div>' +
       '<div class="seccion-titulo">INFORMACIÓN</div>' +
       '<table class="info-table">' +
-      '<tr><td class="lbl">Nombre:</td><td class="val" colspan="3">' + nombreCompleto + '</td></tr>' +
-      '<tr><td class="lbl">Teléfono/s:</td><td class="val" colspan="3">' + r.tel + '</td></tr>' +
-      '<tr><td class="lbl">Lugar de carga:</td><td class="val addr" colspan="3">' + r.carga + '</td></tr>' +
-      '<tr><td class="lbl">Lugar de descarga:</td><td class="val addr" colspan="3">' + r.descarga + '</td></tr>' +
-      '<tr><td class="lbl">Camión:</td><td class="val">' + unidadFull + '</td><td class="lbl">Precio:</td><td class="val">$' + r.costo + '</td></tr>' +
-      '<tr><td class="lbl">Hora:</td><td class="val">' + horas + '</td><td class="lbl">Fecha:</td><td class="val">' + fmtFecha(r.fecha) + '</td></tr>' +
-      (r.vendedor ? '<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3" style="color:#1e4fa0;">' + r.vendedor + '</td></tr>' : '') +
+      '<tr><td class="lbl">Nombre:</td><td class="val" colspan="3">' + esc(nombreCompleto) + '</td></tr>' +
+      '<tr><td class="lbl">Teléfono/s:</td><td class="val" colspan="3">' + esc(r.tel) + '</td></tr>' +
+      '<tr><td class="lbl">Lugar de carga:</td><td class="val addr" colspan="3">' + esc(r.carga) + '</td></tr>' +
+      '<tr><td class="lbl">Lugar de descarga:</td><td class="val addr" colspan="3">' + esc(r.descarga) + '</td></tr>' +
+      '<tr><td class="lbl">Camión:</td><td class="val">' + esc(unidadFull) + '</td><td class="lbl">Precio:</td><td class="val">$' + esc(r.costo) + '</td></tr>' +
+      '<tr><td class="lbl">Hora:</td><td class="val">' + esc(horas) + '</td><td class="lbl">Fecha:</td><td class="val">' + esc(fmtFecha(r.fecha)) + '</td></tr>' +
+      (r.vendedor ? '<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3" style="color:#1e4fa0;">' + esc(r.vendedor) + '</td></tr>' : '') +
       '</table>' +
-      (obsText ? '<div class="obs-box"><span class="obs-lbl">Observaciones:</span><br>' + obsText + '</div>' : '') +
-      '<div class="seccion-titulo conf-titulo">CONFIRMACIÓN DE SERVICIO</div>' +
+      (obsText ? '<div class="obs-box"><span class="obs-lbl">Observaciones:</span><br>' + esc(obsText) + '</div>' : '') +
+      '<div class="seccion-titulo conf-titulo">UNIDAD REVISADA EN FURGÓN Y CABINA</div>' +
       '<div class="conf-body">' +
-      '<div class="conf-dir"><strong>Carga:</strong> ' + r.carga + '</div>' +
-      '<div class="conf-dir"><strong>Descarga:</strong> ' + r.descarga + '</div>' +
-      '<div class="conf-texto">Yo: __________________________ como encargado/a hago constar que he revisado la unidad delegada a mi servicio en su furgón y cabina al finalizar el transporte.</div>' +
-      '<div class="firma-row"><div class="firma-box">Firma: ___________________________</div><div class="firma-box">Costo: <strong>$' + r.costo + '</strong> | <strong>' + r.personal + ' hombres</strong></div></div>' +
+      '<div class="conf-texto">Yo: _______________________________________ como cliente hago constar que he revisado la unidad entregada al finalizar el servicio y está en las mismas condiciones.</div>' +
+      '<div class="firma-row"><div class="firma-box">Firma del cliente: ___________________________</div><div class="firma-box">Costo: <strong>$' + esc(r.costo) + '</strong> | <strong>' + esc(r.personal) + ' hombres</strong></div></div>' +
       '</div></div>';
   }
 
@@ -2272,13 +2273,47 @@ function renderAgenda() {
         const srcKey = agCellKey(agDragSource.col, agDragSource.row);
         const srcCodigo = agGrid[f]?.cells?.[srcKey];
         if (!srcCodigo) return;
+
+        // MULTI-HORARIO: detectar todas las filas (horarios) que contienen este código en la columna origen
+        const viejaCol = agDragSource.col;
+        const nuevaCol = col;
+        const srcRowsMismoCodigo = AG_ROWS.filter(r2 => agGrid[f]?.cells?.[agCellKey(viejaCol, r2)] === srcCodigo);
+        const esMultiHora = srcRowsMismoCodigo.length > 1;
+
         if (agDragSource.row !== row) {
+          // Cambio de fila (horario) — solo permitir si es single-hora
+          if (esMultiHora) {
+            alert('⚠️ Esta reservación ocupa varios horarios. Arrastrala entre columnas manteniendo el horario. Para cambiar el horario editá la reservación.');
+            agDragSource = null; return;
+          }
           showHoraModal(f, srcKey, dstKey, srcCodigo, row);
         } else {
-          const dstCodigo = agGrid[f]?.cells?.[dstKey];
-          agGrid[f].cells[dstKey] = srcCodigo;
-          if (dstCodigo) agGrid[f].cells[srcKey] = dstCodigo;
-          else delete agGrid[f].cells[srcKey];
+          // Cambio de columna (misma fila)
+          if (viejaCol === nuevaCol) { agDragSource = null; return; }
+
+          if (esMultiHora) {
+            // Verificar que la columna destino esté libre en TODAS las filas que el código ocupa
+            const conflictos = srcRowsMismoCodigo.filter(r2 => {
+              const k = agCellKey(nuevaCol, r2);
+              const ocupante = agGrid[f].cells[k];
+              return ocupante && ocupante !== srcCodigo;
+            });
+            if (conflictos.length > 0) {
+              alert('⚠️ La columna destino está ocupada en ' + conflictos.join(', ') + '. Movelo a una columna libre para los ' + srcRowsMismoCodigo.length + ' horarios.');
+              agDragSource = null; return;
+            }
+            // Mover todas las celdas del código de viejaCol a nuevaCol
+            srcRowsMismoCodigo.forEach(r2 => {
+              delete agGrid[f].cells[agCellKey(viejaCol, r2)];
+              agGrid[f].cells[agCellKey(nuevaCol, r2)] = srcCodigo;
+            });
+          } else {
+            // Single-hora: swap si destino ocupado, o mover
+            const dstCodigo = agGrid[f]?.cells?.[dstKey];
+            agGrid[f].cells[dstKey] = srcCodigo;
+            if (dstCodigo && dstCodigo !== srcCodigo) agGrid[f].cells[srcKey] = dstCodigo;
+            else delete agGrid[f].cells[srcKey];
+          }
           saveAgGrid();
           renderAgenda();
         }
@@ -4955,6 +4990,13 @@ function delMovimiento(i) {
 
 // ==================== COBRO DE PAGOS PENDIENTES ====================
 function cobrarPendiente(codigo, fechaOriginal) {
+  // Verificar que ni el día original ni el día de cobro estén cerrados
+  const dayOrigCheck = getDayData(fechaOriginal);
+  if (dayOrigCheck?.cuentas?.diaCerrado) {
+    alert('⚠️ El día ' + fechaOriginal + ' está cerrado. Desbloqueá ese día para marcar el cobro o registrá el pago como un "otro ingreso" en el día actual.');
+    return;
+  }
+
   const metodo = prompt('¿Cómo se recibió el pago?\n\n1 = EFECTIVO (→ Caja Chica)\n2 = CUSCA (→ Cuscatlán)\n3 = LINK (→ pendiente → Cuscatlán mañana)', '1');
   if (!metodo) return;
   const metodoMap = {'1':'EFECTIVO','2':'CUSCA','3':'LINK'};
@@ -4963,6 +5005,13 @@ function cobrarPendiente(codigo, fechaOriginal) {
   const hoy = getPDFecha();
   const fechaCobro = prompt('¿Fecha de cobro? (YYYY-MM-DD)', hoy);
   if (!fechaCobro || !/^\d{4}-\d{2}-\d{2}$/.test(fechaCobro)) { alert('Fecha inválida.'); return; }
+
+  // Verificar que el día de cobro no esté cerrado
+  const dayCobroCheck = getDayData(fechaCobro);
+  if (dayCobroCheck?.cuentas?.diaCerrado) {
+    alert('⚠️ El día de cobro ' + fechaCobro + ' está cerrado. Elegí otra fecha o desbloqueá ese día.');
+    return;
+  }
 
   // Buscar el slot original y marcarlo como cobrado
   const dayOrig = getDayData(fechaOriginal);
