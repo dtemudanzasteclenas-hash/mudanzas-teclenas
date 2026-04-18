@@ -1240,13 +1240,17 @@ function syncToSupabase(key, data) {
     try {
       const { error } = await sb.from('app_data').upsert({ id: key, data: data, updated_at: now });
       if (error) {
-        if (error.code === '42P01') console.warn('Tabla app_data no existe. Crear en Supabase:\nCREATE TABLE app_data (id TEXT PRIMARY KEY, data JSONB, updated_at TIMESTAMPTZ DEFAULT NOW());\n\n-- Habilitar Realtime:\nALTER PUBLICATION supabase_realtime ADD TABLE app_data;');
+        if (error.code === '42P01') console.warn('Tabla app_data no existe.');
         else console.warn('Sync error ('+key+'):', error.message);
+        if (typeof notifySave === 'function') notifySave(key, false, error.message);
       } else {
         _lastSyncTimestamps[key] = now;
-        updateSyncIndicator();
+        if (typeof notifySave === 'function') notifySave(key, true);
       }
-    } catch(e) { console.warn('Sync exception:', e.message); }
+    } catch(e) {
+      console.warn('Sync exception:', e.message);
+      if (typeof notifySave === 'function') notifySave(key, false, e.message);
+    }
   }, 1500);
 }
 
@@ -1359,18 +1363,131 @@ function startAutoRefresh() {
 }
 
 // Sync visual indicator
+// ==================== INDICADOR DE GUARDADO + TOAST + HEARTBEAT ====================
+let _lastSuccessfulSave = Date.now();
+let _saveErrorCount = 0;
+let _saveHistory = []; // últimos N guardados para mostrar en tooltip
+let _saveToastTimer = null;
+
+// Crea (si no existe) el elemento toast flotante
+function getSaveToastEl() {
+  let t = document.getElementById('save-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'save-toast';
+    t.style.cssText = 'position:fixed;bottom:22px;right:22px;z-index:10001;background:#16a34a;color:#fff;padding:10px 18px;border-radius:10px;font-family:"Barlow",sans-serif;font-weight:700;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.25);transform:translateY(80px);opacity:0;transition:transform .25s,opacity .25s;pointer-events:none;max-width:320px;';
+    document.body.appendChild(t);
+  }
+  return t;
+}
+
+function showSaveToast(msg, tipo) {
+  // tipo: 'ok' (verde), 'warn' (amarillo), 'err' (rojo)
+  const t = getSaveToastEl();
+  const colores = { ok:'#16a34a', warn:'#d97706', err:'#dc2626' };
+  t.style.background = colores[tipo] || colores.ok;
+  t.textContent = msg;
+  t.style.transform = 'translateY(0)';
+  t.style.opacity = '1';
+  clearTimeout(_saveToastTimer);
+  _saveToastTimer = setTimeout(() => {
+    t.style.transform = 'translateY(80px)';
+    t.style.opacity = '0';
+  }, 2500);
+}
+
+// Etiquetas amigables para los keys técnicos
+const _SAVE_LABELS = {
+  'mt_aggrid': 'Agenda semanal',
+  'mt_pd3': 'Pizarra / Programación',
+  'mt_conc': 'Conciliación CUSCA',
+  'reserva': 'Reservación'
+};
+function _nomSave(key) { return _SAVE_LABELS[key] || key; }
+
+// Registra resultado de cada guardado (éxito o error) con el momento
+function notifySave(key, success, errMsg) {
+  const ahora = new Date();
+  _saveHistory.unshift({ key, success, time: ahora, err: errMsg||null });
+  if (_saveHistory.length > 20) _saveHistory.pop();
+  if (success) {
+    _lastSuccessfulSave = Date.now();
+    _saveErrorCount = 0;
+    showSaveToast('✅ ' + _nomSave(key) + ' guardado en la nube', 'ok');
+  } else {
+    _saveErrorCount++;
+    showSaveToast('⚠️ No se pudo guardar: ' + _nomSave(key) + '. Revisá tu internet.', 'err');
+  }
+  updateSyncIndicator();
+}
+
 function updateSyncIndicator() {
   const el = document.getElementById('sync-status');
   if (!el) return;
   const now = new Date();
-  el.textContent = '☁️ ' + now.toLocaleTimeString('es-SV', {hour:'2-digit',minute:'2-digit'});
-  el.title = 'Última sincronización: ' + now.toLocaleString('es-SV');
-  el.style.color = '#4ade80';
-  // Flash effect
+  const secsSinceSave = Math.floor((Date.now() - _lastSuccessfulSave) / 1000);
+  let label, color, bg;
+  if (_saveErrorCount > 0) {
+    label = '⚠️ Sin guardar hace ' + _fmtHaceSec(secsSinceSave);
+    color = '#fff'; bg = '#dc2626';
+  } else if (secsSinceSave < 90) {
+    label = '✅ Guardado · ' + now.toLocaleTimeString('es-SV', {hour:'2-digit',minute:'2-digit'});
+    color = '#fff'; bg = '#16a34a';
+  } else if (secsSinceSave < 300) {
+    label = '☁️ Guardado hace ' + _fmtHaceSec(secsSinceSave);
+    color = '#fff'; bg = '#16a34a';
+  } else {
+    label = '⏳ Sin guardar hace ' + _fmtHaceSec(secsSinceSave);
+    color = '#fff'; bg = '#d97706';
+  }
+  el.textContent = label;
+  el.style.color = color;
+  el.style.background = bg;
+  el.style.padding = '4px 10px';
+  el.style.borderRadius = '6px';
+  el.style.fontWeight = '800';
+  el.style.cursor = 'pointer';
+  el.title = 'Últimos guardados:\n' + _saveHistory.slice(0,6).map(h =>
+    (h.success?'✅ ':'⚠️ ') + _nomSave(h.key) + ' · ' + h.time.toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + (h.err?' ('+h.err+')':'')
+  ).join('\n');
+  el.onclick = () => {
+    const resumen = _saveHistory.slice(0,10).map(h => (h.success?'✅':'⚠️')+' '+_nomSave(h.key)+' '+h.time.toLocaleTimeString('es-SV')).join('\n');
+    alert('📋 Historial de guardados (últimos 10):\n\n' + (resumen || 'Sin guardados todavía.'));
+  };
+  // Flash sutil para indicar actividad reciente
   el.style.transition = 'opacity 0.3s';
-  el.style.opacity = '0.5';
+  el.style.opacity = '0.6';
   setTimeout(() => { el.style.opacity = '1'; }, 300);
 }
+
+function _fmtHaceSec(s) {
+  if (s < 60) return s + ' seg';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60);
+  return h + ' h ' + (m % 60) + ' min';
+}
+
+// Heartbeat: cada 30s actualiza el indicador (para que el "hace X min" sea en vivo)
+// y cada 3 min muestra un toast informativo de que todo sigue bien
+let _heartbeat3MinCounter = 0;
+setInterval(() => {
+  updateSyncIndicator();
+  _heartbeat3MinCounter++;
+  if (_heartbeat3MinCounter >= 6) { // 6 * 30s = 3 min
+    _heartbeat3MinCounter = 0;
+    const secsSinceSave = Math.floor((Date.now() - _lastSuccessfulSave) / 1000);
+    if (secsSinceSave < 180) {
+      // Todo al día — solo toast suave
+      showSaveToast('☁️ Todo al día. Tu trabajo está respaldado.', 'ok');
+    } else if (secsSinceSave < 600) {
+      showSaveToast('⏳ Sin cambios recientes. Tu último guardado fue hace ' + _fmtHaceSec(secsSinceSave) + '.', 'warn');
+    } else {
+      // Problema serio — alert (bloquea hasta confirmar)
+      alert('⚠️ ATENCIÓN: No se guarda nada desde hace ' + _fmtHaceSec(secsSinceSave) + '.\n\nRevisá que tengas internet y que la conexión con la nube esté activa.\nSi seguís viendo este mensaje, usá el botón 🔄 Actualizar.');
+    }
+  }
+}, 30000);
 
 // Supabase Realtime — escuchar cambios de otros dispositivos
 // Re-renderiza TODAS las vistas visibles (agenda TV, pizarra, cuaderno, etc.)
@@ -1565,9 +1682,11 @@ async function saveReservaToSupabase(r) {
       .upsert(row, { onConflict: 'codigo' })
       .select();
     if (error) throw error;
+    if (typeof notifySave === 'function') notifySave('reserva', true);
     return data;
   } catch(e) {
     console.error('Error guardando reservación:', e);
+    if (typeof notifySave === 'function') notifySave('reserva', false, e.message);
     return null;
   }
 }
@@ -1813,7 +1932,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-17-v5';
+const APP_VERSION = '2026-04-17-v6';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
