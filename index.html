@@ -2041,7 +2041,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v12';
+const APP_VERSION = '2026-04-18-v13';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2063,12 +2063,22 @@ let _initDataRan = false;
 async function initData() {
   console.log('🚀 initData() llamado. _initDataRan=' + _initDataRan + ', sb=' + (!!sb) + ', supabaseOK=' + supabaseOK);
   if (_initDataRan) { console.log('ℹ️ initData ya corrió — saltando'); return; }
+  // Si sb aún no está listo (defer del script Supabase), NO marcar como ran — permitir reintento
+  if (!sb) {
+    console.log('⏳ Supabase SDK todavía no está listo. Esperando siguiente intento...');
+    return;
+  }
   _initDataRan = true;
   let connected = false;
   try {
     connected = await checkSupabase();
   } catch(e) {
     console.error('🔥 Error en checkSupabase:', e.message);
+  }
+  // Si no se pudo conectar, permitir reintento (no dejar la app "bloqueada")
+  if (!connected) {
+    console.warn('⚠️ checkSupabase() falló — permitiendo reintento en siguiente ciclo');
+    _initDataRan = false;
   }
   if (connected) {
     // AUTO-LIMPIEZA AL ABRIR (equivalente a clic en "🧹 Limpiar caché"):
