@@ -1277,8 +1277,9 @@ function syncToSupabase(key, data) {
 async function loadFromSupabase(key) {
   if (!sb) return null;
   try {
-    const { data, error } = await sb.from('app_data').select('data,updated_at').eq('id', key).single();
-    if (error) { if (error.code !== 'PGRST116') console.warn('Load error ('+key+'):', error.message); return null; }
+    // maybeSingle() retorna null sin error HTTP 406 cuando no hay filas (single() lanza 406)
+    const { data, error } = await sb.from('app_data').select('data,updated_at').eq('id', key).maybeSingle();
+    if (error) { console.warn('Load error ('+key+'):', error.message); return null; }
     if (data?.updated_at) _lastSyncTimestamps[key] = data.updated_at;
     return data?.data || null;
   } catch(e) { console.warn('Load exception:', e.message); return null; }
@@ -2041,7 +2042,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v13';
+const APP_VERSION = '2026-04-18-v14';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
