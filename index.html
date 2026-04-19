@@ -1204,13 +1204,30 @@ function initSupabaseSDK() {
 }
 // Intentar ahora (puede que el SDK ya cargó)
 initSupabaseSDK();
-// Si no cargó por ser defer, reintentar después
-if (!sb) {
-  document.addEventListener('DOMContentLoaded', () => {
-    if (initSupabaseSDK()) initData();
-  });
-  setTimeout(() => { if (initSupabaseSDK()) initData(); }, 1500);
+
+// GARANTIZAR que initData() siempre corra al menos una vez, sin importar el estado del SDK
+function _ensureInitData() {
+  if (typeof initData !== 'function') { setTimeout(_ensureInitData, 100); return; }
+  if (!sb) initSupabaseSDK();
+  initData();
 }
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _ensureInitData);
+} else {
+  // DOM ya está listo
+  _ensureInitData();
+}
+// Fallback adicional por si el script de Supabase tarda en cargar (defer)
+setTimeout(() => { if (!_initDataRan) _ensureInitData(); }, 1500);
+setTimeout(() => { if (!_initDataRan) _ensureInitData(); }, 3500);
+
+// Handler global de errores para detectar fallas silenciosas
+window.addEventListener('error', (e) => {
+  console.error('🔥 Error global JS:', e.message || e, 'en', e.filename || '?', ':', e.lineno || '?');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('🔥 Promise rechazada sin catch:', e.reason && (e.reason.message || e.reason));
+});
 
 // ==================== SYNC SUPABASE (FUENTE PRINCIPAL) ====================
 let _syncTimers = {};
@@ -2003,6 +2020,11 @@ function mostrarApp() {
   document.getElementById('user-badge').style.display = 'flex';
   document.getElementById('user-avatar').textContent = usuarioActual.nombre.charAt(0);
   document.getElementById('user-name-display').textContent = usuarioActual.nombre;
+  // FORZAR sync desde la nube al hacer login (por si ya corrió initData antes pero datos están viejos)
+  console.log('👤 Login — forzando sync fresco desde la nube');
+  setTimeout(() => {
+    if (typeof forceSync === 'function') forceSync();
+  }, 300);
 }
 
 function cerrarSesion() {
@@ -2019,7 +2041,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v11';
+const APP_VERSION = '2026-04-18-v12';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2039,9 +2061,15 @@ let truckSel = '';
 // Inicializar datos: intentar cargar de Supabase
 let _initDataRan = false;
 async function initData() {
-  if (_initDataRan) return;
+  console.log('🚀 initData() llamado. _initDataRan=' + _initDataRan + ', sb=' + (!!sb) + ', supabaseOK=' + supabaseOK);
+  if (_initDataRan) { console.log('ℹ️ initData ya corrió — saltando'); return; }
   _initDataRan = true;
-  const connected = await checkSupabase();
+  let connected = false;
+  try {
+    connected = await checkSupabase();
+  } catch(e) {
+    console.error('🔥 Error en checkSupabase:', e.message);
+  }
   if (connected) {
     // AUTO-LIMPIEZA AL ABRIR (equivalente a clic en "🧹 Limpiar caché"):
     // descartamos el estado local y tomamos Supabase como única fuente de verdad.
