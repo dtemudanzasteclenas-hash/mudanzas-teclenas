@@ -1346,19 +1346,23 @@ window.addEventListener('beforeunload', () => {
   Object.values(_syncTimers).forEach(t => clearTimeout(t));
 });
 
-// Visibility / focus: sincronizar al volver a la pestaña
-// Muchos navegadores pausan setInterval en background; al volver hay que forzar sync manual
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && supabaseOK && typeof scheduleFullSyncAndRender === 'function') {
-    console.log('👁️ Pestaña activa — forzando sync');
+// Visibility / focus: sincronizar al volver a la pestaña (throttle 10s)
+// Evita re-sync innecesario si el usuario alterna rápido entre pestañas
+let _lastFocusSyncTs = 0;
+function _syncOnFocusSiCorresponde(origen) {
+  const ahora = Date.now();
+  if (ahora - _lastFocusSyncTs < 10000) return; // throttle: solo re-sincronizar si pasaron >10s
+  _lastFocusSyncTs = ahora;
+  if (supabaseOK && typeof scheduleFullSyncAndRender === 'function') {
+    console.log(origen + ' — sincronizando');
     scheduleFullSyncAndRender(200);
   }
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) _syncOnFocusSiCorresponde('👁️ Pestaña activa');
 });
 window.addEventListener('focus', () => {
-  if (supabaseOK && typeof scheduleFullSyncAndRender === 'function') {
-    console.log('🔎 Ventana enfocada — forzando sync');
-    scheduleFullSyncAndRender(200);
-  }
+  _syncOnFocusSiCorresponde('🔎 Ventana enfocada');
 });
 // Detectar reconexión de red
 window.addEventListener('online', () => {
@@ -2042,7 +2046,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v14';
+const APP_VERSION = '2026-04-18-v15';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
