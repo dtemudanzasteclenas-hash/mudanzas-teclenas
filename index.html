@@ -2055,7 +2055,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v16';
+const APP_VERSION = '2026-04-18-v17';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3781,11 +3781,18 @@ function guardarEdicion() {
     alert('⚠️ Selecciona al menos un horario.');
     return;
   }
+  // Capturar valores OLD antes de mutar — necesario para saber si hay que limpiar agGrid
+  const oldFecha = r.fecha;
+  const oldHoras = (r.horasOcupadas || [r.hora] || []).slice();
+  const newFecha = document.getElementById('e-fecha').value;
+  const horasCambiaron = (oldHoras.length !== horasEdit.length) || oldHoras.some((h,i) => h !== horasEdit[i]);
+  const fechaCambio = oldFecha !== newFecha;
+
   r.nombre = nombre;
   r.apellido = document.getElementById('e-apellido').value.trim();
   r.tel = tel;
   r.email = document.getElementById('e-email').value.trim();
-  r.fecha = document.getElementById('e-fecha').value;
+  r.fecha = newFecha;
   r.hora = horasEdit[0];
   r.horasOcupadas = horasEdit;
   let costo = document.getElementById('e-costo').value.trim();
@@ -3797,13 +3804,21 @@ function guardarEdicion() {
   r.carga = carga;
   r.descarga = descarga;
   r.obs = document.getElementById('e-obs').value;
-  // Remove old agenda placements so multi-hora can re-place correctly
-  const agDay = agGrid[r.fecha];
-  if (agDay?.cells) {
-    Object.keys(agDay.cells).forEach(k => {
-      if (agDay.cells[k] === r.codigo) delete agDay.cells[k];
-    });
-    saveAgGrid();
+
+  // Limpiar agGrid SOLO si cambiaron fecha u horarios (para preservar la ubicación si el usuario
+  // solo editó datos del cliente/obs). Si cambió fecha, limpiar de la fecha ANTERIOR.
+  if (fechaCambio) {
+    const agOld = agGrid[oldFecha];
+    if (agOld?.cells) {
+      Object.keys(agOld.cells).forEach(k => { if (agOld.cells[k] === r.codigo) delete agOld.cells[k]; });
+      saveAgGrid();
+    }
+  } else if (horasCambiaron) {
+    const agDay = agGrid[r.fecha];
+    if (agDay?.cells) {
+      Object.keys(agDay.cells).forEach(k => { if (agDay.cells[k] === r.codigo) delete agDay.cells[k]; });
+      saveAgGrid();
+    }
   }
   saveSingle(r);
   renderAll();
@@ -4056,8 +4071,34 @@ function eliminar(idx) {
   const r = reservas[idx];
   if (!confirm(`¿Cancelar la reservación de ${r.nombre} ${r.apellido || ''}?\n\nLa reservación quedará marcada como cancelada pero NO se eliminará del sistema.`)) return;
   r.estado = 'cancelado';
+  // Quitar de la agenda visual (si estaba ubicada) para que no confunda
+  const agDay = agGrid[r.fecha];
+  if (agDay?.cells) {
+    let cambioAg = false;
+    Object.keys(agDay.cells).forEach(k => {
+      if (agDay.cells[k] === r.codigo) { delete agDay.cells[k]; cambioAg = true; }
+    });
+    if (cambioAg) saveAgGrid();
+  }
+  // Quitar de la pizarra también (desasignar de slots en columnas)
+  const pdDay = pdData[r.fecha];
+  if (pdDay?.columnas) {
+    let cambioPD = false;
+    pdDay.columnas.forEach(col => {
+      [...HORARIOS, 'otra'].forEach(h => {
+        if (col.slots?.[h]?.reservaCodigo === r.codigo) {
+          col.slots[h].reservaCodigo = '';
+          col.slots[h].costo = '';
+          cambioPD = true;
+        }
+      });
+    });
+    if (cambioPD) savePD();
+  }
   saveSingle(r);
   renderAll();
+  renderAgenda();
+  try { renderPD(); } catch(e) {}
   alert('✅ Reservación marcada como cancelada. Los datos del cliente quedan registrados.');
 }
 
@@ -4703,6 +4744,10 @@ function quitarExtension(f, colIdx, hora) {
 }
 
 function updateSlot2(f, idx, hora, campo, valor) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para editar.');
+    return;
+  }
   const day = getDayData(f);
   if (!day.columnas[idx]) return;
   if (!day.columnas[idx].slots[hora]) day.columnas[idx].slots[hora] = {carga:'',descarga:'',costo:'',metodo:'EFECTIVO'};
@@ -4842,6 +4887,10 @@ function autoNombreEquipo() {
 }
 
 function updatePropina(f, colIdx, propIdx, val) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para editar propinas.');
+    return;
+  }
   const day = getDayData(f);
   if (!day.columnas[colIdx]) return;
   if (!day.columnas[colIdx].propinas) day.columnas[colIdx].propinas = ['','',''];
@@ -6502,6 +6551,11 @@ function renderComisiones() {
   vendedores.forEach(v => { conteo[v] = { total: 0, monto: 0, reservas: [] }; });
   resMes.forEach(r => {
     const v = r.vendedor || '';
+    // Inicializar vendedor dinámicamente si no está en USUARIOS (ej. vendedor histórico removido)
+    if (v && !conteo[v]) {
+      conteo[v] = { total: 0, monto: 0, reservas: [] };
+      if (!vendedores.includes(v)) vendedores.push(v);
+    }
     if (conteo[v]) {
       conteo[v].total++;
       if (r.estado !== 'cancelado') conteo[v].monto += parseFloat(r.costo)||0;
