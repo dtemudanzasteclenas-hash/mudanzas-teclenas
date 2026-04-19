@@ -1236,6 +1236,8 @@ function safeSetLS(key, value) {
 function syncToSupabase(key, data) {
   if (!sb) return;
   clearTimeout(_syncTimers[key]);
+  // Debounce reducido de 1500ms a 400ms para propagar cambios casi inmediatamente
+  // Razón: 1.5s dejaba ventana donde el usuario podía cerrar la pestaña y perder el save
   _syncTimers[key] = setTimeout(async () => {
     const now = new Date().toISOString();
     try {
@@ -1252,7 +1254,7 @@ function syncToSupabase(key, data) {
       console.warn('Sync exception:', e.message);
       if (typeof notifySave === 'function') notifySave(key, false, e.message);
     }
-  }, 1500);
+  }, 400);
 }
 
 async function loadFromSupabase(key) {
@@ -1321,7 +1323,40 @@ let _refreshInterval = null;
 
 window.addEventListener('beforeunload', () => {
   if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; }
+  // FLUSH pendientes: disparar inmediatamente los syncToSupabase debounced antes de cerrar
+  // (previene data loss al cerrar pestaña dentro de la ventana de 1.5s del debounce)
   Object.values(_syncTimers).forEach(t => clearTimeout(t));
+});
+
+// Visibility / focus: sincronizar al volver a la pestaña
+// Muchos navegadores pausan setInterval en background; al volver hay que forzar sync manual
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && supabaseOK && typeof scheduleFullSyncAndRender === 'function') {
+    console.log('👁️ Pestaña activa — forzando sync');
+    scheduleFullSyncAndRender(200);
+  }
+});
+window.addEventListener('focus', () => {
+  if (supabaseOK && typeof scheduleFullSyncAndRender === 'function') {
+    console.log('🔎 Ventana enfocada — forzando sync');
+    scheduleFullSyncAndRender(200);
+  }
+});
+// Detectar reconexión de red
+window.addEventListener('online', () => {
+  console.log('🌐 Conexión recuperada — reconectando Supabase');
+  if (typeof checkSupabase === 'function') {
+    checkSupabase().then(ok => {
+      if (ok && typeof scheduleFullSyncAndRender === 'function') {
+        scheduleFullSyncAndRender(300);
+        if (typeof startRealtimeSync === 'function') startRealtimeSync();
+      }
+    });
+  }
+});
+window.addEventListener('offline', () => {
+  console.warn('📵 Conexión perdida — trabajando offline');
+  if (typeof showSaveToast === 'function') showSaveToast('📵 Sin internet. Los cambios se subirán al reconectar.', 'warn');
 });
 
 function startAutoRefresh() {
@@ -1371,7 +1406,7 @@ function startAutoRefresh() {
         updateSyncIndicator();
       }
     } catch(e) { /* silencioso */ }
-  }, 30000);
+  }, 15000); // reducido de 30s a 15s para sync más frecuente si Realtime falla
 }
 
 // Sync visual indicator
@@ -1536,27 +1571,62 @@ function scheduleFullSyncAndRender(delay = 600) {
   }, delay);
 }
 
+let _rtChannels = []; // mantener referencias para poder reconectar
+let _rtHealthy = { app_data: false, reservaciones: false };
+let _rtHeartbeatTimer = null;
+
+function _rtReconectar() {
+  // Cerrar canales anteriores si existen
+  try { _rtChannels.forEach(ch => ch && ch.unsubscribe && ch.unsubscribe()); } catch(e) {}
+  _rtChannels = [];
+  _rtHealthy = { app_data: false, reservaciones: false };
+  startRealtimeSync();
+}
+
 function startRealtimeSync() {
   if (!sb) return;
   try {
-    // Escuchar cambios en app_data (agGrid/pizarra/conciliación)
-    sb.channel('app_data_changes')
+    // Cerrar canales previos si se vuelve a llamar
+    try { _rtChannels.forEach(ch => ch && ch.unsubscribe && ch.unsubscribe()); } catch(e) {}
+    _rtChannels = [];
+
+    // Canal: app_data (agGrid / pizarra / conciliación)
+    const ch1 = sb.channel('app_data_changes_' + Date.now())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, (payload) => {
         console.log('📡 Cambio detectado en app_data:', payload.new?.id);
         scheduleFullSyncAndRender(500);
       })
-      .subscribe();
+      .subscribe(status => {
+        console.log('📡 app_data channel status:', status);
+        _rtHealthy.app_data = (status === 'SUBSCRIBED');
+      });
+    _rtChannels.push(ch1);
 
-    // Escuchar cambios en reservaciones
-    sb.channel('reservaciones_changes')
+    // Canal: reservaciones
+    const ch2 = sb.channel('reservaciones_changes_' + Date.now())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reservaciones' }, (payload) => {
-        console.log('📡 Cambio en reservaciones detectado');
-        // Delay un poco mayor: esperar a que también llegue la posición de agGrid del dispositivo origen
+        console.log('📡 Cambio en reservaciones detectado:', payload.eventType);
         scheduleFullSyncAndRender(800);
       })
-      .subscribe();
+      .subscribe(status => {
+        console.log('📡 reservaciones channel status:', status);
+        _rtHealthy.reservaciones = (status === 'SUBSCRIBED');
+      });
+    _rtChannels.push(ch2);
 
-    console.log('📡 Realtime sync activado');
+    // Heartbeat: cada 60s verificar salud de los canales. Si alguno cayó, reconectar.
+    if (_rtHeartbeatTimer) clearInterval(_rtHeartbeatTimer);
+    _rtHeartbeatTimer = setInterval(() => {
+      if (!document.hidden && supabaseOK) {
+        const muertos = Object.entries(_rtHealthy).filter(([k,v]) => !v).map(([k]) => k);
+        if (muertos.length > 0) {
+          console.warn('⚠️ Realtime caído en canales:', muertos.join(', '), '— reconectando');
+          _rtReconectar();
+        }
+      }
+    }, 60000);
+
+    console.log('📡 Realtime sync activado con heartbeat 60s');
   } catch(e) { console.warn('Realtime setup error:', e); }
 }
 
@@ -1699,6 +1769,11 @@ async function saveReservaToSupabase(r) {
   } catch(e) {
     console.error('Error guardando reservación:', e);
     if (typeof notifySave === 'function') notifySave('reserva', false, e.message);
+    // Si es un error de permiso (RLS) u otro grave, avisar al usuario con alert
+    const msg = (e && e.message) || '';
+    if (/permission|policy|denied|forbidden|not allowed/i.test(msg)) {
+      alert('⚠️ No se pudo guardar la reservación en la nube.\n\nError de permiso de Supabase.\nAvisale a Pedro para revisar las políticas RLS.\n\nDetalle: ' + msg);
+    }
     return null;
   }
 }
@@ -1944,7 +2019,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v10';
+const APP_VERSION = '2026-04-18-v11';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2888,9 +2963,13 @@ function confirmarHoraCambio() {
   const inp  = document.getElementById('hc-hora-custom');
   let horaFinal = sel.value === 'Otra hora' ? inp.value.trim() : sel.value;
   if (!horaFinal) { alert('Por favor ingresa un horario.'); return; }
-  // Update reservation hora
+  // Actualizar hora Y horasOcupadas — CRÍTICO: sin esto la pizarra no ve la reservación en el nuevo horario
   const r = reservas.find(rv => rv.codigo === codigo);
-  if (r) { r.hora = horaFinal; saveSingle(r); }
+  if (r) {
+    r.hora = horaFinal;
+    r.horasOcupadas = [horaFinal];
+    saveSingle(r);
+  }
   // Move in grid
   const day = getAgDay(f);
   const dstCodigo = day.cells[dstKey];
