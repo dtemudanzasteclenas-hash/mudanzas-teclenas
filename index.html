@@ -1612,16 +1612,28 @@ function startRealtimeSync() {
     try { _rtChannels.forEach(ch => ch && ch.unsubscribe && ch.unsubscribe()); } catch(e) {}
     _rtChannels = [];
 
+    // Logea status solo cuando sea persistente 2s (evita ruido de transiciones iniciales CHANNEL_ERROR → SUBSCRIBED)
+    const _pendingStatusLog = {};
+    function _logStatusConDebounce(canal, status) {
+      clearTimeout(_pendingStatusLog[canal]);
+      if (status === 'SUBSCRIBED') {
+        _rtHealthy[canal] = true;
+        console.log('📡 ' + canal + ' realtime: SUBSCRIBED ✓');
+      } else {
+        _rtHealthy[canal] = false;
+        _pendingStatusLog[canal] = setTimeout(() => {
+          if (!_rtHealthy[canal]) console.warn('📡 ' + canal + ' realtime: ' + status + ' (persistente)');
+        }, 2000);
+      }
+    }
+
     // Canal: app_data (agGrid / pizarra / conciliación)
     const ch1 = sb.channel('app_data_changes_' + Date.now())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, (payload) => {
         console.log('📡 Cambio detectado en app_data:', payload.new?.id);
         scheduleFullSyncAndRender(500);
       })
-      .subscribe(status => {
-        console.log('📡 app_data channel status:', status);
-        _rtHealthy.app_data = (status === 'SUBSCRIBED');
-      });
+      .subscribe(status => _logStatusConDebounce('app_data', status));
     _rtChannels.push(ch1);
 
     // Canal: reservaciones
@@ -1630,10 +1642,7 @@ function startRealtimeSync() {
         console.log('📡 Cambio en reservaciones detectado:', payload.eventType);
         scheduleFullSyncAndRender(800);
       })
-      .subscribe(status => {
-        console.log('📡 reservaciones channel status:', status);
-        _rtHealthy.reservaciones = (status === 'SUBSCRIBED');
-      });
+      .subscribe(status => _logStatusConDebounce('reservaciones', status));
     _rtChannels.push(ch2);
 
     // Heartbeat: cada 60s verificar salud de los canales. Si alguno cayó, reconectar.
@@ -2046,7 +2055,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v15';
+const APP_VERSION = '2026-04-18-v16';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
