@@ -1280,6 +1280,7 @@ async function loadFromSupabase(key) {
     // maybeSingle() retorna null sin error HTTP 406 cuando no hay filas (single() lanza 406)
     const { data, error } = await sb.from('app_data').select('data,updated_at').eq('id', key).maybeSingle();
     if (error) { console.warn('Load error ('+key+'):', error.message); return null; }
+    if (typeof _lastSupabasePing !== 'undefined') _lastSupabasePing = Date.now();
     if (data?.updated_at) _lastSyncTimestamps[key] = data.updated_at;
     return data?.data || null;
   } catch(e) { console.warn('Load exception:', e.message); return null; }
@@ -1481,6 +1482,7 @@ function notifySave(key, success, errMsg) {
   if (_saveHistory.length > 20) _saveHistory.pop();
   if (success) {
     _lastSuccessfulSave = Date.now();
+    _lastSupabasePing = Date.now(); // cada save exitoso confirma que la conexión funciona
     _saveErrorCount = 0;
     showSaveToast('✅ ' + _nomSave(key) + ' guardado en la nube', 'ok');
   } else {
@@ -1490,40 +1492,60 @@ function notifySave(key, success, errMsg) {
   updateSyncIndicator();
 }
 
+// Timestamp del último ping exitoso a Supabase (para distinguir "sin actividad" de "sin conexión")
+let _lastSupabasePing = Date.now();
+let _realtimeHealthy = true; // se actualiza desde el heartbeat de canales
+
 function updateSyncIndicator() {
   const el = document.getElementById('sync-status');
   if (!el) return;
   const now = new Date();
   const secsSinceSave = Math.floor((Date.now() - _lastSuccessfulSave) / 1000);
-  let label, color, bg;
+  const secsSincePing = Math.floor((Date.now() - _lastSupabasePing) / 1000);
+  let label, bg;
+
+  // 🔴 ROJO: error real al guardar o sin conexión hace rato
   if (_saveErrorCount > 0) {
-    label = '⚠️ Sin guardar hace ' + _fmtHaceSec(secsSinceSave);
-    color = '#fff'; bg = '#dc2626';
-  } else if (secsSinceSave < 90) {
-    label = '✅ Guardado · ' + now.toLocaleTimeString('es-SV', {hour:'2-digit',minute:'2-digit'});
-    color = '#fff'; bg = '#16a34a';
-  } else if (secsSinceSave < 300) {
-    label = '☁️ Guardado hace ' + _fmtHaceSec(secsSinceSave);
-    color = '#fff'; bg = '#16a34a';
-  } else {
-    label = '⏳ Sin guardar hace ' + _fmtHaceSec(secsSinceSave);
-    color = '#fff'; bg = '#d97706';
+    label = '⚠️ Error al guardar';
+    bg = '#dc2626';
+  } else if (!supabaseOK || secsSincePing > 120) {
+    label = '❌ Sin conexión con la nube';
+    bg = '#dc2626';
   }
+  // 🟡 AMARILLO: conectado pero Realtime caído (solo funciona polling, sync con demora)
+  else if (!_realtimeHealthy) {
+    label = '⚠️ Sync lenta (sin tiempo real)';
+    bg = '#d97706';
+  }
+  // 🟢 VERDE: todo OK. Mostrar "acabo de guardar" o "listo" según actividad
+  else if (secsSinceSave < 60) {
+    label = '✅ Guardado · ' + now.toLocaleTimeString('es-SV', {hour:'2-digit',minute:'2-digit'});
+    bg = '#16a34a';
+  } else {
+    label = '✅ Conectado · nube al día';
+    bg = '#16a34a';
+  }
+
   el.textContent = label;
-  el.style.color = color;
+  el.style.color = '#fff';
   el.style.background = bg;
   el.style.padding = '4px 10px';
   el.style.borderRadius = '6px';
   el.style.fontWeight = '800';
   el.style.cursor = 'pointer';
-  el.title = 'Últimos guardados:\n' + _saveHistory.slice(0,6).map(h =>
-    (h.success?'✅ ':'⚠️ ') + _nomSave(h.key) + ' · ' + h.time.toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + (h.err?' ('+h.err+')':'')
-  ).join('\n');
+  const ultimoSave = _saveHistory.length > 0
+    ? 'Último guardado: ' + _saveHistory[0].time.toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
+    : 'Sin guardados todavía.';
+  el.title = ultimoSave + '\nClic para ver historial completo.';
   el.onclick = () => {
     const resumen = _saveHistory.slice(0,10).map(h => (h.success?'✅':'⚠️')+' '+_nomSave(h.key)+' '+h.time.toLocaleTimeString('es-SV')).join('\n');
-    alert('📋 Historial de guardados (últimos 10):\n\n' + (resumen || 'Sin guardados todavía.'));
+    alert('📋 Estado del sistema\n\n' +
+      'Conexión Supabase: ' + (supabaseOK ? '✅ activa' : '❌ caída') + '\n' +
+      'Último ping exitoso: hace ' + _fmtHaceSec(secsSincePing) + '\n' +
+      'Realtime (instantáneo): ' + (_realtimeHealthy ? '✅ activo' : '⚠️ caído — usando polling') + '\n' +
+      (_saveHistory.length > 0 ? 'Último guardado: hace ' + _fmtHaceSec(secsSinceSave) + '\n' : 'Sin guardados en esta sesión.\n') +
+      '\n--- Últimos 10 guardados ---\n' + (resumen || '(ninguno)'));
   };
-  // Flash sutil para indicar actividad reciente
   el.style.transition = 'opacity 0.3s';
   el.style.opacity = '0.6';
   setTimeout(() => { el.style.opacity = '1'; }, 300);
@@ -1537,26 +1559,31 @@ function _fmtHaceSec(s) {
   return h + ' h ' + (m % 60) + ' min';
 }
 
-// Heartbeat: cada 30s actualiza el indicador (para que el "hace X min" sea en vivo)
-// y cada 3 min muestra un toast informativo de que todo sigue bien
-let _heartbeat3MinCounter = 0;
-setInterval(() => {
-  updateSyncIndicator();
-  _heartbeat3MinCounter++;
-  if (_heartbeat3MinCounter >= 6) { // 6 * 30s = 3 min
-    _heartbeat3MinCounter = 0;
-    const secsSinceSave = Math.floor((Date.now() - _lastSuccessfulSave) / 1000);
-    if (secsSinceSave < 180) {
-      // Todo al día — solo toast suave
-      showSaveToast('☁️ Todo al día. Tu trabajo está respaldado.', 'ok');
-    } else if (secsSinceSave < 600) {
-      showSaveToast('⏳ Sin cambios recientes. Tu último guardado fue hace ' + _fmtHaceSec(secsSinceSave) + '.', 'warn');
+// Heartbeat cada 60s: PING real a Supabase para verificar que la conexión sigue viva.
+// Esto permite distinguir "sin actividad del usuario" (verde, OK) de "sin conexión" (rojo, problema real).
+async function _supabaseHeartbeat() {
+  if (!sb) return;
+  try {
+    const { error } = await sb.from('reservaciones').select('codigo', { count: 'exact', head: true });
+    if (!error) {
+      _lastSupabasePing = Date.now();
+      supabaseOK = true;
     } else {
-      // Problema serio — alert (bloquea hasta confirmar)
-      alert('⚠️ ATENCIÓN: No se guarda nada desde hace ' + _fmtHaceSec(secsSinceSave) + '.\n\nRevisá que tengas internet y que la conexión con la nube esté activa.\nSi seguís viendo este mensaje, usá el botón 🔄 Actualizar.');
+      supabaseOK = false;
     }
+  } catch(e) {
+    supabaseOK = false;
   }
-}, 30000);
+  // Actualizar salud de Realtime basado en _rtHealthy (definido en startRealtimeSync)
+  if (typeof _rtHealthy !== 'undefined') {
+    _realtimeHealthy = !!(_rtHealthy.app_data && _rtHealthy.reservaciones);
+  }
+  updateSyncIndicator();
+}
+// Actualizar indicador cada 30s (sin ping) para refrescar UI
+setInterval(updateSyncIndicator, 30000);
+// Ping a Supabase cada 60s (más pesado)
+setInterval(_supabaseHeartbeat, 60000);
 
 // Supabase Realtime — escuchar cambios de otros dispositivos
 // Re-renderiza TODAS las vistas visibles (agenda TV, pizarra, cuaderno, etc.)
@@ -1729,6 +1756,7 @@ async function loadReservasFromSupabase() {
       .limit(5000);
     if (error) throw error;
     console.log('📡 loadReservasFromSupabase: ' + (data?.length || 0) + ' filas desde Supabase');
+    if (typeof _lastSupabasePing !== 'undefined') _lastSupabasePing = Date.now();
     // Convertir formato Supabase → formato local
     return (data || []).map(r => ({
       codigo: r.codigo,
@@ -2055,7 +2083,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-18-v17';
+const APP_VERSION = '2026-04-19-v18';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
