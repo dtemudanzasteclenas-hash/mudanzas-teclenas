@@ -2071,6 +2071,10 @@ function mostrarApp() {
 
 function cerrarSesion() {
   if (!confirm('¿Cerrar sesión?')) return;
+  // Limpiar Modo TV si está activo (evita interval leak de _tvClockInterval)
+  if (document.body.classList.contains('tv-mode') && typeof toggleTVMode === 'function') {
+    try { toggleTVMode(); } catch(e) {}
+  }
   sessionStorage.removeItem('mt_usuario');
   usuarioActual = null;
   document.getElementById('login-screen').style.display = 'flex';
@@ -2083,7 +2087,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-19-v19';
+const APP_VERSION = '2026-04-19-v20';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2875,6 +2879,11 @@ function exportarReservas() {
 
 async function importarReservas(file) {
   if (!file) return;
+  // Validar tamaño: máx 10 MB (evita colgar el navegador con archivos inválidos)
+  if (file.size > 10 * 1024 * 1024) {
+    alert('❌ Archivo muy grande (máx 10 MB). Dividilo en partes o contactá a soporte.');
+    return;
+  }
   try {
     const text = await file.text();
     const data = JSON.parse(text);
@@ -4087,23 +4096,32 @@ function imprimirPDF() {
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
     if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
-    // FIX PDF en blanco: construir un contenedor con el documento completo (incluyendo estilos inline)
-    // y NO usar innerHTML con extracción regex. Dejamos que el navegador renderice el DOM real.
+    // FIX PDF en blanco: usar DOMParser en vez de regex para extraer <style> y <body>
+    // (la regex greedy /<body>([\s\S]*)<\/body>/ puede fallar silenciosamente)
+    let styleText = '', bodyHTML = '';
+    try {
+      const doc = new DOMParser().parseFromString(fullHtml, 'text/html');
+      styleText = doc.querySelector('style')?.textContent || '';
+      bodyHTML = doc.body?.innerHTML || '';
+    } catch(e) {
+      console.warn('DOMParser falló, fallback a regex:', e);
+      const sm = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
+      const bm = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/);
+      styleText = sm ? sm[1] : '';
+      bodyHTML = bm ? bm[1] : '';
+    }
+    if (!bodyHTML.trim()) { alert('⚠️ Error generando el PDF: contenido vacío. Intentá de nuevo.'); return; }
+
     const container = document.createElement('div');
     container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-1;';
-    // Extraer sólo lo que va adentro del <body> y el <style>
-    const styleMatch = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
-    const bodyMatch = fullHtml.match(/<body>([\s\S]*)<\/body>/);
-    // IMPORTANTE: inyectamos el <style> DENTRO del contenedor pero también aplicamos los estilos
-    // directamente vía un elemento <style> separado dentro del div (funciona con html2canvas)
     const styleEl = document.createElement('style');
-    styleEl.textContent = styleMatch ? styleMatch[1] : '';
+    styleEl.textContent = styleText;
     container.appendChild(styleEl);
     const bodyDiv = document.createElement('div');
-    bodyDiv.innerHTML = bodyMatch ? bodyMatch[1] : '';
+    bodyDiv.innerHTML = bodyHTML;
     container.appendChild(bodyDiv);
     document.body.appendChild(container);
-    // Esperar a que el DOM se asiente y las fonts default (Arial) estén disponibles
+
     setTimeout(() => {
       const opt = {
         margin: 0,
@@ -4751,6 +4769,10 @@ function toggleSlot(id) {
 }
 
 function assignSlot(f, colIdx, hora, codigo) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para asignar servicios.');
+    return;
+  }
   const day = getDayData(f);
   if (!day.columnas[colIdx]) return;
   if (!day.columnas[colIdx].slots[hora]) day.columnas[colIdx].slots[hora] = {costo:'',metodo:'EFECTIVO',reservaCodigo:''};
@@ -4774,6 +4796,10 @@ function assignSlot(f, colIdx, hora, codigo) {
 }
 
 function deassignSlot(f, colIdx, hora) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para desasignar servicios.');
+    return;
+  }
   const day = getDayData(f);
   if (!day.columnas[colIdx]?.slots[hora]) return;
   const codigo = day.columnas[colIdx].slots[hora].reservaCodigo;
@@ -4801,6 +4827,10 @@ function deassignSlot(f, colIdx, hora) {
 }
 
 function extenderHorario(f, colIdx, horaOrigen, hiOrigen) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para extender horarios.');
+    return;
+  }
   const day = getDayData(f);
   const col = day.columnas[colIdx];
   if (!col) return;
@@ -4819,6 +4849,10 @@ function extenderHorario(f, colIdx, horaOrigen, hiOrigen) {
 }
 
 function quitarExtension(f, colIdx, hora) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para quitar extensiones.');
+    return;
+  }
   const day = getDayData(f);
   if (!day.columnas[colIdx]?.slots[hora]) return;
   delete day.columnas[colIdx].slots[hora].extendidoDe;
