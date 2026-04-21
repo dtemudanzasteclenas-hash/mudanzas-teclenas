@@ -2087,7 +2087,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-19-v20';
+const APP_VERSION = '2026-04-21-v21';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2480,31 +2480,43 @@ function imprimirAgendaDia() {
 
   if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
 
-  // FIX PDF en blanco: usar appendChild con elementos separados (no innerHTML con <style> embebido)
-  // Esto mismo método es el que arregló el PDF individual (imprimirPDF)
-  const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-1;';
-  const styleEl = document.createElement('style');
-  styleEl.textContent = styleCss;
-  container.appendChild(styleEl);
-  const bodyDiv = document.createElement('div');
-  bodyDiv.innerHTML = paginasHTML.join('');
-  container.appendChild(bodyDiv);
-  document.body.appendChild(container);
+  // FIX PDF en blanco (v21): usar iframe aislado para garantizar render limpio
+  // El problema con container off-screen: html2canvas no siempre captura elementos fuera de viewport
+  console.log('📄 Generando PDF del día con ' + resUnicos.length + ' reservaciones');
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;left:0;top:100%;width:216mm;height:100vh;border:0;background:#fff;z-index:-1;';
+  document.body.appendChild(iframe);
+  const idoc = iframe.contentDocument || iframe.contentWindow.document;
+  idoc.open();
+  idoc.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${styleCss}</style></head><body><div id="pdf-root">${paginasHTML.join('')}</div></body></html>`);
+  idoc.close();
 
   setTimeout(() => {
+    const root = idoc.getElementById('pdf-root');
+    if (!root || !root.innerHTML.trim()) {
+      console.error('PDF root vacío');
+      alert('Error: el contenido del PDF está vacío. Intentá de nuevo.');
+      iframe.remove();
+      return;
+    }
+    console.log('📄 Root listo, ' + root.children.length + ' páginas. Generando...');
     const opt = {
       margin: 0,
       filename: 'Servicios_' + f + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true, windowWidth: 816 },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['css','legacy'], before: '.pagina' }
     };
-    html2pdf().set(opt).from(bodyDiv).save().then(() => {
-      container.remove();
-    }).catch((e) => { console.error('PDF error:', e); container.remove(); alert('Error generando PDF: ' + (e.message || e)); });
-  }, 500);
+    html2pdf().set(opt).from(root).save().then(() => {
+      console.log('✅ PDF generado correctamente');
+      iframe.remove();
+    }).catch((e) => {
+      console.error('❌ PDF error:', e);
+      iframe.remove();
+      alert('Error generando PDF: ' + (e.message || e));
+    });
+  }, 700);
 }
 
 // ==================== AGENDA GRID ====================
@@ -4096,45 +4108,42 @@ function imprimirPDF() {
   if (window._pdfMode === 'download') {
     window._pdfMode = null;
     if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
-    // FIX PDF en blanco: usar DOMParser en vez de regex para extraer <style> y <body>
-    // (la regex greedy /<body>([\s\S]*)<\/body>/ puede fallar silenciosamente)
-    let styleText = '', bodyHTML = '';
-    try {
-      const doc = new DOMParser().parseFromString(fullHtml, 'text/html');
-      styleText = doc.querySelector('style')?.textContent || '';
-      bodyHTML = doc.body?.innerHTML || '';
-    } catch(e) {
-      console.warn('DOMParser falló, fallback a regex:', e);
-      const sm = fullHtml.match(/<style>([\s\S]*?)<\/style>/);
-      const bm = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/);
-      styleText = sm ? sm[1] : '';
-      bodyHTML = bm ? bm[1] : '';
-    }
-    if (!bodyHTML.trim()) { alert('⚠️ Error generando el PDF: contenido vacío. Intentá de nuevo.'); return; }
-
-    const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;z-index:-1;';
-    const styleEl = document.createElement('style');
-    styleEl.textContent = styleText;
-    container.appendChild(styleEl);
-    const bodyDiv = document.createElement('div');
-    bodyDiv.innerHTML = bodyHTML;
-    container.appendChild(bodyDiv);
-    document.body.appendChild(container);
+    // FIX PDF en blanco (v21): usar iframe aislado — método más robusto que div off-screen
+    console.log('📄 Generando PDF individual: ' + r.codigo);
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;left:0;top:100%;width:216mm;height:100vh;border:0;background:#fff;z-index:-1;';
+    document.body.appendChild(iframe);
+    const idoc = iframe.contentDocument || iframe.contentWindow.document;
+    idoc.open();
+    idoc.write(fullHtml.replace('</body>', '<script>document.body.id="pdf-root";<\/script></body>'));
+    idoc.close();
 
     setTimeout(() => {
+      const root = idoc.body;
+      if (!root || !root.innerHTML.trim()) {
+        console.error('PDF body vacío');
+        alert('Error: el contenido del PDF está vacío. Intentá de nuevo.');
+        iframe.remove();
+        return;
+      }
+      console.log('📄 PDF listo. Generando...');
       const opt = {
         margin: 0,
         filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true, windowWidth: 816 },
         jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
         pagebreak: { mode: ['css','legacy'] }
       };
-      html2pdf().set(opt).from(bodyDiv).save().then(() => {
-        container.remove();
-      }).catch((e) => { console.error('PDF error:', e); container.remove(); alert('Error generando PDF: ' + (e.message || e)); });
-    }, 500);
+      html2pdf().set(opt).from(root).save().then(() => {
+        console.log('✅ PDF individual generado');
+        iframe.remove();
+      }).catch((e) => {
+        console.error('❌ PDF error:', e);
+        iframe.remove();
+        alert('Error generando PDF: ' + (e.message || e));
+      });
+    }, 700);
     return;
   }
   const w = window.open('','_blank');
