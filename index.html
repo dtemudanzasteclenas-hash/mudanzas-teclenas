@@ -2087,7 +2087,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-21-v22';
+const APP_VERSION = '2026-04-21-v23';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2480,43 +2480,53 @@ function imprimirAgendaDia() {
 
   if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
 
-  // FIX PDF en blanco (v22): container VISIBLE cubierto por loader — único método que funciona confiable
-  // html2canvas necesita elementos reales en el viewport. Los enfoques off-screen/iframe fallan.
+  // FIX PDF en blanco (v23): CSS al <head> del documento principal (no dentro del container)
+  // html2canvas NO aplica <style> tags internos del elemento que captura
+  // Clases prefijadas con mt-pdf- para aislar del CSS principal
   console.log('📄 Generando PDF del día con ' + resUnicos.length + ' reservaciones');
 
+  // Prefijar clases en CSS y HTML para evitar colisiones con el CSS principal del app
+  const cssPrefijado = styleCss.replace(/\.(pagina|bloque|top-bar|empresa-blk|empresa-tel|codigo-blk|cod-lbl|cod-val|logo-text-print|seccion-titulo|conf-titulo|info-table|lbl|val-big|val|addr|obs-box|obs-lbl|obs-texto|conf-body|conf-texto|firma-row|firma-box)\b/g, '.mt-pdf-$1');
+  const htmlPrefijado = paginasHTML.join('').replace(/class="([^"]+)"/g, (m, clases) => {
+    const nuevos = clases.split(/\s+/).filter(Boolean).map(c => 'mt-pdf-' + c).join(' ');
+    return 'class="' + nuevos + '"';
+  });
+
+  // CRÍTICO: style al <head> del documento principal para que html2canvas lo vea
+  const styleEl = document.createElement('style');
+  styleEl.id = 'mt-pdf-style';
+  styleEl.textContent = cssPrefijado;
+  document.head.appendChild(styleEl);
+
+  // Loader overlay sobre todo (cubre al usuario)
   const loader = document.createElement('div');
   loader.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);color:#fff;display:flex;align-items:center;justify-content:center;z-index:2147483647;font-family:Arial,sans-serif;font-size:22px;font-weight:700;';
   loader.innerHTML = '📄 Generando PDF... por favor espera';
   document.body.appendChild(loader);
 
+  // Container visible (debajo del loader)
   const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;top:0;left:0;width:816px;background:#fff;z-index:2147483646;overflow:visible;';
-  const styleEl = document.createElement('style');
-  styleEl.textContent = styleCss;
-  container.appendChild(styleEl);
-  const contentDiv = document.createElement('div');
-  contentDiv.innerHTML = paginasHTML.join('');
-  container.appendChild(contentDiv);
+  container.style.cssText = 'position:fixed;top:0;left:0;width:816px;background:#fff;z-index:2147483646;font-family:Arial,Helvetica,sans-serif;color:#000;';
+  container.innerHTML = htmlPrefijado;
   document.body.appendChild(container);
 
   setTimeout(() => {
-    console.log('📄 Container: ' + container.offsetWidth + 'x' + container.offsetHeight + 'px, paginas: ' + contentDiv.children.length);
+    console.log('📄 Container: ' + container.offsetWidth + 'x' + container.offsetHeight + 'px, páginas: ' + container.children.length);
     const opt = {
       margin: 0,
       filename: 'Servicios_' + f + '.pdf',
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['css','legacy'], before: '.pagina' }
+      pagebreak: { mode: ['css','legacy'], before: '.mt-pdf-pagina' }
     };
+    const cleanup = () => { try { container.remove(); loader.remove(); styleEl.remove(); } catch(e){} };
     html2pdf().set(opt).from(container).save().then(() => {
       console.log('✅ PDF del día generado');
-      container.remove();
-      loader.remove();
+      cleanup();
     }).catch((e) => {
       console.error('❌ PDF error:', e);
-      container.remove();
-      loader.remove();
+      cleanup();
       alert('Error generando PDF: ' + (e.message || e));
     });
   }, 600);
@@ -4122,6 +4132,20 @@ function imprimirPDF() {
     } catch(e) { console.warn('DOMParser err:', e); }
     if (!bodyHTML.trim()) { alert('Error: contenido vacío del PDF.'); return; }
 
+    // Prefijar clases con mt-pdf- para evitar colisión con CSS principal
+    const styleTextPref = styleText.replace(/\.(pagina|bloque|top-bar|empresa-blk|empresa-tel|codigo-blk|cod-lbl|cod-val|logo-text-print|seccion-titulo|conf-titulo|info-table|lbl|val-big|val|addr|obs-box|obs-lbl|obs-texto|conf-body|conf-texto|firma-row|firma-box)\b/g, '.mt-pdf-$1');
+    const bodyHTMLPref = bodyHTML.replace(/class="([^"]+)"/g, (m, clases) => {
+      const nuevos = clases.split(/\s+/).filter(Boolean).map(c => 'mt-pdf-' + c).join(' ');
+      return 'class="' + nuevos + '"';
+    });
+
+    // CRÍTICO: style en <head> del documento principal, no dentro del container
+    // (html2canvas no aplica <style> tags internos)
+    const styleEl = document.createElement('style');
+    styleEl.id = 'mt-pdf-style-individual';
+    styleEl.textContent = styleTextPref;
+    document.head.appendChild(styleEl);
+
     // Loader visible al usuario
     const loader = document.createElement('div');
     loader.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);color:#fff;display:flex;align-items:center;justify-content:center;z-index:2147483647;font-family:Arial,sans-serif;font-size:22px;font-weight:700;';
@@ -4130,17 +4154,12 @@ function imprimirPDF() {
 
     // Container visible (debajo del loader) para que html2canvas lo capture
     const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;top:0;left:0;width:816px;background:#fff;z-index:2147483646;overflow:visible;';
-    const styleEl = document.createElement('style');
-    styleEl.textContent = styleText;
-    container.appendChild(styleEl);
-    const contentDiv = document.createElement('div');
-    contentDiv.innerHTML = bodyHTML;
-    container.appendChild(contentDiv);
+    container.style.cssText = 'position:fixed;top:0;left:0;width:816px;background:#fff;z-index:2147483646;font-family:Arial,Helvetica,sans-serif;color:#000;';
+    container.innerHTML = bodyHTMLPref;
     document.body.appendChild(container);
 
     setTimeout(() => {
-      console.log('📄 Container: ' + container.offsetWidth + 'x' + container.offsetHeight + 'px');
+      console.log('📄 Container individual: ' + container.offsetWidth + 'x' + container.offsetHeight + 'px');
       const opt = {
         margin: 0,
         filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
@@ -4149,12 +4168,13 @@ function imprimirPDF() {
         jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
         pagebreak: { mode: ['css','legacy'] }
       };
+      const cleanup = () => { try { container.remove(); loader.remove(); styleEl.remove(); } catch(e){} };
       html2pdf().set(opt).from(container).save().then(() => {
         console.log('✅ PDF individual generado');
-        container.remove(); loader.remove();
+        cleanup();
       }).catch((e) => {
         console.error('❌ PDF error:', e);
-        container.remove(); loader.remove();
+        cleanup();
         alert('Error generando PDF: ' + (e.message || e));
       });
     }, 600);
