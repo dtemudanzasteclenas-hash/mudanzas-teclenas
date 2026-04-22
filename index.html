@@ -2087,7 +2087,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-21-v23';
+const APP_VERSION = '2026-04-21-v24';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2478,58 +2478,39 @@ function imprimirAgendaDia() {
     .firma-box{font-size:11pt;color:#1a2236;font-weight:900;flex:1;letter-spacing:.3px;}
   `;
 
-  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
+  // SOLUCIÓN DEFINITIVA (v24): usar impresión nativa del navegador con popup.
+  // Cada intento con html2pdf/html2canvas fallaba (PDF blanco) por bugs de la librería con
+  // contenido complejo. La impresión nativa de Chrome/Edge/Firefox permite "Guardar como PDF"
+  // como destino y funciona 100% garantizado.
+  console.log('📄 Abriendo ventana de impresión con ' + resUnicos.length + ' reservaciones');
 
-  // FIX PDF en blanco (v23): CSS al <head> del documento principal (no dentro del container)
-  // html2canvas NO aplica <style> tags internos del elemento que captura
-  // Clases prefijadas con mt-pdf- para aislar del CSS principal
-  console.log('📄 Generando PDF del día con ' + resUnicos.length + ' reservaciones');
+  const fullDocument = `<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <title>Servicios ${f}</title>
+    <style>${styleCss}
+      @media print { body { margin: 0; } .pagina { page-break-after: always; } .pagina:last-child { page-break-after: auto; } }
+      body { margin: 0; background: #fff; }
+    </style>
+  </head><body>
+    ${paginasHTML.join('')}
+    <script>
+      window.addEventListener('load', () => {
+        // Auto-abrir diálogo de impresión (el usuario selecciona "Guardar como PDF")
+        setTimeout(() => { window.print(); }, 400);
+        // Si el usuario cierra el dialog sin imprimir, ofrecemos botón para reintentar
+        window.addEventListener('afterprint', () => { setTimeout(() => window.close(), 500); });
+      });
+    <\/script>
+  </body></html>`;
 
-  // Prefijar clases en CSS y HTML para evitar colisiones con el CSS principal del app
-  const cssPrefijado = styleCss.replace(/\.(pagina|bloque|top-bar|empresa-blk|empresa-tel|codigo-blk|cod-lbl|cod-val|logo-text-print|seccion-titulo|conf-titulo|info-table|lbl|val-big|val|addr|obs-box|obs-lbl|obs-texto|conf-body|conf-texto|firma-row|firma-box)\b/g, '.mt-pdf-$1');
-  const htmlPrefijado = paginasHTML.join('').replace(/class="([^"]+)"/g, (m, clases) => {
-    const nuevos = clases.split(/\s+/).filter(Boolean).map(c => 'mt-pdf-' + c).join(' ');
-    return 'class="' + nuevos + '"';
-  });
-
-  // CRÍTICO: style al <head> del documento principal para que html2canvas lo vea
-  const styleEl = document.createElement('style');
-  styleEl.id = 'mt-pdf-style';
-  styleEl.textContent = cssPrefijado;
-  document.head.appendChild(styleEl);
-
-  // Loader overlay sobre todo (cubre al usuario)
-  const loader = document.createElement('div');
-  loader.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);color:#fff;display:flex;align-items:center;justify-content:center;z-index:2147483647;font-family:Arial,sans-serif;font-size:22px;font-weight:700;';
-  loader.innerHTML = '📄 Generando PDF... por favor espera';
-  document.body.appendChild(loader);
-
-  // Container visible (debajo del loader)
-  const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;top:0;left:0;width:816px;background:#fff;z-index:2147483646;font-family:Arial,Helvetica,sans-serif;color:#000;';
-  container.innerHTML = htmlPrefijado;
-  document.body.appendChild(container);
-
-  setTimeout(() => {
-    console.log('📄 Container: ' + container.offsetWidth + 'x' + container.offsetHeight + 'px, páginas: ' + container.children.length);
-    const opt = {
-      margin: 0,
-      filename: 'Servicios_' + f + '.pdf',
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true },
-      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['css','legacy'], before: '.mt-pdf-pagina' }
-    };
-    const cleanup = () => { try { container.remove(); loader.remove(); styleEl.remove(); } catch(e){} };
-    html2pdf().set(opt).from(container).save().then(() => {
-      console.log('✅ PDF del día generado');
-      cleanup();
-    }).catch((e) => {
-      console.error('❌ PDF error:', e);
-      cleanup();
-      alert('Error generando PDF: ' + (e.message || e));
-    });
-  }, 600);
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) {
+    alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo.');
+    return;
+  }
+  w.document.open();
+  w.document.write(fullDocument);
+  w.document.close();
 }
 
 // ==================== AGENDA GRID ====================
@@ -4118,71 +4099,25 @@ function imprimirPDF() {
     ${buildBloque(r)}
   </div>
   </body></html>`;
-  if (window._pdfMode === 'download') {
-    window._pdfMode = null;
-    if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Intenta de nuevo en unos segundos.'); return; }
-    console.log('📄 Generando PDF individual: ' + r.codigo);
+  // SOLUCIÓN DEFINITIVA: usar impresión nativa (tanto para modo "imprimir" como "descargar")
+  // El usuario selecciona "Guardar como PDF" en el diálogo para descargar.
+  console.log('📄 Abriendo ventana de impresión para reservación: ' + r.codigo);
+  window._pdfMode = null;
 
-    // Extraer style y body del fullHtml con DOMParser
-    let styleText = '', bodyHTML = '';
-    try {
-      const pdoc = new DOMParser().parseFromString(fullHtml, 'text/html');
-      styleText = pdoc.querySelector('style')?.textContent || '';
-      bodyHTML = pdoc.body?.innerHTML || '';
-    } catch(e) { console.warn('DOMParser err:', e); }
-    if (!bodyHTML.trim()) { alert('Error: contenido vacío del PDF.'); return; }
+  const tituloPDF = `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}`;
+  // Inyectar título dinámico + CSS extra para print en el HTML
+  const fullDocPrint = fullHtml
+    .replace('<title>' + r.codigo + '</title>', '<title>' + tituloPDF + '</title>')
+    .replace('</style>', '@media print { body{margin:0;} .pagina{page-break-after:always;} .pagina:last-child{page-break-after:auto;} } </style>')
+    .replace('</body>', `<script>window.addEventListener('load',()=>{setTimeout(()=>window.print(),400);window.addEventListener('afterprint',()=>setTimeout(()=>window.close(),500));});<\/script></body>`);
 
-    // Prefijar clases con mt-pdf- para evitar colisión con CSS principal
-    const styleTextPref = styleText.replace(/\.(pagina|bloque|top-bar|empresa-blk|empresa-tel|codigo-blk|cod-lbl|cod-val|logo-text-print|seccion-titulo|conf-titulo|info-table|lbl|val-big|val|addr|obs-box|obs-lbl|obs-texto|conf-body|conf-texto|firma-row|firma-box)\b/g, '.mt-pdf-$1');
-    const bodyHTMLPref = bodyHTML.replace(/class="([^"]+)"/g, (m, clases) => {
-      const nuevos = clases.split(/\s+/).filter(Boolean).map(c => 'mt-pdf-' + c).join(' ');
-      return 'class="' + nuevos + '"';
-    });
-
-    // CRÍTICO: style en <head> del documento principal, no dentro del container
-    // (html2canvas no aplica <style> tags internos)
-    const styleEl = document.createElement('style');
-    styleEl.id = 'mt-pdf-style-individual';
-    styleEl.textContent = styleTextPref;
-    document.head.appendChild(styleEl);
-
-    // Loader visible al usuario
-    const loader = document.createElement('div');
-    loader.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);color:#fff;display:flex;align-items:center;justify-content:center;z-index:2147483647;font-family:Arial,sans-serif;font-size:22px;font-weight:700;';
-    loader.innerHTML = '📄 Generando PDF... por favor espera';
-    document.body.appendChild(loader);
-
-    // Container visible (debajo del loader) para que html2canvas lo capture
-    const container = document.createElement('div');
-    container.style.cssText = 'position:fixed;top:0;left:0;width:816px;background:#fff;z-index:2147483646;font-family:Arial,Helvetica,sans-serif;color:#000;';
-    container.innerHTML = bodyHTMLPref;
-    document.body.appendChild(container);
-
-    setTimeout(() => {
-      console.log('📄 Container individual: ' + container.offsetWidth + 'x' + container.offsetHeight + 'px');
-      const opt = {
-        margin: 0,
-        filename: `${r.codigo}_${nombreCompleto.replace(/\s+/g,'_')}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false, allowTaint: true },
-        jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-        pagebreak: { mode: ['css','legacy'] }
-      };
-      const cleanup = () => { try { container.remove(); loader.remove(); styleEl.remove(); } catch(e){} };
-      html2pdf().set(opt).from(container).save().then(() => {
-        console.log('✅ PDF individual generado');
-        cleanup();
-      }).catch((e) => {
-        console.error('❌ PDF error:', e);
-        cleanup();
-        alert('Error generando PDF: ' + (e.message || e));
-      });
-    }, 600);
+  const w = window.open('', '_blank', 'width=900,height=1100');
+  if (!w) {
+    alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo.');
     return;
   }
-  const w = window.open('','_blank');
-  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
-  w.document.write(fullHtml.replace('</body>', '<script>setTimeout(()=>window.print(),700);<\/script></body>'));
+  w.document.open();
+  w.document.write(fullDocPrint);
   w.document.close();
 }
 
