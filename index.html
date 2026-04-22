@@ -1074,7 +1074,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <div id="p-srv-bloque"></div>
         <div class="pdf-obs"><strong style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--gris2);">Observaciones:</strong><br><span id="p-obs"></span></div>
         <div class="pdf-firma">
-          <div style="margin-top:14px;">Yo: _______________________________ como encargado/a hago constar que he revisado la unidad delegada a mi servicio en su furgón y cabina al finalizar el transporte.</div>
+          <div style="margin-top:14px;">Yo: _______________________________ como cliente hago constar que he revisado la unidad entregada al finalizar el servicio y está en las mismas condiciones.</div>
           <div style="margin-top:12px;display:flex;gap:50px;">
             <div>Firma: _______________________________</div>
             <div>Costo: <strong>$<span id="p-costo"></span></strong> &nbsp;|&nbsp; <strong id="p-personal"></strong></div>
@@ -2087,7 +2087,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-21-v24';
+const APP_VERSION = '2026-04-21-v25';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2225,6 +2225,13 @@ function genCod() {
 
 // ==================== NAV ====================
 function nav(id) {
+  // Cerrar modal "ver reservación" si está abierto al cambiar de sección
+  // (previene bug donde verIdx apuntaba a reservación vieja y guardabas comentario en cliente equivocado)
+  const moVer = document.getElementById('mo-ver');
+  if (moVer && moVer.classList.contains('open')) {
+    moVer.classList.remove('open');
+    verIdx = null;
+  }
   document.querySelectorAll('.sec').forEach(s => s.classList.remove('active'));
   const sec = document.getElementById('sec-'+id);
   if (sec) sec.classList.add('active');
@@ -3246,11 +3253,15 @@ function filtrarCli() {
   );
 }
 
+// Normaliza texto para búsqueda: lowercase + sin acentos (búsqueda fuzzy)
+function _normSearch(s) {
+  return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
 function filtrarRes() {
-  const q = document.getElementById('q-res').value.toLowerCase();
+  const q = _normSearch(document.getElementById('q-res').value);
   const est = document.getElementById('q-est').value;
   const f = reservas.filter(r =>
-    (!q || (r.nombre+' '+r.apellido).toLowerCase().includes(q) || r.codigo.toLowerCase().includes(q)) &&
+    (!q || _normSearch(r.nombre+' '+r.apellido).includes(q) || _normSearch(r.codigo).includes(q) || _normSearch(r.tel||'').includes(q)) &&
     (!est || r.estado === est)
   );
   renderTable('tb-res', f, true);
@@ -3928,8 +3939,11 @@ function guardarEdicion() {
 
 function imprimirPDF() {
   const r = reservas[verIdx];
+  if (!r) { alert('⚠️ No hay reservación seleccionada.'); return; }
   const unidadFull = r.unidad === 'grande' ? `Grande${r.rampa ? ' ('+r.rampa+')' : ''}` :
                      r.unidad === 'mediano' ? 'Mediano' : 'Pequeño';
+  // Helper escape HTML para prevenir XSS (nombres/direcciones con < > etc.)
+  const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
   // Build observaciones text
   let obsLines = [];
@@ -3970,7 +3984,7 @@ function imprimirPDF() {
         </div>
         <div class="codigo-blk">
           <div class="cod-lbl">CÓDIGO</div>
-          <div class="cod-val">${r.codigo}</div>
+          <div class="cod-val">${esc(r.codigo)}</div>
         </div>
       </div>
 
@@ -3978,49 +3992,49 @@ function imprimirPDF() {
       <table class="info-table">
         <tr>
           <td class="lbl">Nombre:</td>
-          <td class="val-big" colspan="3">${nombreCompleto}</td>
+          <td class="val-big" colspan="3">${esc(nombreCompleto)}</td>
         </tr>
         <tr>
           <td class="lbl">Teléfono/s:</td>
-          <td class="val-big" colspan="3">${tels}</td>
+          <td class="val-big" colspan="3">${esc(tels)}</td>
         </tr>
         <tr>
           <td class="lbl">Lugar de carga:</td>
-          <td class="addr" colspan="3">${r.carga}</td>
+          <td class="addr" colspan="3">${esc(r.carga)}</td>
         </tr>
         <tr>
           <td class="lbl">Lugar de descarga:</td>
-          <td class="addr" colspan="3">${r.descarga}</td>
+          <td class="addr" colspan="3">${esc(r.descarga)}</td>
         </tr>
         <tr>
           <td class="lbl">Camión:</td>
-          <td class="val">${unidadFull}</td>
+          <td class="val">${esc(unidadFull)}</td>
           <td class="lbl">Precio:</td>
-          <td class="val">$${r.costo}</td>
+          <td class="val">$${esc(r.costo)}</td>
         </tr>
         <tr>
           <td class="lbl">Hora:</td>
-          <td class="val">${r.hora}</td>
+          <td class="val">${esc(r.hora)}</td>
           <td class="lbl">Fecha:</td>
-          <td class="val">${fmtFecha(r.fecha)}</td>
+          <td class="val">${esc(fmtFecha(r.fecha))}</td>
         </tr>
-        ${r.vendedor ? `<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3">${r.vendedor}</td></tr>` : ''}
+        ${r.vendedor ? `<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3">${esc(r.vendedor)}</td></tr>` : ''}
       </table>
 
-      ${obsText ? `<div class="obs-box"><span class="obs-lbl">Observaciones:</span><div class="obs-texto">${obsText.replace(/\n/g,'<br>')}</div></div>` : ''}
+      ${obsText ? `<div class="obs-box"><span class="obs-lbl">Observaciones:</span><div class="obs-texto">${esc(obsText).replace(/\n/g,'<br>')}</div></div>` : ''}
 
       <div class="seccion-titulo conf-titulo">UNIDAD REVISADA EN FURGÓN Y CABINA</div>
       <div class="conf-body">
         <div class="conf-texto">Yo: _______________________________________ como cliente hago constar que he revisado la unidad entregada al finalizar el servicio y está en las mismas condiciones.</div>
         <div class="firma-row">
           <div class="firma-box">Firma del cliente: ___________________________</div>
-          <div class="firma-box">Costo: <strong>$${r.costo}</strong></div>
+          <div class="firma-box">Costo: <strong>$${esc(r.costo)}</strong></div>
         </div>
       </div>
     </div>`;
   }
 
-  const fullHtml = `<!DOCTYPE html><html><head><title>${r.codigo}</title>
+  const fullHtml = `<!DOCTYPE html><html><head><title>${esc(r.codigo)}</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
     html,body{font-family:Arial,Helvetica,sans-serif;background:#fff;color:#000;}
@@ -6619,9 +6633,29 @@ renderNotificaciones();
 alertaPendientesUrgentes();
 
 // ==================== NOTIFICACIONES ====================
+let _notifClickOutsideHandler = null;
 function toggleNotificaciones() {
   const panel = document.getElementById('notif-panel');
-  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  const botonCampana = document.getElementById('notif-btn');
+  const abrir = panel.style.display === 'none';
+  panel.style.display = abrir ? 'block' : 'none';
+  // Cleanup listener anterior si existe
+  if (_notifClickOutsideHandler) {
+    document.removeEventListener('click', _notifClickOutsideHandler, true);
+    _notifClickOutsideHandler = null;
+  }
+  // Al abrir, registrar click-outside para cerrar
+  if (abrir) {
+    _notifClickOutsideHandler = (e) => {
+      if (!panel.contains(e.target) && (!botonCampana || !botonCampana.contains(e.target))) {
+        panel.style.display = 'none';
+        document.removeEventListener('click', _notifClickOutsideHandler, true);
+        _notifClickOutsideHandler = null;
+      }
+    };
+    // Usar capture phase y setTimeout para que no se cierre por el mismo click que abrió
+    setTimeout(() => document.addEventListener('click', _notifClickOutsideHandler, true), 10);
+  }
 }
 
 // ==================== COMISIONES ====================
