@@ -2216,7 +2216,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v30';
+const APP_VERSION = '2026-04-22-v31';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2501,7 +2501,8 @@ function agHoy() { document.getElementById('ag-fecha').valueAsDate = new Date();
 const _pdfEsc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
 // CSS unificado — mismo diseño para PDF individual y PDF del día
-// Fuentes reducidas + Observaciones con espacio expansible (flex:1)
+// AUTO-COMPACTACIÓN: cada bloque se mide y si la información no cabe en 134mm,
+// reduce fuentes progresivamente (niveles compact-1 a compact-4) hasta que quepa.
 const PDF_STYLE_CSS = `
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body{font-family:Arial,Helvetica,sans-serif;background:#fff;color:#000;}
@@ -2516,45 +2517,82 @@ const PDF_STYLE_CSS = `
   .bloque {
     width: 100%; height: 134mm;
     border: 1.5px solid #1a3a6b; border-radius: 6px;
-    padding: 4mm 5mm 3mm;
+    padding: 3.5mm 4.5mm 2.5mm;
     page-break-inside: avoid;
     display: flex; flex-direction: column;
-    gap: 2mm; overflow: hidden;
+    gap: 1.5mm; overflow: hidden;
     text-transform: uppercase;
+    /* Variables de tamaño — JS las reduce dinámicamente si el contenido no cabe */
+    --f-logo: 15pt;
+    --f-cod: 12pt;
+    --f-lbl: 8pt;
+    --f-val: 10.5pt;
+    --f-addr: 12pt;
+    --f-obs: 9.5pt;
+    --f-obs-lbl: 8pt;
+    --f-costo-lbl: 9pt;
+    --f-costo-val: 16pt;
+    --f-hombres: 9pt;
+    --gap: 1.5mm;
+    --tbl-pad: 1mm 1.3mm;
   }
   .bloque + .bloque { margin-top: 3mm; border-top: 2px dashed #1a3a6b; }
-  .top-bar{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #d42b2b;padding-bottom:1.5mm;margin-bottom:1.5mm;}
-  .logo-text-print{font-family:Arial,Helvetica,sans-serif;font-size:16pt;font-weight:900;color:#1a3a6b;line-height:1;letter-spacing:.5px;}
-  .empresa-tel{font-size:8pt;color:#333;margin-top:0.8mm;font-weight:700;}
+  .top-bar{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1.5px solid #d42b2b;padding-bottom:1.2mm;margin-bottom:1.2mm;}
+  .logo-text-print{font-family:Arial,Helvetica,sans-serif;font-size:var(--f-logo);font-weight:900;color:#1a3a6b;line-height:1;letter-spacing:.3px;}
+  .empresa-tel{font-size:7.5pt;color:#333;margin-top:0.6mm;font-weight:700;}
   .codigo-blk{text-align:right;}
-  .cod-lbl{font-size:7.5pt;font-weight:700;color:#888;letter-spacing:.05em;}
-  .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:12pt;font-weight:900;color:#d42b2b;}
-  .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:9pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.6mm;margin-bottom:1.2mm;}
+  .cod-lbl{font-size:7pt;font-weight:700;color:#888;letter-spacing:.05em;}
+  .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:var(--f-cod);font-weight:900;color:#d42b2b;}
+  .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:8.5pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.5mm;margin-bottom:1mm;}
   .info-table{width:100%;border-collapse:collapse;}
-  .info-table tr td{padding:1.1mm 1.4mm;vertical-align:top;border:none;}
-  .info-table .lbl{font-weight:700;color:#555;white-space:nowrap;width:30mm;font-size:8.5pt;letter-spacing:.03em;}
-  .info-table .val{color:#1a3a6b;font-weight:900;font-size:11pt;line-height:1.25;word-break:break-word;white-space:normal;}
-  .info-table .val-big{color:#1a3a6b;font-weight:900;font-size:13pt;line-height:1.2;word-break:break-word;white-space:normal;letter-spacing:.3px;}
-  .info-table .addr{color:#1a3a6b;font-weight:900;font-size:13pt;line-height:1.2;word-break:break-word;white-space:normal;letter-spacing:.3px;}
+  .info-table tr td{padding:var(--tbl-pad);vertical-align:top;border:none;}
+  .info-table .lbl{font-weight:700;color:#555;white-space:nowrap;width:28mm;font-size:var(--f-lbl);letter-spacing:.03em;}
+  .info-table .val{color:#1a3a6b;font-weight:900;font-size:var(--f-val);line-height:1.22;word-break:break-word;white-space:normal;}
+  .info-table .val-big{color:#1a3a6b;font-weight:900;font-size:var(--f-addr);line-height:1.18;word-break:break-word;white-space:normal;letter-spacing:.2px;}
+  .info-table .addr{color:#1a3a6b;font-weight:900;font-size:var(--f-addr);line-height:1.18;word-break:break-word;white-space:normal;letter-spacing:.2px;}
 
   /* Observaciones: caja EXPANSIBLE que ocupa el espacio restante antes del costo final */
   .obs-box{
-    background:#f4f6fa;border-left:3px solid #1a3a6b;
-    padding:2mm 3mm;line-height:1.3;
+    background:#f4f6fa;border-left:2.5px solid #1a3a6b;
+    padding:1.5mm 2.5mm;line-height:1.25;
     border-radius:0 3px 3px 0;
-    margin-top:1mm;
+    margin-top:0.8mm;
     flex:1 1 auto;
-    min-height:18mm;
+    min-height:10mm;
     overflow:hidden;
     display:flex;flex-direction:column;
   }
-  .obs-lbl{font-weight:900;color:#1a3a6b;font-size:8.5pt;letter-spacing:.04em;margin-bottom:0.8mm;}
-  .obs-texto{font-size:10pt;font-weight:700;color:#1a3a6b;line-height:1.35;word-break:break-word;flex:1;}
+  .obs-lbl{font-weight:900;color:#1a3a6b;font-size:var(--f-obs-lbl);letter-spacing:.04em;margin-bottom:0.5mm;}
+  .obs-texto{font-size:var(--f-obs);font-weight:700;color:#1a3a6b;line-height:1.25;word-break:break-word;flex:1;}
 
-  .costo-final{display:flex;justify-content:space-between;align-items:center;padding:2.5mm 4mm;background:#1a3a6b;color:#fff;border-radius:4px;margin-top:1mm;flex-shrink:0;}
-  .costo-lbl{font-size:10pt;font-weight:700;letter-spacing:.08em;}
-  .costo-val{font-family:Arial,Helvetica,sans-serif;font-size:18pt;font-weight:900;letter-spacing:.5px;}
-  .hombres{font-size:10pt;font-weight:900;letter-spacing:.05em;}
+  .costo-final{display:flex;justify-content:space-between;align-items:center;padding:2mm 3.5mm;background:#1a3a6b;color:#fff;border-radius:4px;margin-top:0.8mm;flex-shrink:0;}
+  .costo-lbl{font-size:var(--f-costo-lbl);font-weight:700;letter-spacing:.08em;}
+  .costo-val{font-family:Arial,Helvetica,sans-serif;font-size:var(--f-costo-val);font-weight:900;letter-spacing:.4px;}
+  .hombres{font-size:var(--f-hombres);font-weight:900;letter-spacing:.05em;}
+
+  /* NIVELES DE COMPACTACIÓN — se aplican automáticamente por JS si el bloque no cabe */
+  .bloque.compact-1 {
+    --f-logo: 13pt; --f-cod: 11pt; --f-lbl: 7.5pt; --f-val: 9.5pt; --f-addr: 11pt;
+    --f-obs: 8.5pt; --f-obs-lbl: 7.5pt; --f-costo-lbl: 8.5pt; --f-costo-val: 15pt; --f-hombres: 8.5pt;
+    --gap: 1.2mm; --tbl-pad: 0.8mm 1.1mm;
+  }
+  .bloque.compact-2 {
+    --f-logo: 12pt; --f-cod: 10pt; --f-lbl: 7pt; --f-val: 8.5pt; --f-addr: 10pt;
+    --f-obs: 8pt; --f-obs-lbl: 7pt; --f-costo-lbl: 8pt; --f-costo-val: 14pt; --f-hombres: 8pt;
+    --gap: 1mm; --tbl-pad: 0.6mm 1mm;
+  }
+  .bloque.compact-3 {
+    --f-logo: 11pt; --f-cod: 9.5pt; --f-lbl: 6.5pt; --f-val: 7.5pt; --f-addr: 9pt;
+    --f-obs: 7.5pt; --f-obs-lbl: 6.5pt; --f-costo-lbl: 7.5pt; --f-costo-val: 13pt; --f-hombres: 7.5pt;
+    --gap: 0.8mm; --tbl-pad: 0.5mm 0.9mm;
+  }
+  .bloque.compact-4 {
+    --f-logo: 10pt; --f-cod: 9pt; --f-lbl: 6pt; --f-val: 7pt; --f-addr: 8pt;
+    --f-obs: 7pt; --f-obs-lbl: 6pt; --f-costo-lbl: 7pt; --f-costo-val: 12pt; --f-hombres: 7pt;
+    --gap: 0.6mm; --tbl-pad: 0.4mm 0.8mm;
+  }
+  .bloque { gap: var(--gap); }
+
   @media print { body{margin:0;background:#fff;} }
 `;
 
@@ -2644,8 +2682,32 @@ function pdfAbrirVentanaImpresion(titulo, paginasHTML) {
   </head><body>
     ${paginasHTML}
     <script>
+      // AUTO-COMPACTACIÓN: cada bloque se mide y si su contenido no cabe en la altura
+      // designada (134mm), se aplica un nivel de compactación que reduce fuentes.
+      // Niveles 0 (default) → 1 → 2 → 3 → 4 (máxima compactación). Cada bloque se ajusta individualmente.
+      function autoCompactarBloques() {
+        const bloques = document.querySelectorAll('.bloque');
+        bloques.forEach(bloque => {
+          let nivel = 0;
+          // Reset clase en caso de re-ejecución
+          bloque.classList.remove('compact-1','compact-2','compact-3','compact-4');
+          // Mientras el contenido no quepa, bajar a nivel más compacto (máx 4)
+          while (bloque.scrollHeight > bloque.clientHeight + 1 && nivel < 4) {
+            nivel++;
+            bloque.classList.remove('compact-1','compact-2','compact-3','compact-4');
+            bloque.classList.add('compact-' + nivel);
+          }
+          if (nivel > 0) console.log('📄 Bloque compactado al nivel ' + nivel);
+        });
+      }
       window.addEventListener('load', () => {
-        setTimeout(() => { window.print(); }, 400);
+        // Esperar a que fuentes y layout estén estables, luego auto-compactar
+        setTimeout(() => {
+          autoCompactarBloques();
+          // Llamada adicional por si el primer ajuste cambió el layout
+          setTimeout(autoCompactarBloques, 80);
+          setTimeout(() => window.print(), 300);
+        }, 200);
         window.addEventListener('afterprint', () => setTimeout(() => window.close(), 500));
       });
     <\/script>
