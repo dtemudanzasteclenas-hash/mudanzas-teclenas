@@ -1186,6 +1186,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <div class="pdf-row">
           <div class="pdf-f"><label>Nombre</label><div class="v" id="p-nom"></div></div>
           <div class="pdf-f"><label>Teléfono</label><div class="v" id="p-tel"></div></div>
+          <div class="pdf-f"><label>Costo</label><div class="v" id="p-costo-top" style="color:#16a34a;font-weight:800;">$—</div></div>
           <div class="pdf-f"><label>Tipo de cliente</label><div class="v" id="p-tipo-cliente"></div></div>
         </div>
         <div class="pdf-row">
@@ -2222,7 +2223,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v33';
+const APP_VERSION = '2026-04-22-v34';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3971,8 +3972,13 @@ function verRes(idx) {
   document.getElementById('p-unidad').textContent = unidadFull;
   document.getElementById('p-carga').textContent = r.carga;
   document.getElementById('p-desc').textContent = r.descarga;
-  document.getElementById('p-costo').textContent = r.costo;
-  document.getElementById('p-personal').textContent = r.personal+' hombres totalmente capacitados';
+  // Costo: se muestra al lado del teléfono (arriba) y también en la sección de firma (abajo, para consistencia con impresión)
+  const costoNum = parseFloat(r.costo);
+  const costoDisplay = isNaN(costoNum) ? '0.00' : costoNum.toFixed(2);
+  document.getElementById('p-costo').textContent = costoDisplay;
+  const pCostoTop = document.getElementById('p-costo-top');
+  if (pCostoTop) pCostoTop.textContent = '$' + costoDisplay;
+  document.getElementById('p-personal').textContent = (r.personal || '0') + ' hombres totalmente capacitados';
   
   // Servicios adicionales en PDF
   let srvBloque = '';
