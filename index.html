@@ -2216,7 +2216,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v29';
+const APP_VERSION = '2026-04-22-v30';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2833,8 +2833,18 @@ function renderAgenda() {
         // Caso 1: arrastre desde banner "Sin ubicar"
         if (agDragSource.fromSinUbicar && agDragSource.codigo) {
           if (agGrid[f]?.cells?.[dstKey]) {
-            alert('Esa celda ya está ocupada. Arrastra a una celda vacía.');
+            alert('Esa celda ya está ocupada. Arrastrá a una celda vacía.');
             agDragSource = null; return;
+          }
+          // Si la reservación está cancelada, confirmar reactivación antes de ubicarla
+          const resDrag = reservas.find(rv => rv.codigo === agDragSource.codigo);
+          if (resDrag && resDrag.estado === 'cancelado') {
+            const nombre = `${resDrag.nombre} ${resDrag.apellido||''}`.trim();
+            if (!confirm(`⚠️ "${nombre}" está CANCELADA.\n\n¿Reactivarla y ubicarla en esta celda?`)) {
+              agDragSource = null; return;
+            }
+            resDrag.estado = 'confirmado';
+            saveSingle(resDrag);
           }
           if (!agGrid[f]) agGrid[f] = { numCols: (getAgDay(f).numCols), cells: {}, hidden: [] };
           agGrid[f].cells[dstKey] = agDragSource.codigo;
@@ -3010,31 +3020,54 @@ function renderSinUbicar(f) {
   const day = getAgDay(f);
   const hidden = new Set(day.hidden || []);
   const placedCodes = new Set(Object.values(day.cells).filter(Boolean));
+  // INCLUIR canceladas: aparecen en el banner con label "(CANCELADA)" hasta que se reubiquen
   const sinUbicar = reservas.filter(r =>
-    r.fecha === f && r.estado !== 'cancelado' && !placedCodes.has(r.codigo) && !hidden.has(r.codigo)
+    r.fecha === f && !placedCodes.has(r.codigo) && !hidden.has(r.codigo)
   );
   if (sinUbicar.length === 0) { banner.style.display = 'none'; return; }
   banner.style.display = 'block';
+  // Contadores por tipo para el encabezado
+  const nCanceladas = sinUbicar.filter(r => r.estado === 'cancelado').length;
+  const nActivas = sinUbicar.length - nCanceladas;
   const chips = sinUbicar.map(r => {
-    const bg = r.camionEspecifico ? '#6d28d9'
+    const esCancelada = r.estado === 'cancelado';
+    // Canceladas: fondo gris oscuro, texto blanco tachado
+    // Activas: color del camión
+    const bg = esCancelada ? '#6b7280'
+             : r.camionEspecifico ? '#6d28d9'
              : r.unidad === 'grande' ? '#c0392b'
              : r.unidad === 'mediano' ? '#e67e22'
              : '#27ae60';
     const nombre = `${r.nombre} ${r.apellido||''}`.trim();
+    const textDecor = esCancelada ? 'text-decoration:line-through;' : '';
+    const opacity = esCancelada ? 'opacity:.85;' : '';
+    const etiquetaCancelada = esCancelada
+      ? '<span style="background:#991b1b;color:#fff;font-size:10px;font-weight:900;padding:1px 6px;border-radius:10px;letter-spacing:.5px;text-decoration:none;margin-left:4px;">CANCELADA</span>'
+      : '';
     return `<div draggable="true"
         data-codigo="${r.codigo}"
         onclick="verRes(${reservas.indexOf(r)})"
         ondragstart="agSinUbicarDragStart(event,'${r.codigo}')"
-        style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:grab;margin:3px;">
-        <span>📦 ${nombre}</span>
-        <span style="opacity:.85;font-size:11px;">${r.hora}</span>
+        style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:grab;margin:3px;${opacity}"
+        title="${esCancelada ? 'Cancelada. Arrastrá a una celda para reactivarla.' : 'Arrastrá a una celda vacía.'}">
+        <span style="${textDecor}">📦 ${nombre}</span>
+        <span style="opacity:.85;font-size:11px;${textDecor}">${r.hora}</span>
+        ${etiquetaCancelada}
       </div>`;
   }).join('');
+  let encabezado = '';
+  if (nActivas > 0 && nCanceladas > 0) {
+    encabezado = `⚠️ ${nActivas} sin ubicar + ${nCanceladas} cancelada${nCanceladas>1?'s':''}:`;
+  } else if (nCanceladas > 0) {
+    encabezado = `🚫 ${nCanceladas} cancelada${nCanceladas>1?'s':''}:`;
+  } else {
+    encabezado = `⚠️ ${nActivas} sin ubicar:`;
+  }
   banner.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div style="font-size:13px;font-weight:800;color:#92400e;">⚠️ ${sinUbicar.length} sin ubicar:</div>
+      <div style="font-size:13px;font-weight:800;color:#92400e;">${encabezado}</div>
       <div style="flex:1;">${chips}</div>
-      <div style="font-size:11px;color:#92400e;font-style:italic;">Arrastra a una celda vacía del grid</div>
+      <div style="font-size:11px;color:#92400e;font-style:italic;">Arrastrá a celda vacía</div>
     </div>`;
 }
 
@@ -4141,15 +4174,43 @@ function copiarWA() {
 
 function cambiarEst(est) {
   if (verIdx === null) return;
-  reservas[verIdx].estado = est;
-  saveSingle(reservas[verIdx]); renderAll();
+  const r = reservas[verIdx];
+  const nombre = `${r.nombre} ${r.apellido||''}`.trim();
+  // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
+  if (est === 'cancelado') {
+    if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+    // Quitar de agGrid y pdData (mismo comportamiento que eliminar())
+    const agDay = agGrid[r.fecha];
+    if (agDay?.cells) {
+      Object.keys(agDay.cells).forEach(k => { if (agDay.cells[k] === r.codigo) delete agDay.cells[k]; });
+      saveAgGrid();
+    }
+    const pdDay = pdData[r.fecha];
+    if (pdDay?.columnas) {
+      pdDay.columnas.forEach(col => {
+        [...HORARIOS, 'otra'].forEach(h => {
+          if (col.slots?.[h]?.reservaCodigo === r.codigo) {
+            col.slots[h].reservaCodigo = '';
+            col.slots[h].costo = '';
+          }
+        });
+      });
+      savePD();
+    }
+  }
+  r.estado = est;
+  saveSingle(r);
+  renderAll();
+  try { renderAgenda(); } catch(e) {}
+  try { renderPD(); } catch(e) {}
   alert(`✅ Estado cambiado a: ${est}`);
   closeVer();
 }
 
 function eliminar(idx) {
   const r = reservas[idx];
-  if (!confirm(`¿Cancelar la reservación de ${r.nombre} ${r.apellido || ''}?\n\nLa reservación quedará marcada como cancelada pero NO se eliminará del sistema.`)) return;
+  const nombre = `${r.nombre} ${r.apellido || ''}`.trim();
+  if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
   r.estado = 'cancelado';
   // Quitar de la agenda visual (si estaba ubicada) para que no confunda
   const agDay = agGrid[r.fecha];
