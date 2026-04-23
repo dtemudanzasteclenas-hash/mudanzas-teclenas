@@ -15,8 +15,9 @@
 body{font-family:'Barlow',sans-serif;background:var(--gris0);color:var(--texto);min-height:100vh;}
 
 /* HEADER */
-header{background:var(--azul);color:#fff;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:60px;box-shadow:0 2px 12px rgba(0,0,0,.2);position:sticky;top:0;z-index:200;}
-.logo{display:flex;align-items:center;gap:10px;}
+header{background:var(--azul);color:#fff;padding:0 24px;display:flex;align-items:center;gap:12px;height:60px;box-shadow:0 2px 12px rgba(0,0,0,.2);position:sticky;top:0;z-index:200;}
+.logo{display:flex;align-items:center;gap:10px;margin-right:auto;}
+.h-nav{display:flex;align-items:center;gap:4px;}
 .logo-icon{background:var(--rojo);border-radius:7px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;color:#fff;}
 .logo-txt{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;line-height:1.1;}
 .logo-txt span{color:var(--rojo);}
@@ -370,6 +371,128 @@ body.tv-mode .tv-pz-total{
 }
 body.tv-mode .tv-pz-total-lbl{font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:1px;}
 body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-spacing:.5px;}
+
+/* ==================== RESPONSIVE MOBILE (max-width: 820px) ==================== */
+/* Diseño adaptado para celular SIN alterar el comportamiento desktop.
+   Se activa automáticamente en pantallas ≤820px de ancho. */
+
+/* Botón hamburguesa (menú móvil) — oculto en desktop */
+.menu-toggle{display:none;}
+
+@media (max-width: 820px) {
+  /* HEADER: compacto */
+  .h{padding:8px 12px!important;min-height:50px;flex-wrap:nowrap;gap:6px;}
+  .h-nav{display:none!important;} /* ocultar nav horizontal en móvil */
+  .menu-toggle{
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(255,255,255,.15);border:none;color:#fff;
+    width:38px;height:38px;border-radius:8px;font-size:22px;cursor:pointer;
+    flex-shrink:0;
+  }
+  .h-logo{font-size:15px!important;}
+  .user-badge{margin-left:auto!important;padding:4px 8px!important;gap:5px!important;}
+  .user-avatar{width:28px!important;height:28px!important;font-size:12px!important;}
+  .user-name{display:none;} /* ocultar nombre en móvil, solo avatar */
+  #sync-status{font-size:9px!important;max-width:95px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #conn-dot{display:none!important;}
+  #notif-btn{width:38px;height:38px;font-size:20px;}
+
+  /* LAYOUT: sidebar se convierte en drawer deslizable */
+  .app{flex-direction:column;min-height:calc(100vh - 50px);}
+  .sidebar{
+    position:fixed;top:50px;left:-100%;height:calc(100vh - 50px);width:240px;
+    z-index:9990;transition:left .25s ease;
+    box-shadow:4px 0 16px rgba(0,0,0,.2);
+    overflow-y:auto;
+  }
+  body.menu-open .sidebar{left:0;}
+  body.menu-open::before{
+    content:'';position:fixed;inset:50px 0 0 0;z-index:9989;
+    background:rgba(0,0,0,.4);
+  }
+  .main{padding:14px 12px!important;overflow-x:hidden;}
+
+  /* SEC TITLE: más pequeño */
+  .sec-title{font-size:18px!important;margin-bottom:12px!important;flex-wrap:wrap;}
+
+  /* STATS: 2 columnas en móvil */
+  .stats{grid-template-columns:repeat(2,1fr)!important;gap:8px!important;}
+  .sc{padding:10px 12px!important;}
+  .sc-val{font-size:22px!important;}
+  .sc-lbl{font-size:9px!important;}
+  .sc-sub{font-size:9px!important;}
+
+  /* TABLAS: scroll horizontal con indicador */
+  .card{overflow-x:auto;}
+  table{min-width:600px;}
+  td, th{padding:7px 9px!important;font-size:11.5px!important;}
+
+  /* BOTONES: touch-friendly */
+  .btn{padding:9px 14px!important;font-size:13.5px!important;min-height:38px;}
+  .btn-sm{padding:6px 10px!important;font-size:11.5px!important;min-height:30px;}
+  .search-row{flex-direction:column;gap:6px;}
+  .search-row input,.search-row select{width:100%;font-size:15px!important;padding:9px 11px!important;}
+
+  /* FORMULARIOS: inputs más grandes para touch */
+  input[type="text"],input[type="tel"],input[type="email"],input[type="date"],input[type="number"],textarea,select{
+    font-size:15px!important;padding:10px 12px!important;
+  }
+  input[type="date"]{min-width:140px;}
+
+  /* MODAL: pantalla completa en móvil */
+  .mo{padding:0!important;}
+  .mo-card{
+    max-width:100%!important;width:100vw!important;height:100vh!important;
+    max-height:100vh!important;border-radius:0!important;
+    display:flex;flex-direction:column;
+  }
+  .mo-card>div:last-child{flex:1;overflow-y:auto;}
+
+  /* AGENDA SEMANAL: scroll horizontal con cards más pequeñas */
+  #ag-grid-wrap{overflow-x:auto;padding-bottom:10px;}
+  #ag-cols{gap:6px!important;}
+  #ag-cols>div{min-width:180px!important;max-width:200px!important;}
+  #ag-cols>div>div:not(:first-child){height:160px!important;} /* altura uniforme cells */
+  .ag-legend{font-size:10px!important;gap:6px!important;}
+  .ag-legend>span{font-size:10px!important;}
+  #ag-sin-ubicar{font-size:11px!important;padding:8px 10px!important;}
+
+  /* PIZARRA: cards apiladas */
+  #pd-pizarra{flex-direction:column!important;gap:12px!important;}
+  #pd-pizarra>div{min-width:100%!important;max-width:100%!important;flex:none!important;}
+
+  /* CUADERNO: 1 columna en vez de 2 */
+  #pd-tab-cuaderno>div{grid-template-columns:1fr!important;}
+
+  /* DASHBOARD table hide columnas menos importantes */
+  #tb-dash th:nth-child(5), #tb-dash td:nth-child(5),
+  #tb-dash th:nth-child(6), #tb-dash td:nth-child(6),
+  #tb-dash th:nth-child(8), #tb-dash td:nth-child(8){display:none;}
+
+  /* MODAL TV: seguir funcionando en móvil (horizontal) */
+  body.tv-mode #tv-clock{font-size:32px!important;height:50px!important;}
+  body.tv-mode #sec-agenda, body.tv-mode #sec-programacion{padding-top:55px!important;}
+  body.tv-mode #ag-grid-wrap{height:calc(100vh - 55px)!important;}
+
+  /* LOGIN screen */
+  #login-screen .login-card{padding:30px 20px!important;}
+
+  /* Toast save */
+  #save-toast{bottom:14px!important;right:14px!important;font-size:12px!important;max-width:280px!important;padding:8px 14px!important;}
+}
+
+/* Pantalla MUY pequeña (iPhone SE, etc.): simplificar más */
+@media (max-width: 380px) {
+  .stats{grid-template-columns:1fr!important;}
+  #sync-status{display:none!important;}
+  .h-logo{font-size:13px!important;}
+}
+
+/* Landscape en móvil: usar toda la altura */
+@media (max-width: 820px) and (orientation: landscape) {
+  body.tv-mode #tv-clock{font-size:28px!important;height:45px!important;}
+  #ag-cols>div>div:not(:first-child){height:130px!important;}
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -395,8 +518,9 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   </div>
 </div>
 
-<header>
-  <div class="logo">
+<header class="h">
+  <button class="menu-toggle" onclick="toggleMobileMenu()" title="Menú" aria-label="Abrir menú">☰</button>
+  <div class="logo h-logo">
     <span class="logo-text">MUDANZAS TECLEÑAS</span>
   </div>
   <div class="h-nav">
@@ -406,19 +530,20 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <button onclick="nav('programacion')">Prog. Diaria</button>
     <button onclick="nav('conciliacion')">🏦 CUSCA</button>
     <button onclick="nav('clientes')">Clientes</button>
-    <button onclick="toggleNotificaciones()" id="notif-btn" style="position:relative;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:6px 10px;border-radius:6px;transition:all .15s;">
-      🔔<span id="notif-count" style="display:none;position:absolute;top:2px;right:2px;background:#d42b2b;color:#fff;font-size:9px;font-weight:800;border-radius:50%;width:16px;height:16px;line-height:16px;text-align:center;"></span>
-    </button>
-    <div style="display:flex;align-items:center;gap:6px;margin-left:8px;">
-      <span id="sync-status" style="font-size:10px;font-weight:600;color:#6b7280;white-space:nowrap;"></span>
-      <button id="btn-sync" onclick="forceSync()" title="Sincronizar ahora" style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;">🔄</button>
-    </div>
-    <div class="user-badge" id="user-badge" style="display:none;">
-      <div class="user-avatar" id="user-avatar"></div>
-      <div style="display:flex;flex-direction:column;">
-        <span class="user-name" id="user-name-display"></span>
-        <button class="logout-btn" onclick="cerrarSesion()">Salir</button>
-      </div>
+  </div>
+  <!-- Controles globales (notif + sync + user) siempre visibles, incluso en móvil -->
+  <button onclick="toggleNotificaciones()" id="notif-btn" style="position:relative;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:6px 10px;border-radius:6px;transition:all .15s;">
+    🔔<span id="notif-count" style="display:none;position:absolute;top:2px;right:2px;background:#d42b2b;color:#fff;font-size:9px;font-weight:800;border-radius:50%;width:16px;height:16px;line-height:16px;text-align:center;"></span>
+  </button>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span id="sync-status" style="font-size:10px;font-weight:600;color:#6b7280;white-space:nowrap;"></span>
+    <button id="btn-sync" onclick="forceSync()" title="Sincronizar ahora" style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;">🔄</button>
+  </div>
+  <div class="user-badge" id="user-badge" style="display:none;">
+    <div class="user-avatar" id="user-avatar"></div>
+    <div style="display:flex;flex-direction:column;">
+      <span class="user-name" id="user-name-display"></span>
+      <button class="logout-btn" onclick="cerrarSesion()">Salir</button>
     </div>
   </div>
 </header>
@@ -2091,7 +2216,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v28';
+const APP_VERSION = '2026-04-22-v29';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2228,7 +2353,25 @@ function genCod() {
 }
 
 // ==================== NAV ====================
+// Toggle del menú móvil (sidebar como drawer deslizable)
+function toggleMobileMenu() {
+  document.body.classList.toggle('menu-open');
+}
+// Cerrar el drawer al hacer clic fuera (en el overlay oscuro)
+document.addEventListener('click', (e) => {
+  if (!document.body.classList.contains('menu-open')) return;
+  const sb = document.querySelector('.sidebar');
+  const toggle = document.querySelector('.menu-toggle');
+  if (sb && !sb.contains(e.target) && toggle && !toggle.contains(e.target)) {
+    document.body.classList.remove('menu-open');
+  }
+});
+
 function nav(id) {
+  // En móvil: cerrar el drawer al navegar a otra sección
+  if (document.body.classList.contains('menu-open')) {
+    document.body.classList.remove('menu-open');
+  }
   // Cerrar modal "ver reservación" si está abierto al cambiar de sección
   // (previene bug donde verIdx apuntaba a reservación vieja y guardabas comentario en cliente equivocado)
   const moVer = document.getElementById('mo-ver');
