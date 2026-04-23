@@ -2216,7 +2216,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v31';
+const APP_VERSION = '2026-04-22-v32';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2544,12 +2544,22 @@ const PDF_STYLE_CSS = `
   .cod-lbl{font-size:7pt;font-weight:700;color:#888;letter-spacing:.05em;}
   .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:var(--f-cod);font-weight:900;color:#d42b2b;}
   .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:8.5pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.5mm;margin-bottom:1mm;}
-  .info-table{width:100%;border-collapse:collapse;}
-  .info-table tr td{padding:var(--tbl-pad);vertical-align:top;border:none;}
-  .info-table .lbl{font-weight:700;color:#555;white-space:nowrap;width:28mm;font-size:var(--f-lbl);letter-spacing:.03em;}
+  /* Cada fila de la tabla es un "cuadro" delimitado con borde inferior para que la info
+     de cada campo se lea como una caja individual */
+  .info-table{width:100%;border-collapse:collapse;border:1px solid #d4dbe8;border-radius:3px;overflow:hidden;}
+  .info-table tr{border-bottom:1px solid #e6eaf2;}
+  .info-table tr:last-child{border-bottom:none;}
+  .info-table tr:nth-child(even){background:#fafbfd;}
+  .info-table tr td{padding:var(--tbl-pad);vertical-align:middle;border:none;border-right:1px solid #e6eaf2;}
+  .info-table tr td:last-child{border-right:none;}
+  .info-table .lbl{font-weight:700;color:#555;white-space:nowrap;width:28mm;font-size:var(--f-lbl);letter-spacing:.03em;background:#eef2f7;}
   .info-table .val{color:#1a3a6b;font-weight:900;font-size:var(--f-val);line-height:1.22;word-break:break-word;white-space:normal;}
+  /* CRUCIALES (nombre, tel, carga, descarga, hora, precio, camión): grandes, se compactan primero */
   .info-table .val-big{color:#1a3a6b;font-weight:900;font-size:var(--f-addr);line-height:1.18;word-break:break-word;white-space:normal;letter-spacing:.2px;}
   .info-table .addr{color:#1a3a6b;font-weight:900;font-size:var(--f-addr);line-height:1.18;word-break:break-word;white-space:normal;letter-spacing:.2px;}
+  /* SECUNDARIOS (fecha, vendedor): SIEMPRE pequeños y discretos, nunca se compactan */
+  .info-table .val-small{color:#555;font-weight:700;font-size:7.5pt;line-height:1.2;word-break:break-word;white-space:normal;letter-spacing:.02em;}
+  .info-table .lbl-small{font-weight:700;color:#888;white-space:nowrap;font-size:6.5pt;letter-spacing:.03em;text-transform:uppercase;}
 
   /* Observaciones: caja EXPANSIBLE que ocupa el espacio restante antes del costo final */
   .obs-box{
@@ -2645,19 +2655,22 @@ function pdfBuildBloque(r) {
 
     <div class="seccion-titulo">INFORMACIÓN</div>
     <table class="info-table">
+      <!-- CRUCIALES (grandes, se auto-compactan si hace falta espacio) -->
       <tr><td class="lbl">Nombre:</td><td class="val-big" colspan="3">${esc(nombreCompleto)}</td></tr>
       <tr><td class="lbl">Teléfono/s:</td><td class="val-big" colspan="3">${esc(r.tel)}</td></tr>
       <tr><td class="lbl">Lugar de carga:</td><td class="addr" colspan="3">${esc(r.carga)}</td></tr>
       <tr><td class="lbl">Lugar de descarga:</td><td class="addr" colspan="3">${esc(r.descarga)}</td></tr>
       <tr>
-        <td class="lbl">Camión:</td><td class="val">${esc(unidadFull)}</td>
-        <td class="lbl">Precio:</td><td class="val">$${esc(r.costo)}</td>
+        <td class="lbl">Camión:</td><td class="val-big">${esc(unidadFull)}</td>
+        <td class="lbl">Precio:</td><td class="val-big">$${esc(r.costo)}</td>
       </tr>
       <tr>
-        <td class="lbl">Hora:</td><td class="val">${esc(horas)}</td>
-        <td class="lbl">Fecha:</td><td class="val">${esc(fmtFecha(r.fecha))}</td>
+        <td class="lbl">Hora:</td><td class="val-big">${esc(horas)}</td>
+        <!-- Fecha secundaria: siempre pequeña -->
+        <td class="lbl-small">Fecha:</td><td class="val-small">${esc(fmtFecha(r.fecha))}</td>
       </tr>
-      ${r.vendedor ? `<tr><td class="lbl">Vendedor:</td><td class="val" colspan="3">${esc(r.vendedor)}</td></tr>` : ''}
+      <!-- Vendedor secundario: siempre pequeño -->
+      ${r.vendedor ? `<tr><td class="lbl-small">Vendedor:</td><td class="val-small" colspan="3">${esc(r.vendedor)}</td></tr>` : ''}
     </table>
 
     <div class="obs-box">
