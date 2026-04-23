@@ -2124,9 +2124,15 @@ function setupPinInputs() {
       }
     });
     p.addEventListener('keydown', function(e) {
-      if (e.key === 'Backspace' && !this.value && i > 0) {
-        pins[i-1].value = '';
-        pins[i-1].focus();
+      if (e.key === 'Backspace') {
+        if (this.value) {
+          // Si hay dígito, borrarlo (antes el handler no hacía nada aquí)
+          this.value = '';
+        } else if (i > 0) {
+          // Campo vacío: ir al anterior y borrarlo
+          pins[i-1].value = '';
+          pins[i-1].focus();
+        }
       }
     });
     // Seleccionar contenido al hacer focus (facilita re-escritura)
@@ -2216,7 +2222,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v32';
+const APP_VERSION = '2026-04-22-v33';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2613,6 +2619,10 @@ function pdfBuildBloque(r) {
                      r.unidad === 'mediano' ? 'Mediano' : 'Pequeño';
   const nombreCompleto = (r.nombre + ' ' + (r.apellido||'')).trim();
   const horas = r.horasOcupadas && r.horasOcupadas.length > 1 ? r.horasOcupadas.join(' + ') : r.hora;
+  // Formatear costo y personal con fallback a 0 si están vacíos (evita "$" o " HOMBRES" huérfanos)
+  const costoNum = parseFloat(r.costo);
+  const costoFmt = isNaN(costoNum) ? '0.00' : costoNum.toFixed(2);
+  const personalFmt = String(parseInt(r.personal) || 0);
 
   // Construir observaciones (obs + embalaje + empaque)
   let obsLines = [];
@@ -2662,7 +2672,7 @@ function pdfBuildBloque(r) {
       <tr><td class="lbl">Lugar de descarga:</td><td class="addr" colspan="3">${esc(r.descarga)}</td></tr>
       <tr>
         <td class="lbl">Camión:</td><td class="val-big">${esc(unidadFull)}</td>
-        <td class="lbl">Precio:</td><td class="val-big">$${esc(r.costo)}</td>
+        <td class="lbl">Precio:</td><td class="val-big">$${esc(costoFmt)}</td>
       </tr>
       <tr>
         <td class="lbl">Hora:</td><td class="val-big">${esc(horas)}</td>
@@ -2680,8 +2690,8 @@ function pdfBuildBloque(r) {
 
     <div class="costo-final">
       <span class="costo-lbl">COSTO TOTAL</span>
-      <span class="costo-val">$${esc(r.costo)}</span>
-      <span class="hombres">${esc(r.personal)} HOMBRES</span>
+      <span class="costo-val">$${esc(costoFmt)}</span>
+      <span class="hombres">${esc(personalFmt)} HOMBRES</span>
     </div>
   </div>`;
 }
@@ -3149,7 +3159,22 @@ function renderSinUbicar(f) {
 // Drag desde el chip "sin ubicar" hacia una celda vacía
 function agSinUbicarDragStart(e, codigo) {
   agDragSource = { fromSinUbicar: true, codigo };
-  e.dataTransfer.effectAllowed = 'move';
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+}
+
+// Handler táctil para móviles: como drag HTML5 no funciona bien en touch,
+// permitimos al usuario tocar un chip y luego tocar una celda vacía (simulado long-press)
+function agSinUbicarTouchStart(codigo) {
+  const r = reservas.find(rv => rv.codigo === codigo);
+  if (!r) return;
+  const nombre = (r.nombre + ' ' + (r.apellido||'')).trim();
+  agDragSource = { fromSinUbicar: true, codigo };
+  // Feedback visual: pedir al usuario que toque la celda destino
+  try {
+    if (typeof showSaveToast === 'function') {
+      showSaveToast('📱 Ahora tocá una celda vacía para ubicar "' + nombre + '"', 'warn');
+    }
+  } catch(e) {}
 }
 
 // ==================== EXPORTAR / IMPORTAR RESERVACIONES ====================
