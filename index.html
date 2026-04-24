@@ -2223,7 +2223,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-22-v34';
+const APP_VERSION = '2026-04-24-v35';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2551,6 +2551,9 @@ const PDF_STYLE_CSS = `
   .cod-lbl{font-size:7pt;font-weight:700;color:#888;letter-spacing:.05em;}
   .cod-val{font-family:Arial,Helvetica,sans-serif;font-size:var(--f-cod);font-weight:900;color:#d42b2b;}
   .seccion-titulo{font-family:Arial,Helvetica,sans-serif;font-size:8.5pt;font-weight:900;color:#1a3a6b;letter-spacing:.08em;border-bottom:1px solid #1a3a6b;padding-bottom:0.5mm;margin-bottom:1mm;}
+  /* Título "INFORMACIÓN" con badge de tipo de cliente alineado a la derecha (pequeño, fijo, no se compacta) */
+  .seccion-con-badge{display:flex;justify-content:space-between;align-items:center;gap:4mm;}
+  .tipo-cli-badge{font-family:Arial,Helvetica,sans-serif;font-size:7pt;font-weight:900;letter-spacing:.06em;padding:0.6mm 2mm;border-radius:3px;border:1px solid currentColor;text-transform:uppercase;white-space:nowrap;}
   /* Cada fila de la tabla es un "cuadro" delimitado con borde inferior para que la info
      de cada campo se lea como una caja individual */
   .info-table{width:100%;border-collapse:collapse;border:1px solid #d4dbe8;border-radius:3px;overflow:hidden;}
@@ -2624,6 +2627,15 @@ function pdfBuildBloque(r) {
   const costoNum = parseFloat(r.costo);
   const costoFmt = isNaN(costoNum) ? '0.00' : costoNum.toFixed(2);
   const personalFmt = String(parseInt(r.personal) || 0);
+  // Badge de tipo de cliente — pequeño, fijo (no se compacta), color según tipo
+  const tipoCli = r.tipoCliente || 'Consumidor Final';
+  const tipoCliColor = tipoCli === 'Crédito Fiscal' ? '#b45309'       // naranja/amber (atención: pago diferido)
+                     : tipoCli === 'Exento de IVA' ? '#16a34a'         // verde (sin IVA)
+                     : '#1a3a6b';                                      // azul (consumidor final - default)
+  const tipoCliBg    = tipoCli === 'Crédito Fiscal' ? '#fef3c7'
+                     : tipoCli === 'Exento de IVA' ? '#d1fae5'
+                     : '#e8eef9';
+  const tipoCliBadge = `<span class="tipo-cli-badge" style="background:${tipoCliBg};color:${tipoCliColor};">${esc(tipoCli.toUpperCase())}</span>`;
 
   // Construir observaciones (obs + embalaje + empaque)
   let obsLines = [];
@@ -2664,7 +2676,10 @@ function pdfBuildBloque(r) {
       </div>
     </div>
 
-    <div class="seccion-titulo">INFORMACIÓN</div>
+    <div class="seccion-titulo seccion-con-badge">
+      <span>INFORMACIÓN</span>
+      ${tipoCliBadge}
+    </div>
     <table class="info-table">
       <!-- CRUCIALES (grandes, se auto-compactan si hace falta espacio) -->
       <tr><td class="lbl">Nombre:</td><td class="val-big" colspan="3">${esc(nombreCompleto)}</td></tr>
