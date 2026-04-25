@@ -728,6 +728,8 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 
   <!-- PIZARRA -->
   <div id="pd-tab-pizarra" style="background:#f0f2f8;border:1.5px solid var(--gris1);border-top:none;border-radius:0 8px 8px 8px;padding:18px;overflow-x:auto;">
+    <!-- Banner: servicios del día que aún no están asignados a ningún equipo -->
+    <div id="pd-sin-asignar" style="display:none;background:#fffbeb;border:1.5px solid #fbbf24;border-radius:10px;padding:10px 14px;margin-bottom:14px;"></div>
     <div id="pd-pizarra" style="display:flex;gap:14px;align-items:stretch;min-height:400px;padding-bottom:8px;"></div>
     <!-- Total global pizarra -->
     <div id="pd-total-global" style="margin-top:16px;padding:14px 20px;background:#1a3a6b;border-radius:10px;color:#fff;display:flex;justify-content:space-between;align-items:center;">
@@ -2223,7 +2225,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-24-v35';
+const APP_VERSION = '2026-04-24-v36';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2800,6 +2802,8 @@ function saveAgGrid() { safeSetLS('mt_aggrid', JSON.stringify(agGrid)); syncToSu
 
 // Mapear hora personalizada al slot estándar más cercano (global)
 function mapHoraToRow(h) {
+  // Defensive: protege contra null/undefined/no-string (antes crasheaba con .match)
+  if (!h || typeof h !== 'string') return '8:00 AM';
   if (AG_ROWS.includes(h)) return h;
   const m = h.match(/(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)/i);
   if (!m) return 'Nocturno';
@@ -4547,8 +4551,60 @@ function renderPD() {
 
   if (pdTabActual==='cuaderno') renderCuaderno();
 
+  // Banner: servicios del día NO asignados a ningún equipo
+  renderPDSinAsignar(f);
+
   // Alinear filas entre columnas
   equalizePDRows();
+}
+
+// Banner para servicios del día que NO están asignados a ningún equipo de la pizarra.
+// Útil cuando Pedro nota que faltan servicios de la administración diaria — visibilidad clara.
+function renderPDSinAsignar(f) {
+  const banner = document.getElementById('pd-sin-asignar');
+  if (!banner) return;
+  const day = getDayData(f);
+  // Códigos de reservaciones que YA están asignadas a algún slot de algún equipo
+  const asignadasCodigos = new Set();
+  (day.columnas || []).forEach(col => {
+    [...HORARIOS, 'otra'].forEach(h => {
+      const cod = col.slots?.[h]?.reservaCodigo;
+      if (cod) asignadasCodigos.add(cod);
+    });
+  });
+  // Servicios del día (no canceladas) que NO están asignadas
+  const sinAsignar = reservas.filter(r =>
+    r.fecha === f &&
+    r.estado !== 'cancelado' &&
+    !asignadasCodigos.has(r.codigo)
+  );
+  if (sinAsignar.length === 0) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  // Ordenar por hora (8AM primero, luego 11AM, 2:30PM, otras al final)
+  const horaOrden = {'8:00 AM':1,'11:00 AM':2,'2:30 PM':3,'Nocturno':4};
+  sinAsignar.sort((a,b) => (horaOrden[a.hora]||5) - (horaOrden[b.hora]||5));
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const chips = sinAsignar.map(r => {
+    const colorBg = r.camionEspecifico ? '#6d28d9'
+                  : r.unidad === 'grande' ? '#c0392b'
+                  : r.unidad === 'mediano' ? '#e67e22'
+                  : '#27ae60';
+    const nombre = `${r.nombre} ${r.apellido||''}`.trim();
+    const horaTxt = r.horasOcupadas && r.horasOcupadas.length > 1 ? r.horasOcupadas.join('+') : r.hora;
+    return `<div onclick="verRes(${reservas.indexOf(r)})"
+        style="display:inline-flex;align-items:center;gap:6px;background:${colorBg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;margin:3px;"
+        title="Clic para ver detalles. Asignalo a un equipo en la pizarra abajo.">
+        <span>📦 ${esc(nombre)}</span>
+        <span style="opacity:.85;font-size:11px;">${esc(horaTxt)}</span>
+        <span style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:10px;font-size:10px;">$${esc(r.costo||'0')}</span>
+      </div>`;
+  }).join('');
+  banner.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:13px;font-weight:800;color:#92400e;">⚠️ ${sinAsignar.length} ${sinAsignar.length===1?'servicio':'servicios'} sin asignar a equipo:</div>
+      <div style="flex:1;min-width:0;">${chips}</div>
+      <div style="font-size:11px;color:#92400e;font-style:italic;">Clic para abrir · asignalos en los equipos abajo</div>
+    </div>`;
 }
 
 function equalizePDRows() {
@@ -4724,11 +4780,24 @@ function buildColumna2(col, idx, f) {
     // Available reservations for this hour (not assigned to any other column)
     // Skip if this slot is an extension
     // Incluye horas custom que mapean a este slot (ej. "1:00 pm" → "2:30 PM")
-    const disponibles = esExtension ? [] : resDia.filter(r =>
-      (r.hora === h || (r.horasOcupadas && r.horasOcupadas.includes(h)) || mapHoraToRow(r.hora) === h) &&
-      !asignadas.has(r.codigo) &&
-      r.codigo !== slot.reservaCodigo
-    );
+    // FIX: la pizarra solo tiene 8AM/11AM/2:30PM (no Nocturno). Las reservaciones con hora
+    // "Nocturno" o que caen ahí por mapHoraToRow se incluyen en 2:30 PM (último slot disponible)
+    // para que NO queden invisibles. El banner "Sin asignar" también las captura.
+    const disponibles = esExtension ? [] : resDia.filter(r => {
+      if (asignadas.has(r.codigo)) return false;
+      if (r.codigo === slot.reservaCodigo) return false;
+      // Excluir canceladas (van al banner "Sin ubicar" en la agenda, no al disponibles de la pizarra)
+      if (r.estado === 'cancelado') return false;
+      const rRow = mapHoraToRow(r.hora);
+      // Match directo: hora === slot, o horasOcupadas incluye slot, o mapea al slot
+      if (r.hora === h) return true;
+      if (r.horasOcupadas && r.horasOcupadas.includes(h)) return true;
+      if (rRow === h) return true;
+      // Caso especial: si la reserva mapea a 'Nocturno', mostrarla en el último slot (2:30 PM)
+      // para que se pueda asignar. Sin esto, las reservaciones nocturnas eran invisibles.
+      if (rRow === 'Nocturno' && h === '2:30 PM') return true;
+      return false;
+    });
 
     // "Otra hora" ya no necesita sección separada porque se incluyen en disponibles
     const otraDisp = [];
