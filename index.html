@@ -1720,7 +1720,27 @@ setInterval(_supabaseHeartbeat, 60000);
 // Supabase Realtime — escuchar cambios de otros dispositivos
 // Re-renderiza TODAS las vistas visibles (agenda TV, pizarra, cuaderno, etc.)
 // para que cualquier cambio recibido por realtime se refleje donde sea que esté el usuario.
+// Detecta si el usuario está editando un input (input/textarea/select) — para no
+// reconstruir el HTML mientras escribe (perdería el focus y se cortaría el typing)
+function _hayInputEnEdicion() {
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') return false;
+  // No considerar inputs read-only o disabled
+  if (el.readOnly || el.disabled) return false;
+  return true;
+}
+
 function renderAllSections() {
+  // SI EL USUARIO ESTÁ ESCRIBIENDO en un input (gastos, montos, etc.), postponer
+  // el re-render para no perder el foco ni el texto que está tipeando.
+  if (_hayInputEnEdicion()) {
+    console.log('⏸️ Render postpuesto: usuario está escribiendo en un input');
+    clearTimeout(_renderRetryTimer);
+    _renderRetryTimer = setTimeout(renderAllSections, 1500);
+    return;
+  }
   try { renderAll(); } catch(e) { console.warn('renderAll err:', e); }
   try { renderAgenda(); } catch(e) { /* agenda puede no estar lista */ }
   try { renderPD(); } catch(e) { /* pizarra puede no estar lista */ }
@@ -1729,6 +1749,7 @@ function renderAllSections() {
   try { if (typeof renderComisiones === 'function') renderComisiones(); } catch(e) {}
   try { if (typeof renderNotificaciones === 'function') renderNotificaciones(); } catch(e) {}
 }
+let _renderRetryTimer = null;
 
 // Sync completo (app_data + reservaciones) y render de todas las vistas.
 // Usado por realtime y polling para mantener la TV al día sin interacción manual.
@@ -1736,6 +1757,12 @@ let _fullSyncTimer = null;
 function scheduleFullSyncAndRender(delay = 600) {
   clearTimeout(_fullSyncTimer);
   _fullSyncTimer = setTimeout(async () => {
+    // Si el usuario está escribiendo, esperar 2s y reintentar (sin tocar inputs activos)
+    if (_hayInputEnEdicion()) {
+      console.log('⏸️ scheduleFullSyncAndRender postpuesto: usuario escribiendo');
+      scheduleFullSyncAndRender(2000);
+      return;
+    }
     if (!supabaseOK) { renderAllSections(); return; }
     try {
       // Primero traer app_data (agGrid con posiciones asignadas por el origen)
@@ -2225,7 +2252,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-24-v36';
+const APP_VERSION = '2026-04-28-v37';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -4749,7 +4776,11 @@ function buildColumna2(col, idx, f) {
     const bM = MOTORISTAS.has(b.nombre) ? 0 : 1;
     return aM - bM;
   });
-  const crewHtml = _miembrosOrdenados.map((m,i) => {
+  const crewHtml = _miembrosOrdenados.map((m) => {
+    // FIX BUG: usar el índice REAL del array original col.miembros, no el del ordenado.
+    // Antes: el pago se asignaba al miembro de la posición visual, lo que con motoristas
+    // arriba lo "corría" a otra persona en el array original.
+    const realIdx = col.miembros.indexOf(m);
     const esM = MOTORISTAS.has(m.nombre);
     const esEventual = m.eventual === true;
     const nick = m.nombre.split(' ').slice(0,2).join(' ');
@@ -4760,7 +4791,7 @@ function buildColumna2(col, idx, f) {
     return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
       <span style="font-size:14px;font-weight:700;color:${c};flex:1;line-height:1.4;">${display}</span>
       <input type="number" value="${m.pago||''}" placeholder="$" min="0" step="1"
-        onchange="updatePago('${f}',${idx},${i},this.value)"
+        onchange="updatePago('${f}',${idx},${realIdx},this.value)"
         style="width:52px;border:none;border-bottom:1.5px solid ${m.pago?'#d97706':'#e0e4ed'};padding:1px 4px;font-size:11px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:transparent;color:#d97706;text-align:right;">
     </div>`;
   }).join('');
