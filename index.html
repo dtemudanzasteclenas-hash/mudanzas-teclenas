@@ -537,6 +537,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   </button>
   <div style="display:flex;align-items:center;gap:6px;">
     <span id="sync-status" style="font-size:10px;font-weight:600;color:#6b7280;white-space:nowrap;"></span>
+    <span id="badge-pendientes" onclick="reintentarSavesPendientes(false)" style="display:none;background:#dc2626;color:#fff;font-size:10px;font-weight:800;padding:4px 9px;border-radius:6px;cursor:pointer;white-space:nowrap;"></span>
     <button id="btn-sync" onclick="forceSync()" title="Sincronizar ahora" style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;">🔄</button>
   </div>
   <div class="user-badge" id="user-badge" style="display:none;">
@@ -2252,7 +2253,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-28-v37';
+const APP_VERSION = '2026-04-28-v38';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2372,12 +2373,122 @@ function save() {
   // No sync automático de todo — usar saveSingle para cambios individuales
 }
 
-function saveSingle(r) {
-  safeSetLS('mt2_reservas', JSON.stringify(reservas));
-  if (supabaseOK) {
-    saveReservaToSupabase(r).catch(e => console.warn('Sync error:', e));
+// Cola persistente de saves pendientes — si Supabase falla, guardamos aquí y reintentamos.
+// Esto previene pérdida silenciosa de reservaciones cuando hay error de red/RLS/timeout.
+function _getPendingSaves() {
+  try { return JSON.parse(localStorage.getItem('mt_pending_saves') || '[]'); } catch(e) { return []; }
+}
+function _setPendingSaves(arr) {
+  try { localStorage.setItem('mt_pending_saves', JSON.stringify(arr)); } catch(e) {}
+}
+function _addPendingSave(r) {
+  const list = _getPendingSaves();
+  // No duplicar (mismo código)
+  const i = list.findIndex(p => p.codigo === r.codigo);
+  if (i >= 0) list[i] = r;
+  else list.push(r);
+  _setPendingSaves(list);
+  _actualizarBadgePendientes();
+}
+function _removePendingSave(codigo) {
+  const list = _getPendingSaves().filter(p => p.codigo !== codigo);
+  _setPendingSaves(list);
+  _actualizarBadgePendientes();
+}
+function _actualizarBadgePendientes() {
+  const n = _getPendingSaves().length;
+  const el = document.getElementById('badge-pendientes');
+  if (!el) return;
+  if (n === 0) { el.style.display = 'none'; return; }
+  el.style.display = 'inline-flex';
+  el.textContent = '⚠️ ' + n + ' sin sincronizar';
+  el.title = 'Hay ' + n + ' reservaci' + (n>1?'ones':'ón') + ' guardada' + (n>1?'s':'') + ' localmente que aún no llegó a la nube. Clic para reintentar.';
+}
+
+// Reintenta todas las reservaciones en la cola pendiente
+async function reintentarSavesPendientes(silencioso = false) {
+  const pendientes = _getPendingSaves();
+  if (pendientes.length === 0) return;
+  if (!supabaseOK) {
+    if (!silencioso) alert('⚠️ Sin conexión a Supabase. Las reservaciones pendientes se subirán cuando recuperes internet.');
+    return;
+  }
+  let ok = 0, err = 0;
+  for (const r of pendientes) {
+    try {
+      const result = await saveReservaToSupabase(r);
+      if (result) { _removePendingSave(r.codigo); ok++; }
+      else err++;
+    } catch (e) {
+      err++;
+      console.warn('Retry failed for', r.codigo, e.message);
+    }
+  }
+  if (!silencioso) {
+    if (ok > 0 && err === 0) alert(`✅ ${ok} reservaci${ok>1?'ones':'ón'} sincronizada${ok>1?'s':''} con la nube.`);
+    else if (err > 0) alert(`⚠️ ${ok} subida${ok!==1?'s':''}, ${err} aún fallan. Revisá tu internet.`);
   }
 }
+
+// Save robusto con reintentos automáticos. Si Supabase falla 3 veces, se guarda
+// en cola persistente y se notifica al usuario para que sepa que falta sincronizar.
+function saveSingle(r) {
+  safeSetLS('mt2_reservas', JSON.stringify(reservas));
+  if (!supabaseOK) {
+    // Sin conexión: a la cola, se intentará al recuperar
+    _addPendingSave(r);
+    return;
+  }
+  // Intento 1
+  saveReservaToSupabase(r).then(result => {
+    if (result) {
+      _removePendingSave(r.codigo); // por si estaba en cola previa
+      return;
+    }
+    // result null/undefined = falló silenciosamente → reintentar
+    return _retrySaveWithBackoff(r, 1);
+  }).catch(e => {
+    console.warn('Save error, agregando a cola pendiente:', e.message);
+    _retrySaveWithBackoff(r, 1);
+  });
+}
+
+function _retrySaveWithBackoff(r, intento) {
+  const maxIntentos = 4; // total: ~1+2+4+8 = 15 segundos de reintento
+  if (intento > maxIntentos) {
+    console.error('❌ ' + maxIntentos + ' reintentos fallidos para ' + r.codigo + '. Guardado en cola pendiente.');
+    _addPendingSave(r);
+    if (typeof showSaveToast === 'function') {
+      showSaveToast('⚠️ Reservación ' + r.codigo + ' guardada localmente — falta sincronizar con la nube', 'warn');
+    }
+    return;
+  }
+  const delay = Math.pow(2, intento - 1) * 1000; // 1s, 2s, 4s, 8s
+  setTimeout(() => {
+    saveReservaToSupabase(r).then(result => {
+      if (result) {
+        _removePendingSave(r.codigo);
+        console.log('✅ Reservación ' + r.codigo + ' sincronizada en intento ' + intento);
+        if (typeof showSaveToast === 'function') showSaveToast('✅ Reservación sincronizada con la nube', 'ok');
+      } else {
+        _retrySaveWithBackoff(r, intento + 1);
+      }
+    }).catch(() => _retrySaveWithBackoff(r, intento + 1));
+  }, delay);
+}
+
+// Al cargar la página, mostrar badge si hay pendientes y reintentar en background
+setTimeout(() => {
+  _actualizarBadgePendientes();
+  if (_getPendingSaves().length > 0) {
+    setTimeout(() => reintentarSavesPendientes(true), 5000);
+  }
+}, 2000);
+// Reintentar al recuperar internet
+window.addEventListener('online', () => {
+  console.log('🌐 Conexión recuperada — reintentando saves pendientes');
+  setTimeout(() => reintentarSavesPendientes(true), 1000);
+});
 
 function genCod() {
   // Máximo número de código existente
