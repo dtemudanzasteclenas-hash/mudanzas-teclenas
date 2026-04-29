@@ -2253,7 +2253,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-28-v38';
+const APP_VERSION = '2026-04-28-v39';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3499,18 +3499,44 @@ function removeFromGrid(f, key) {
   if (!agGrid[f]?.cells) return;
   const codigo = agGrid[f].cells[key];
   const r = codigo ? reservas.find(rv => rv.codigo === codigo) : null;
-  const nombre = r ? `${r.nombre} ${r.apellido}` : 'esta reservación';
-  if (!confirm(`¿Quitar la reservación de ${nombre} de la agenda?\n\n(Pasa a "Sin ubicar" para que la reubiques manualmente. No se elimina.)`)) return;
+  const nombre = r ? `${r.nombre} ${r.apellido||''}`.trim() : 'esta reservación';
+  // Pedro pidió: el botón X debe CANCELAR la reservación (no solo quitar del grid)
+  // para que no aparezca en "Sin asignar" de pizarra ni cuente en totales.
+  // Si solo querés mover sin cancelar → arrastrá la celda a otra columna.
+  if (!confirm(`¿CANCELAR la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Saldrá de la pizarra y no contará en totales\n• Quedará tachada en "Sin ubicar" hasta que la reactives o la borres\n\n💡 Si solo querés MOVERLA, arrastrala a otra celda en vez de tocar la X.\n\n¿Cancelar?`)) return;
+
   // Quitar de TODAS las celdas de esta fecha (por si ocupaba varios horarios)
   if (codigo) {
     Object.keys(agGrid[f].cells).forEach(k => {
       if (agGrid[f].cells[k] === codigo) delete agGrid[f].cells[k];
     });
-    // NO agregar a hidden[] — queremos que aparezca en el banner "Sin ubicar"
   } else {
     delete agGrid[f].cells[key];
   }
   saveAgGrid();
+
+  // Marcar como cancelada y quitar de la pizarra (igual que eliminar())
+  if (r) {
+    r.estado = 'cancelado';
+    // Quitar de la pizarra (desasignar de slots de equipos)
+    const pdDay = pdData[r.fecha];
+    if (pdDay?.columnas) {
+      let cambioPD = false;
+      pdDay.columnas.forEach(col => {
+        [...HORARIOS, 'otra'].forEach(h => {
+          if (col.slots?.[h]?.reservaCodigo === r.codigo) {
+            col.slots[h].reservaCodigo = '';
+            col.slots[h].costo = '';
+            cambioPD = true;
+          }
+        });
+      });
+      if (cambioPD) savePD();
+    }
+    saveSingle(r);
+    try { renderPD(); } catch(e) {}
+  }
+  renderAll();
   renderAgenda();
 }
 
@@ -4683,7 +4709,11 @@ function renderPD() {
   }
 
   // Total global — sum all reservations for this day
-  const totalResDia = resDiaTotals.reduce((s,r)=>s+(parseFloat(r.costo)||0),0);
+  // Total global excluye CANCELADAS (no son ingresos reales) y reservaciones con método CANCELADO
+  const totalResDia = resDiaTotals.reduce((s,r) => {
+    if (r.estado === 'cancelado') return s;
+    return s + (parseFloat(r.costo) || 0);
+  }, 0);
   const tv = document.getElementById('piz-total-val');
   if (tv) tv.textContent = '$'+totalResDia.toFixed(2);
 
