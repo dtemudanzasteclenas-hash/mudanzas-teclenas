@@ -1146,7 +1146,9 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 
     <!-- CLIENTE -->
     <div class="sec-div" style="margin-top:16px;">Información del Cliente</div>
-    <div class="fg" style="margin-bottom:8px;"><label>Teléfono *</label><input type="text" id="f-tel" placeholder="Ej: 8888-1234" oninput="buscarCliente()"></div>
+    <div class="fg" style="margin-bottom:6px;"><label>Teléfono *</label><input type="text" id="f-tel" placeholder="Ej: 8888-1234" oninput="buscarCliente()"></div>
+    <div id="f-tels-extra" style="margin-bottom:6px;"></div>
+    <div style="margin-bottom:10px;"><button type="button" onclick="addTelExtra()" style="background:#dbeafe;color:#1e40af;border:1.5px dashed #93c5fd;border-radius:7px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;">+ Agregar teléfono</button></div>
     <div id="cliente-match" style="display:none;background:#d1fae5;border-radius:7px;padding:8px 12px;font-size:12px;color:#065f46;margin-bottom:10px;"></div>
     <div class="grid2">
       <div class="fg"><label>Nombre *</label><input type="text" id="f-nombre" placeholder="Ej: María"></div>
@@ -1231,7 +1233,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <div class="grid2">
         <div class="fg"><label>Nombre *</label><input type="text" id="e-nombre"></div>
         <div class="fg"><label>Apellido</label><input type="text" id="e-apellido"></div>
-        <div class="fg"><label>Teléfono *</label><input type="text" id="e-tel"></div>
+        <div class="fg"><label>Teléfono *</label><input type="text" id="e-tel"><div id="e-tels-extra" style="margin-top:6px;"></div><button type="button" onclick="addTelExtraEdit()" style="margin-top:6px;background:#dbeafe;color:#1e40af;border:1.5px dashed #93c5fd;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;">+ Agregar teléfono</button></div>
         <div class="fg"><label>Correo</label><input type="email" id="e-email"></div>
         <div class="fg"><label>Fecha *</label><input type="date" id="e-fecha"></div>
         <div class="fg"><label>Horarios ocupados *</label>
@@ -2253,7 +2255,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-28-v39';
+const APP_VERSION = '2026-04-28-v40';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3771,6 +3773,7 @@ function openNueva() {
   document.getElementById('f-nombre').value = '';
   document.getElementById('f-apellido').value = '';
   document.getElementById('f-tel').value = '';
+  const fTelsExtra = document.getElementById('f-tels-extra'); if(fTelsExtra) fTelsExtra.innerHTML = '';
   document.getElementById('f-email').value = '';
   document.getElementById('f-costo').value = '';
   document.getElementById('f-carga').value = '';
@@ -4060,7 +4063,7 @@ function fmtCosto(input) {
 
 function guardar() {
   const nombre = document.getElementById('f-nombre').value.trim();
-  const tel = document.getElementById('f-tel').value.trim();
+  const tel = _recolectarTelefonos('f-tel','f-tels-extra');
   const fecha = document.getElementById('f-fecha').value;
   const carga = document.getElementById('f-carga').value.trim();
   const descarga = document.getElementById('f-descarga').value.trim();
@@ -4133,6 +4136,8 @@ function guardar() {
   const agFecha = document.getElementById('ag-fecha');
   if (agFecha) { agFecha.value = r.fecha; renderAgenda(); }
   alert(`✅ Reservación ${r.codigo} guardada correctamente.`);
+  // Auto-abrir WhatsApp con el mensaje de confirmación pre-cargado
+  try { abrirWhatsAppAuto(r); } catch(e) { console.warn('No se pudo abrir WhatsApp:', e); }
 }
 
 // ==================== VER RESERVACIÓN ====================
@@ -4186,7 +4191,12 @@ function verRes(idx) {
     if (r.empaque && parseInt(r.empaque.percheros) > 0) msg += `\n👔 *Se envían ${r.empaque.percheros} perchero(s) metálico(s) para transportar ropa.*`;
   }  msg += `\n\nEl pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.\n\n`;
   msg += `Le facilito nuestra información bancaria:\n*CUENTA CORRIENTE BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Número de cuenta: 346-301-000004045\n- Cuenta corriente\n- mudanzasteclenas@hotmail.com\n\n`;
-  msg += `_(Se adjuntan las imágenes de nuestra Guía para una mudanza exitosa)_\n\nCualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊\n\n*Mudanzas Tecleñas* | 📞 2229-8822 | 📱 6198-4772`;
+  // Vendedor: usar el de la reserva si existe, sino el usuario logueado
+  const vendedorWA = (r.vendedor || (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '').trim();
+  const firmaWA = vendedorWA
+    ? `Mi nombre es *${vendedorWA}*, cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`
+    : `Cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`;
+  msg += `${firmaWA}\n\n*Mudanzas Tecleñas* | 📞 2229-8822 | 📱 6198-4772`;
   document.getElementById('wa-msg').textContent = msg;
 
   showTab('pdf');
@@ -4300,7 +4310,14 @@ function cargarEdicion() {
   const r = reservas[verIdx];
   document.getElementById('e-nombre').value = r.nombre || '';
   document.getElementById('e-apellido').value = r.apellido || '';
-  document.getElementById('e-tel').value = r.tel || '';
+  // Si el teléfono guardado tiene varios números (separados por / , ; o "y"), mostrarlos como inputs separados
+  const telsExistentes = String(r.tel || '').split(/[\/,;]|\s+y\s+/i).map(t => t.trim()).filter(t => t);
+  document.getElementById('e-tel').value = telsExistentes[0] || '';
+  const eTelsExtra = document.getElementById('e-tels-extra');
+  if (eTelsExtra) {
+    eTelsExtra.innerHTML = '';
+    for (let i = 1; i < telsExistentes.length; i++) _crearInputTelExtra('e-tels-extra', telsExistentes[i]);
+  }
   document.getElementById('e-email').value = r.email || '';
   document.getElementById('e-fecha').value = r.fecha || '';
   document.getElementById('e-costo').value = r.costo || '';
@@ -4370,7 +4387,7 @@ function guardarEdicion() {
   if (verIdx === null) return;
   const r = reservas[verIdx];
   const nombre = document.getElementById('e-nombre').value.trim();
-  const tel = document.getElementById('e-tel').value.trim();
+  const tel = _recolectarTelefonos('e-tel','e-tels-extra');
   const carga = document.getElementById('e-carga').value.trim();
   const descarga = document.getElementById('e-descarga').value.trim();
   const horasEdit = getEditSelectedHoras();
@@ -4425,6 +4442,8 @@ function guardarEdicion() {
   renderAll();
   renderAgenda();
   alert('✅ Reservación actualizada.');
+  // Auto-abrir WhatsApp con el mensaje de confirmación pre-cargado tras editar
+  try { abrirWhatsAppAuto(r); } catch(e) { console.warn('No se pudo abrir WhatsApp:', e); }
   verRes(verIdx);
   showTab('pdf');
 }
@@ -4452,9 +4471,82 @@ function descargarPDF() {
 function abrirWA() {
   const r = reservas[verIdx];
   const msg = document.getElementById('wa-msg').textContent;
-  const tel = r.tel.replace(/\D/g,'');
-  window.open(`https://wa.me/503${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+  // Tomar el PRIMER teléfono si hay varios separados por / , o ;
+  const telPrimero = (r.tel||'').split(/[\/,;]/)[0].replace(/\D/g,'');
+  window.open(`https://wa.me/503${telPrimero}?text=${encodeURIComponent(msg)}`, '_blank');
 }
+
+// Genera el mensaje de WhatsApp a partir de una reservación r (sin depender del DOM).
+// Usado por guardar() y guardarEdicion() para auto-abrir WhatsApp después de guardar.
+function generarMensajeWhatsApp(r) {
+  const unidadWA = r.unidad === 'grande' ? `Camión Grande (furgón de 7 metros / 10 toneladas${r.rampa==='con rampa hidráulica'?', con rampa hidráulica':''})` :
+                   r.unidad === 'mediano' ? 'Camión Mediano (furgón de 5 metros / 5 toneladas)' : 'Camión Pequeño (furgón de 3 metros / 2 toneladas)';
+  const costoFmt = parseFloat(r.costo) ? parseFloat(r.costo).toFixed(2) : '0.00';
+  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal||5} hombres totalmente capacitados* a su servicio por un costo de *$${costoFmt}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.\n\n`;
+  msg += `📦 *Carga:* ${r.carga}\n🏠 *Descarga:* ${r.descarga}\n`;
+  if (r.servicios && r.servicios.includes('embalaje')) msg += `\n📦 *Servicio de embalaje de muebles incluido.*`;
+  if (r.servicios && r.servicios.includes('empaque')) {
+    msg += `\n📫 *Servicio de empaque de artículos en cajas incluido.*`;
+    if (r.empaque && parseInt(r.empaque.percheros) > 0) msg += `\n👔 *Se envían ${r.empaque.percheros} perchero(s) metálico(s) para transportar ropa.*`;
+  }
+  msg += `\n\nEl pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.\n\n`;
+  msg += `Le facilito nuestra información bancaria:\n*CUENTA CORRIENTE BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Número de cuenta: 346-301-000004045\n- Cuenta corriente\n- mudanzasteclenas@hotmail.com\n\n`;
+  const vendedor = (r.vendedor || (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '').trim();
+  const firma = vendedor
+    ? `Mi nombre es *${vendedor}*, cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`
+    : `Cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`;
+  msg += `${firma}\n\n*Mudanzas Tecleñas* | 📞 2229-8822 | 📱 6198-4772`;
+  return msg;
+}
+
+// Auto-abre WhatsApp con el mensaje pre-cargado para enviar al cliente.
+// Se llama después de guardar/editar una reservación. Si el cliente tiene varios teléfonos
+// (separados por / , o ;), pregunta a cuál enviar.
+function abrirWhatsAppAuto(r) {
+  if (!r || !r.tel) return;
+  const msg = generarMensajeWhatsApp(r);
+  // Detectar múltiples teléfonos (separados por / , ; o "y")
+  const telsRaw = String(r.tel).split(/[\/,;]|\s+y\s+/i).map(t => t.trim()).filter(t => t);
+  const telsLimpios = telsRaw.map(t => t.replace(/\D/g,'')).filter(t => t.length >= 7);
+  let telDestino;
+  if (telsLimpios.length === 0) return;
+  if (telsLimpios.length === 1) {
+    telDestino = telsLimpios[0];
+  } else {
+    // Múltiples: dejar que el usuario elija
+    const opciones = telsLimpios.map((t,i) => `${i+1}) ${t}`).join('\n');
+    const eleccion = prompt(`📱 El cliente tiene varios teléfonos. ¿A cuál enviar el WhatsApp?\n\n${opciones}\n\nEscribí el número (1, 2, ...) o cancelá:`, '1');
+    if (!eleccion) return;
+    const idx = parseInt(eleccion) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= telsLimpios.length) { alert('Opción inválida.'); return; }
+    telDestino = telsLimpios[idx];
+  }
+  // Abrir WhatsApp Web/Mobile con el mensaje pre-cargado (el usuario solo tiene que apretar Enviar)
+  window.open(`https://wa.me/503${telDestino}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+// ==================== TELÉFONOS MÚLTIPLES ====================
+// Permite al usuario agregar varios teléfonos del mismo cliente. Internamente se guardan
+// como un solo string separado por " / " para no romper compatibilidad con el resto del código.
+function _crearInputTelExtra(contId, valor) {
+  const cont = document.getElementById(contId);
+  if (!cont) return;
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:4px;';
+  div.innerHTML = '<input type="text" value="' + (valor||'').replace(/"/g,'&quot;') + '" placeholder="Otro teléfono (Ej: 7777-5555)" style="flex:1;border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:Barlow,sans-serif;outline:none;"><button type="button" onclick="this.parentElement.remove()" style="background:#fee2e2;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;color:#d42b2b;">✕</button>';
+  cont.appendChild(div);
+}
+function addTelExtra() { _crearInputTelExtra('f-tels-extra'); }
+function addTelExtraEdit() { _crearInputTelExtra('e-tels-extra'); }
+
+// Recolecta el teléfono principal + extras y los une con " / "
+function _recolectarTelefonos(mainId, contId) {
+  const main = (document.getElementById(mainId)?.value || '').trim();
+  const extras = Array.from(document.querySelectorAll('#'+contId+' input[type="text"]'))
+    .map(i => i.value.trim()).filter(v => v);
+  return [main, ...extras].filter(v => v).join(' / ');
+}
+
 function copiarWA() {
   navigator.clipboard.writeText(document.getElementById('wa-msg').textContent)
     .then(() => alert('✅ Mensaje copiado al portapapeles'))
@@ -6947,9 +7039,9 @@ Le facilito nuestra información bancaria:
 - Cuenta corriente
 - mudanzasteclenas@hotmail.com
 
-_(Se adjuntan las imágenes de nuestra Guía para una mudanza exitosa)_
-
-Cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊
+${(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre)
+  ? `Mi nombre es *${usuarioActual.nombre}*, cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`
+  : `Cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`}
 
 *Mudanzas Tecleñas* | 📞 2229-8822 | 📱 6198-4772`;
 
