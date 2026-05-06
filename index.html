@@ -1407,6 +1407,21 @@ function syncToSupabase(key, data) {
   }, 400);
 }
 
+// Flush inmediato (sin debounce) — se usa cuando una limpieza local DEBE propagarse a Supabase
+// antes de que el siguiente Realtime push haga hardReplace y resucite los datos viejos.
+// Caso típico: editar la fecha de una reservación → limpiar agGrid del día viejo →
+// flush inmediato evita que la celda residual reaparezca por race con sync.
+async function flushSyncToSupabase(key, data) {
+  if (!sb) return;
+  clearTimeout(_syncTimers[key]);
+  const now = new Date().toISOString();
+  try {
+    const { error } = await sb.from('app_data').upsert({ id: key, data: data, updated_at: now });
+    if (error) console.warn('Flush sync error ('+key+'):', error.message);
+    else _lastSyncTimestamps[key] = now;
+  } catch(e) { console.warn('Flush sync exception:', e.message); }
+}
+
 async function loadFromSupabase(key) {
   if (!sb) return null;
   try {
@@ -2255,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-28-v42';
+const APP_VERSION = '2026-05-06-v43';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2989,12 +3004,46 @@ function renderAgenda() {
   const placed = new Set(Object.values(cells).filter(Boolean));
   const unplaced = resDia.filter(r => !placed.has(r.codigo));
 
-  // Mapa codigo -> columna donde ya está ubicada (para rellenar horarios faltantes)
-  const colByCodigo = {};
-  Object.entries(cells).forEach(([key, codigo]) => {
-    if (codigo && !(codigo in colByCodigo)) {
-      colByCodigo[codigo] = parseInt(key.split('__')[0]);
+  // ── LIMPIEZA DE CELDAS HUÉRFANAS ──
+  // Elimina celdas cuyo código apunte a:
+  //  (a) una reservación inexistente (borrada en otro dispositivo, código corrupto)
+  //  (b) una reservación con fecha DIFERENTE a la del día renderizado (residuo por race
+  //      condition entre Realtime y syncToSupabase debounced cuando se edita fecha)
+  //  (c) una reservación cancelada (debe estar en banner Sin ubicar, no en grid)
+  // Este saneamiento previene el bug "reservación se duplicó para sábado".
+  let huerfanosLimpiados = false;
+  Object.keys(cells).forEach(k => {
+    const codigo = cells[k];
+    if (!codigo) return;
+    const r = reservas.find(rv => rv.codigo === codigo);
+    if (!r || r.fecha !== f || r.estado === 'cancelado') {
+      delete cells[k];
+      huerfanosLimpiados = true;
     }
+  });
+  if (huerfanosLimpiados) saveAgGrid();
+
+  // Mapa codigo -> columna primaria donde el código está ubicado.
+  // Prioridad: si el código está en una celda con fila CORRECTA (mapHoraToRow del horario real),
+  // esa columna gana. Si no, se usa la primera columna donde aparezca el código.
+  // Esto evita que residuos en columnas equivocadas "secuestren" la columna primaria
+  // y causen que el saneamiento limpie la celda buena en vez del residuo.
+  const colByCodigo = {};
+  resDia.forEach(r => {
+    const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
+    const filasCorrectas = new Set(horas.map(h => mapHoraToRow(h)));
+    let colCorrecta = null;
+    let colAlguna = null;
+    Object.entries(cells).forEach(([key, codigo]) => {
+      if (codigo !== r.codigo) return;
+      const parts = key.split('__');
+      const cKey = parseInt(parts[0]);
+      const rowKey = parts.slice(1).join('__');
+      if (colAlguna === null) colAlguna = cKey;
+      if (colCorrecta === null && filasCorrectas.has(rowKey)) colCorrecta = cKey;
+    });
+    const colFinal = colCorrecta !== null ? colCorrecta : colAlguna;
+    if (colFinal !== null) colByCodigo[r.codigo] = colFinal;
   });
 
   // mapHoraToRow es ahora global (definida arriba)
@@ -3041,15 +3090,18 @@ function renderAgenda() {
     const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
     const filasCorrectas = new Set(horas.map(h => mapHoraToRow(h)));
 
-    // 1) Eliminar celdas del MISMO código que estén en filas FUERA de su horario real.
-    //    Esto migra automáticamente reservaciones mal ubicadas (ej. 11 AM en slot 8 AM)
-    //    a su slot correcto en el siguiente renderAgenda().
+    // 1) Eliminar TODAS las celdas con el código que NO sean (col primaria, fila correcta).
+    //    Esto cubre dos casos:
+    //    (a) celdas en la columna primaria pero en filas equivocadas (residuo de bugs/drag)
+    //    (b) celdas en OTRAS columnas (residuo cuando la reservación se ubicó en múltiples
+    //        columnas por race condition o por arrastre interrumpido)
+    //    Ambos casos producen el bug visible "card en slot 2:30 PM con tag 🕐 8:00 AM".
     Object.keys(cells).forEach(k => {
       if (cells[k] !== r.codigo) return;
       const parts = k.split('__');
       const cKey = parseInt(parts[0]);
       const rowKey = parts.slice(1).join('__');
-      if (cKey === col && !filasCorrectas.has(rowKey)) {
+      if (cKey !== col || !filasCorrectas.has(rowKey)) {
         delete cells[k];
         filledAny = true;
       }
@@ -4467,17 +4519,24 @@ function guardarEdicion() {
 
   // Limpiar agGrid SOLO si cambiaron fecha u horarios (para preservar la ubicación si el usuario
   // solo editó datos del cliente/obs). Si cambió fecha, limpiar de la fecha ANTERIOR.
+  // CRÍTICO: tras editar reservación se dispara Realtime para reservaciones, lo que activa
+  // scheduleFullSyncAndRender → syncAllFromSupabase(true) que hace HARD REPLACE de agGrid.
+  // Si el sync local de agGrid está aún debounced (400ms), el push del servidor trae la
+  // versión vieja y resucita la celda eliminada → reservación duplicada en día viejo.
+  // Por eso usamos flushSyncToSupabase (sin debounce) cuando cambia fecha u horas.
   if (fechaCambio) {
     const agOld = agGrid[oldFecha];
     if (agOld?.cells) {
       Object.keys(agOld.cells).forEach(k => { if (agOld.cells[k] === r.codigo) delete agOld.cells[k]; });
-      saveAgGrid();
+      safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+      flushSyncToSupabase('mt_aggrid', agGrid);
     }
   } else if (horasCambiaron) {
     const agDay = agGrid[r.fecha];
     if (agDay?.cells) {
       Object.keys(agDay.cells).forEach(k => { if (agDay.cells[k] === r.codigo) delete agDay.cells[k]; });
-      saveAgGrid();
+      safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+      flushSyncToSupabase('mt_aggrid', agGrid);
     }
   }
   saveSingle(r);
@@ -4542,29 +4601,32 @@ function generarMensajeWhatsApp(r) {
 }
 
 // Auto-abre WhatsApp con el mensaje pre-cargado para enviar al cliente.
-// Se llama después de guardar/editar una reservación. Si el cliente tiene varios teléfonos
-// (separados por / , o ;), pregunta a cuál enviar.
+// Se llama después de guardar/editar una reservación. Si el cliente tiene varios teléfonos,
+// abre el PRIMERO automáticamente y muestra un toast con los demás (para no bloquear con prompt
+// que puede causar que el navegador bloquee window.open como popup no iniciado por usuario).
 function abrirWhatsAppAuto(r) {
   if (!r || !r.tel) return;
   const msg = generarMensajeWhatsApp(r);
   // Detectar múltiples teléfonos (separados por / , ; o "y")
   const telsRaw = String(r.tel).split(/[\/,;]|\s+y\s+/i).map(t => t.trim()).filter(t => t);
   const telsLimpios = telsRaw.map(t => t.replace(/\D/g,'')).filter(t => t.length >= 7);
-  let telDestino;
   if (telsLimpios.length === 0) return;
-  if (telsLimpios.length === 1) {
-    telDestino = telsLimpios[0];
-  } else {
-    // Múltiples: dejar que el usuario elija
-    const opciones = telsLimpios.map((t,i) => `${i+1}) ${t}`).join('\n');
-    const eleccion = prompt(`📱 El cliente tiene varios teléfonos. ¿A cuál enviar el WhatsApp?\n\n${opciones}\n\nEscribí el número (1, 2, ...) o cancelá:`, '1');
-    if (!eleccion) return;
-    const idx = parseInt(eleccion) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= telsLimpios.length) { alert('Opción inválida.'); return; }
-    telDestino = telsLimpios[idx];
-  }
-  // Abrir WhatsApp Web/Mobile con el mensaje pre-cargado (el usuario solo tiene que apretar Enviar)
+  // Abrir SIEMPRE el primer teléfono — predecible, sin prompt bloqueante que el navegador pueda
+  // tratar como interacción no-iniciada-por-usuario (lo cual causaría bloqueo de window.open).
+  const telDestino = telsLimpios[0];
   window.open(`https://wa.me/503${telDestino}?text=${encodeURIComponent(msg)}`, '_blank');
+  // Si hay más teléfonos, ofrecer abrirlos uno a uno con un confirm secuencial.
+  // Confirm sí cuenta como interacción para popup blockers (cada confirm es un click).
+  if (telsLimpios.length > 1) {
+    const otros = telsLimpios.slice(1);
+    setTimeout(() => {
+      otros.forEach(t => {
+        if (confirm(`📱 El cliente tiene otro teléfono: ${t}\n\n¿Querés también abrir WhatsApp con ese número?`)) {
+          window.open(`https://wa.me/503${t}?text=${encodeURIComponent(msg)}`, '_blank');
+        }
+      });
+    }, 400);
+  }
 }
 
 // ==================== TELÉFONOS MÚLTIPLES ====================
