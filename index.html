@@ -12,7 +12,7 @@
   --texto:#1a2236; --shadow:0 2px 16px rgba(26,58,107,.10); --r:10px;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Barlow',sans-serif;background:var(--gris0);color:var(--texto);min-height:100vh;}
+body{font-family:'Barlow','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Segoe UI Symbol',sans-serif;background:var(--gris0);color:var(--texto);min-height:100vh;}
 
 /* HEADER */
 header{background:var(--azul);color:#fff;padding:0 24px;display:flex;align-items:center;gap:12px;height:60px;box-shadow:0 2px 12px rgba(0,0,0,.2);position:sticky;top:0;z-index:200;}
@@ -141,7 +141,7 @@ tr:hover td{background:#f8fafd;}
 
 /* WA bubble */
 .wa-bg{background:#e5ddd5;border-radius:10px;padding:14px;}
-.wa-bub{background:#fff;border-radius:8px;padding:10px 13px;box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px;line-height:1.55;white-space:pre-wrap;}
+.wa-bub{background:#fff;border-radius:8px;padding:10px 13px;box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px;line-height:1.55;white-space:pre-wrap;font-family:'Barlow','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Segoe UI Symbol',sans-serif;}
 
 /* AGENDA */
 .agenda-wrap{background:#fff;border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;}
@@ -2255,7 +2255,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-04-28-v40';
+const APP_VERSION = '2026-04-28-v42';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3010,8 +3010,11 @@ function renderAgenda() {
       if (tCol === null || tRow === null) return;
 
       const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
-      // Primario = fila exacta designada; secundarios usan mapHoraToRow
-      const rowsToFill = horas.map((h, idx) => ({ h, row: idx === 0 ? tRow : mapHoraToRow(h) }));
+      // FIX: La FILA siempre corresponde al horario real del servicio (mapHoraToRow).
+      // tRow (la fila clickeada) se ignora porque la pizarra es por horario:
+      // un servicio de 11 AM debe ir en la fila de 11 AM, no donde clicó el usuario.
+      // tCol (columna) sí se respeta porque define el equipo asignado.
+      const rowsToFill = horas.map(h => ({ h, row: mapHoraToRow(h) }));
 
       // Verificar que todas las celdas destino estén libres en la columna designada
       const todasLibres = rowsToFill.every(({ row }) => !cells[agCellKey(tCol, row)]);
@@ -3027,14 +3030,33 @@ function renderAgenda() {
     if (anyPlaced) saveAgGrid();
   }
 
-  // Rellenar horarios faltantes para reservaciones parcialmente ubicadas
+  // SANEAMIENTO + RELLENO: cada reservación debe ocupar EXACTAMENTE las filas que
+  // corresponden a su(s) horario(s) en su columna. Eliminamos celdas en filas
+  // incorrectas (residuo de bugs anteriores o de target manual erróneo) y
+  // rellenamos las filas correctas que falten.
   let filledAny = false;
   resDia.forEach(r => {
     if (!(r.codigo in colByCodigo)) return;
     const col = colByCodigo[r.codigo];
     const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
-    horas.forEach(h => {
-      const row = mapHoraToRow(h);
+    const filasCorrectas = new Set(horas.map(h => mapHoraToRow(h)));
+
+    // 1) Eliminar celdas del MISMO código que estén en filas FUERA de su horario real.
+    //    Esto migra automáticamente reservaciones mal ubicadas (ej. 11 AM en slot 8 AM)
+    //    a su slot correcto en el siguiente renderAgenda().
+    Object.keys(cells).forEach(k => {
+      if (cells[k] !== r.codigo) return;
+      const parts = k.split('__');
+      const cKey = parseInt(parts[0]);
+      const rowKey = parts.slice(1).join('__');
+      if (cKey === col && !filasCorrectas.has(rowKey)) {
+        delete cells[k];
+        filledAny = true;
+      }
+    });
+
+    // 2) Rellenar filas correctas faltantes en la columna del código
+    filasCorrectas.forEach(row => {
       const key = agCellKey(col, row);
       if (!cells[key]) { cells[key] = r.codigo; filledAny = true; }
     });
@@ -3077,22 +3099,41 @@ function renderAgenda() {
 
         // Caso 1: arrastre desde banner "Sin ubicar"
         if (agDragSource.fromSinUbicar && agDragSource.codigo) {
-          if (agGrid[f]?.cells?.[dstKey]) {
-            alert('Esa celda ya está ocupada. Arrastrá a una celda vacía.');
-            agDragSource = null; return;
-          }
+          const codigoDrag = agDragSource.codigo;
+          const resDrag = reservas.find(rv => rv.codigo === codigoDrag);
+          if (!resDrag) { agDragSource = null; return; }
+
           // Si la reservación está cancelada, confirmar reactivación antes de ubicarla
-          const resDrag = reservas.find(rv => rv.codigo === agDragSource.codigo);
-          if (resDrag && resDrag.estado === 'cancelado') {
+          if (resDrag.estado === 'cancelado') {
             const nombre = `${resDrag.nombre} ${resDrag.apellido||''}`.trim();
-            if (!confirm(`⚠️ "${nombre}" está CANCELADA.\n\n¿Reactivarla y ubicarla en esta celda?`)) {
+            if (!confirm(`⚠️ "${nombre}" está CANCELADA.\n\n¿Reactivarla y ubicarla en esta columna?`)) {
               agDragSource = null; return;
             }
             resDrag.estado = 'confirmado';
             saveSingle(resDrag);
           }
+
           if (!agGrid[f]) agGrid[f] = { numCols: (getAgDay(f).numCols), cells: {}, hidden: [] };
-          agGrid[f].cells[dstKey] = agDragSource.codigo;
+
+          // FIX: la columna se respeta (eligió el equipo), pero las FILAS las
+          // determina el horario real de la reservación, NO la celda donde soltó.
+          const horasDrag = resDrag.horasOcupadas && resDrag.horasOcupadas.length > 0
+            ? resDrag.horasOcupadas : [resDrag.hora];
+          const filasCorrectas = horasDrag.map(h => mapHoraToRow(h));
+
+          // Verificar que las filas correctas estén libres en la columna destino
+          const ocupadas = filasCorrectas.filter(rw => {
+            const k = agCellKey(col, rw);
+            return agGrid[f].cells[k] && agGrid[f].cells[k] !== codigoDrag;
+          });
+          if (ocupadas.length > 0) {
+            alert(`Esta columna ya tiene servicio en el horario ${ocupadas.join(' y ')}.\nElegí otra columna o liberá esa celda primero.`);
+            agDragSource = null; return;
+          }
+
+          filasCorrectas.forEach(rw => {
+            agGrid[f].cells[agCellKey(col, rw)] = codigoDrag;
+          });
           saveAgGrid();
           renderAgenda();
           agDragSource = null; return;
@@ -3520,6 +3561,7 @@ function removeFromGrid(f, key) {
   // Marcar como cancelada y quitar de la pizarra (igual que eliminar())
   if (r) {
     r.estado = 'cancelado';
+    _agregarNotaCancelacion(r);
     // Quitar de la pizarra (desasignar de slots de equipos)
     const pdDay = pdData[r.fecha];
     if (pdDay?.columnas) {
@@ -4553,6 +4595,25 @@ function copiarWA() {
     .catch(() => alert('⚠️ No se pudo copiar. Selecciona el texto manualmente.'));
 }
 
+// Agrega una nota de cancelación a r.obs SIN borrar las observaciones existentes.
+// Si ya hay una nota previa de cancelación (mismo prefijo), no la duplica.
+function _agregarNotaCancelacion(r) {
+  if (!r) return;
+  const hoy = new Date().toLocaleDateString('es-SV',{day:'2-digit',month:'long',year:'numeric'});
+  const nota = `Servicio cancelado por el cliente el ${hoy}`;
+  const obsActual = (r.obs || '').trim();
+  // Si ya existe una nota de cancelación previa (mismo prefijo), reemplazarla por la nueva fecha
+  // pero conservar todo lo demás. Esto evita acumular notas si se cancela/reactiva varias veces.
+  const lineas = obsActual.split('\n');
+  const idxPrev = lineas.findIndex(l => /^Servicio cancelado por el cliente/i.test(l.trim()));
+  if (idxPrev >= 0) {
+    lineas[idxPrev] = nota;
+    r.obs = lineas.join('\n');
+  } else {
+    r.obs = obsActual ? `${obsActual}\n${nota}` : nota;
+  }
+}
+
 function cambiarEst(est) {
   if (verIdx === null) return;
   const r = reservas[verIdx];
@@ -4560,6 +4621,7 @@ function cambiarEst(est) {
   // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
   if (est === 'cancelado') {
     if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+    _agregarNotaCancelacion(r);
     // Quitar de agGrid y pdData (mismo comportamiento que eliminar())
     const agDay = agGrid[r.fecha];
     if (agDay?.cells) {
@@ -4593,6 +4655,7 @@ function eliminar(idx) {
   const nombre = `${r.nombre} ${r.apellido || ''}`.trim();
   if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
   r.estado = 'cancelado';
+  _agregarNotaCancelacion(r);
   // Quitar de la agenda visual (si estaba ubicada) para que no confunda
   const agDay = agGrid[r.fecha];
   if (agDay?.cells) {
@@ -7450,7 +7513,7 @@ function alertaPendientesUrgentes() {
       <!-- Preview mensaje de confirmación -->
       <div class="sec-div" style="margin-top:14px;">Vista previa — Mensaje de confirmación WhatsApp</div>
       <div style="background:#e5ddd5;border-radius:10px;padding:12px;">
-        <div id="wa-preview-msg" style="background:#fff;border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;"></div>
+        <div id="wa-preview-msg" style="background:#fff;border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;font-family:'Barlow','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Segoe UI Symbol',sans-serif;"></div>
       </div>
 
       <div class="flex gap2 mt3" style="justify-content:space-between;align-items:center;">
