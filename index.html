@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-06-v43';
+const APP_VERSION = '2026-05-06-v44';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2284,6 +2284,28 @@ const APP_VERSION = '2026-05-06-v43';
 })();
 let reservas; try { reservas = JSON.parse(localStorage.getItem('mt2_reservas') || '[]'); } catch(e) { reservas = []; }
 let verIdx = null;
+// CRÍTICO: verCodigo identifica la reservación abierta en el modal "Ver" por su código,
+// inmune al reordenamiento del array reservas (que ocurre cada vez que sync con Supabase
+// reemplaza el array). Sin esto, mientras el modal está abierto, un Realtime push podría
+// reordenar reservas[] y reservas[verIdx] terminaría apuntando a OTRA reservación —
+// causando que cancelar/editar/eliminar afecte una reservación equivocada.
+// Usar siempre _resolveVerR() o _resolveVerIdx() en vez de reservas[verIdx] directo.
+let verCodigo = null;
+function _resolveVerR() {
+  if (verCodigo) {
+    const r = reservas.find(rv => rv.codigo === verCodigo);
+    if (r) return r;
+  }
+  if (verIdx !== null && reservas[verIdx]) return reservas[verIdx];
+  return null;
+}
+function _resolveVerIdx() {
+  if (verCodigo) {
+    const i = reservas.findIndex(rv => rv.codigo === verCodigo);
+    if (i >= 0) return i;
+  }
+  return verIdx;
+}
 let srvActivos = new Set(['transporte']);
 let truckSel = '';
 
@@ -2542,6 +2564,7 @@ function nav(id) {
   if (moVer && moVer.classList.contains('open')) {
     moVer.classList.remove('open');
     verIdx = null;
+    verCodigo = null;
   }
   document.querySelectorAll('.sec').forEach(s => s.classList.remove('active'));
   const sec = document.getElementById('sec-'+id);
@@ -2590,6 +2613,10 @@ function renderTable(id, data, withTel) {
   tb.innerHTML = data.length === 0
     ? `<tr><td colspan="${withTel ? 10 : 9}" style="text-align:center;color:var(--gris2);padding:24px;">No hay reservaciones.</td></tr>`
     : data.map(r => {
+        // Usamos el código como identificador estable. El idx posicional puede quedar obsoleto
+        // si un sync reordena reservas[] entre render y clic — eso causaba que el botón 🗑
+        // cancelara la reservación equivocada. verRes(idx) sigue usando idx porque ahí no
+        // mutamos: la próxima llamada al modal igual capturará el código.
         const idx = reservas.indexOf(r);
         const unidadLabel = r.unidad === 'grande' ? 'Grande 7m/10t' : r.unidad === 'mediano' ? 'Mediano 5m/5t' : 'Pequeño 3m/2t';
         return `<tr>
@@ -2602,7 +2629,7 @@ function renderTable(id, data, withTel) {
           <td>${srvBadges(r)}</td>
           <td><span class="est ${r.estado}">${r.estado}</span></td>
           <td>${r.vendedor ? `<span class="vendedor-tag">👤 ${r.vendedor}</span>` : ''}</td>
-          <td><div class="flex gap2"><button class="btn btn-gh btn-sm" onclick="verRes(${idx})">👁 Ver</button><button class="btn btn-r btn-sm" onclick="eliminar(${idx})">🗑</button></div></td>
+          <td><div class="flex gap2"><button class="btn btn-gh btn-sm" onclick="verRes(${idx})">👁 Ver</button><button class="btn btn-r btn-sm" onclick="eliminar('${r.codigo}')">🗑</button></div></td>
         </tr>`;
       }).join('');
 }
@@ -4238,6 +4265,10 @@ function guardar() {
 function verRes(idx) {
   verIdx = idx;
   const r = reservas[idx];
+  if (!r) { console.warn('verRes: idx fuera de rango', idx); return; }
+  // Capturar el código para resolver la reserva por identidad estable, no por índice posicional
+  // (defensa contra reordenamiento del array reservas mientras el modal está abierto)
+  verCodigo = r.codigo;
   document.getElementById('mo-ver-titulo').textContent = `${r.codigo} — ${r.nombre} ${r.apellido}`;
   // Vendedor info
   const pVend = document.getElementById('p-vendedor');
@@ -4297,7 +4328,7 @@ function verRes(idx) {
   document.getElementById('mo-ver').classList.add('open');
 }
 
-function closeVer() { document.getElementById('mo-ver').classList.remove('open'); verIdx = null; }
+function closeVer() { document.getElementById('mo-ver').classList.remove('open'); verIdx = null; verCodigo = null; }
 
 function showTab(t) {
   ['pdf','wa','edit','coment','est'].forEach(k => {
@@ -4323,8 +4354,8 @@ function setComentTag(tag) {
 }
 
 function cargarComentarios() {
-  if (verIdx === null) return;
-  const r = reservas[verIdx];
+  const r = _resolveVerR();
+  if (!r) return;
   const tel = r.tel;
   const coms = comentarios[tel] || [];
   const el = document.getElementById('coment-historial');
@@ -4360,8 +4391,8 @@ function cargarComentarios() {
 }
 
 function guardarComentario() {
-  if (verIdx === null) return;
-  const r = reservas[verIdx];
+  const r = _resolveVerR();
+  if (!r) return;
   const texto = document.getElementById('coment-texto').value.trim();
   if (!texto) { alert('Escribe un comentario.'); return; }
   const tel = r.tel;
@@ -4400,8 +4431,8 @@ function tieneAlerta(tel) {
 }
 
 function cargarEdicion() {
-  if (verIdx === null) return;
-  const r = reservas[verIdx];
+  const r = _resolveVerR();
+  if (!r) return;
   document.getElementById('e-nombre').value = r.nombre || '';
   document.getElementById('e-apellido').value = r.apellido || '';
   // Si el teléfono guardado tiene varios números (separados por / , ; o "y"), mostrarlos como inputs separados
@@ -4478,8 +4509,8 @@ function addEditHoraExtra(valor) {
 }
 
 function guardarEdicion() {
-  if (verIdx === null) return;
-  const r = reservas[verIdx];
+  const r = _resolveVerR();
+  if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
   const nombre = document.getElementById('e-nombre').value.trim();
   const tel = _recolectarTelefonos('e-tel','e-tels-extra');
   const carga = document.getElementById('e-carga').value.trim();
@@ -4545,12 +4576,14 @@ function guardarEdicion() {
   alert('✅ Reservación actualizada.');
   // Auto-abrir WhatsApp con el mensaje de confirmación pre-cargado tras editar
   try { abrirWhatsAppAuto(r); } catch(e) { console.warn('No se pudo abrir WhatsApp:', e); }
-  verRes(verIdx);
+  // Re-abrir con el índice ACTUAL del código (no el verIdx viejo, que puede estar desfasado)
+  const idxActual = _resolveVerIdx();
+  if (idxActual !== null && idxActual >= 0 && reservas[idxActual]) verRes(idxActual);
   showTab('pdf');
 }
 
 function imprimirPDF() {
-  const r = reservas[verIdx];
+  const r = _resolveVerR();
   if (!r) { alert('⚠️ No hay reservación seleccionada.'); return; }
   const nombreCompleto = `${r.nombre} ${r.apellido||''}`.trim();
   window._pdfMode = null;
@@ -4570,7 +4603,8 @@ function descargarPDF() {
 }
 
 function abrirWA() {
-  const r = reservas[verIdx];
+  const r = _resolveVerR();
+  if (!r) return;
   const msg = document.getElementById('wa-msg').textContent;
   // Tomar el PRIMER teléfono si hay varios separados por / , o ;
   const telPrimero = (r.tel||'').split(/[\/,;]/)[0].replace(/\D/g,'');
@@ -4677,12 +4711,15 @@ function _agregarNotaCancelacion(r) {
 }
 
 function cambiarEst(est) {
-  if (verIdx === null) return;
-  const r = reservas[verIdx];
+  // CRÍTICO: resolver por código, no por índice. Si reservas[] se reordenó por sync mientras
+  // el modal estaba abierto, reservas[verIdx] podría apuntar a OTRA reservación → cancelaríamos
+  // la equivocada. Por eso buscamos por código (verCodigo).
+  const r = _resolveVerR();
+  if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
   const nombre = `${r.nombre} ${r.apellido||''}`.trim();
   // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
   if (est === 'cancelado') {
-    if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+    if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
     _agregarNotaCancelacion(r);
     // Quitar de agGrid y pdData (mismo comportamiento que eliminar())
     const agDay = agGrid[r.fecha];
@@ -4712,10 +4749,20 @@ function cambiarEst(est) {
   closeVer();
 }
 
-function eliminar(idx) {
-  const r = reservas[idx];
+function eliminar(idxOCodigo) {
+  // Acepta código (string que empieza con MUD) o índice numérico (compat con onclicks viejos).
+  // Si recibimos índice, lo resolvemos a código primero — porque entre el render del HTML y el
+  // clic del usuario, el array reservas pudo reordenarse por sync y reservas[idx] apuntaría a
+  // otra reservación, causando que canceláramos la equivocada.
+  let r;
+  if (typeof idxOCodigo === 'string' && /^MUD/.test(idxOCodigo)) {
+    r = reservas.find(rv => rv.codigo === idxOCodigo);
+  } else {
+    r = reservas[idxOCodigo];
+  }
+  if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
   const nombre = `${r.nombre} ${r.apellido || ''}`.trim();
-  if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+  if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
   r.estado = 'cancelado';
   _agregarNotaCancelacion(r);
   // Quitar de la agenda visual (si estaba ubicada) para que no confunda
