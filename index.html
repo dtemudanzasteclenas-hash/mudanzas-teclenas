@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-06-v45';
+const APP_VERSION = '2026-05-06-v46';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2492,27 +2492,34 @@ function saveSingle(r) {
   });
 }
 
-function _retrySaveWithBackoff(r, intento) {
+function _retrySaveWithBackoff(rOrig, intento) {
   const maxIntentos = 4; // total: ~1+2+4+8 = 15 segundos de reintento
+  const codigo = rOrig.codigo;
   if (intento > maxIntentos) {
-    console.error('❌ ' + maxIntentos + ' reintentos fallidos para ' + r.codigo + '. Guardado en cola pendiente.');
-    _addPendingSave(r);
+    console.error('❌ ' + maxIntentos + ' reintentos fallidos para ' + codigo + '. Guardado en cola pendiente.');
+    // Volver a buscar por código — si el usuario editó la reserva, queremos guardar la versión más reciente
+    const rActual = reservas.find(rv => rv.codigo === codigo) || rOrig;
+    _addPendingSave(rActual);
     if (typeof showSaveToast === 'function') {
-      showSaveToast('⚠️ Reservación ' + r.codigo + ' guardada localmente — falta sincronizar con la nube', 'warn');
+      showSaveToast('⚠️ Reservación ' + codigo + ' guardada localmente — falta sincronizar con la nube', 'warn');
     }
     return;
   }
   const delay = Math.pow(2, intento - 1) * 1000; // 1s, 2s, 4s, 8s
   setTimeout(() => {
-    saveReservaToSupabase(r).then(result => {
+    // CRÍTICO (v46): re-resolver la reserva por código en cada retry. Si reservas[] se reasignó
+    // por sync (load de Supabase), rOrig quedaría huérfano apuntando al objeto viejo. El usuario
+    // pudo editar la versión nueva en el array actual — debemos subir esa, no la vieja.
+    const rActual = reservas.find(rv => rv.codigo === codigo) || rOrig;
+    saveReservaToSupabase(rActual).then(result => {
       if (result) {
-        _removePendingSave(r.codigo);
-        console.log('✅ Reservación ' + r.codigo + ' sincronizada en intento ' + intento);
+        _removePendingSave(codigo);
+        console.log('✅ Reservación ' + codigo + ' sincronizada en intento ' + intento);
         if (typeof showSaveToast === 'function') showSaveToast('✅ Reservación sincronizada con la nube', 'ok');
       } else {
-        _retrySaveWithBackoff(r, intento + 1);
+        _retrySaveWithBackoff(rActual, intento + 1);
       }
-    }).catch(() => _retrySaveWithBackoff(r, intento + 1));
+    }).catch(() => _retrySaveWithBackoff(rActual, intento + 1));
   }, delay);
 }
 
@@ -3702,21 +3709,9 @@ function removeFromGrid(f, key) {
   if (r) {
     r.estado = 'cancelado';
     _agregarNotaCancelacion(r);
-    // Quitar de la pizarra (desasignar de slots de equipos)
-    const pdDay = pdData[r.fecha];
-    if (pdDay?.columnas) {
-      let cambioPD = false;
-      pdDay.columnas.forEach(col => {
-        [...HORARIOS, 'otra'].forEach(h => {
-          if (col.slots?.[h]?.reservaCodigo === r.codigo) {
-            col.slots[h].reservaCodigo = '';
-            col.slots[h].costo = '';
-            cambioPD = true;
-          }
-        });
-      });
-      if (cambioPD) savePD();
-    }
+    // Limpieza COMPLETA: slots, cobros pendientes, flags _cobrado (v46 fix).
+    _limpiarPDDataYCobrosPorCancelacion(r);
+    savePD();
     saveSingle(r);
     try { renderPD(); } catch(e) {}
   }
@@ -4623,12 +4618,45 @@ function guardarEdicion() {
       safeSetLS('mt_aggrid', JSON.stringify(agGrid));
       flushSyncToSupabase('mt_aggrid', agGrid);
     }
+    // BUG fix v46: también limpiar slots de pizarra del día viejo. Si no, la reserva queda
+    // "asignada" al equipo del día viejo, sigue contando en recalcCerramos de ese día y
+    // aparece duplicada (equipo del martes + equipo del sábado simultáneamente).
+    const pdOld = pdData[oldFecha];
+    if (pdOld?.columnas) {
+      let cambioPD = false;
+      pdOld.columnas.forEach(col => {
+        [...HORARIOS, 'otra'].forEach(h => {
+          if (col.slots?.[h]?.reservaCodigo === r.codigo) {
+            col.slots[h].reservaCodigo = '';
+            col.slots[h].costo = '';
+            cambioPD = true;
+          }
+        });
+      });
+      if (cambioPD) { savePD(); flushSyncToSupabase('mt_pd3', pdData); }
+    }
   } else if (horasCambiaron) {
     const agDay = agGrid[r.fecha];
     if (agDay?.cells) {
       Object.keys(agDay.cells).forEach(k => { if (agDay.cells[k] === r.codigo) delete agDay.cells[k]; });
       safeSetLS('mt_aggrid', JSON.stringify(agGrid));
       flushSyncToSupabase('mt_aggrid', agGrid);
+    }
+    // BUG fix v46: si las HORAS cambiaron (no la fecha), los slots de pizarra siguen
+    // apuntando a horarios viejos. Desasignar para que el usuario reubique con los nuevos.
+    const pdDay = pdData[r.fecha];
+    if (pdDay?.columnas) {
+      let cambioPD = false;
+      pdDay.columnas.forEach(col => {
+        [...HORARIOS, 'otra'].forEach(h => {
+          if (col.slots?.[h]?.reservaCodigo === r.codigo) {
+            col.slots[h].reservaCodigo = '';
+            col.slots[h].costo = '';
+            cambioPD = true;
+          }
+        });
+      });
+      if (cambioPD) { savePD(); flushSyncToSupabase('mt_pd3', pdData); }
     }
   }
   saveSingle(r);
@@ -4752,6 +4780,43 @@ function copiarWA() {
     .catch(() => alert('⚠️ No se pudo copiar. Selecciona el texto manualmente.'));
 }
 
+// Limpia COMPLETAMENTE las trazas de una reserva en pdData (slots + cobrosPendientes) cuando
+// se cancela. Antes solo se vaciaba reservaCodigo y costo, pero quedaban slot.metodo='PENDIENTE',
+// slot.cobrado, slot.fechaCobro, r._cobrado, y entradas en cobrosPendientes[] de otros días.
+// Eso hacía que un LINK pendiente cancelado siguiera contando en _LINK_PENDIENTE del día
+// siguiente vía recalcCerramos, y los cobros pendientes seguían apareciendo en notificaciones.
+function _limpiarPDDataYCobrosPorCancelacion(r) {
+  if (!r) return;
+  // 1) Desasignar slots del día de la reserva
+  const pdDay = pdData[r.fecha];
+  if (pdDay?.columnas) {
+    pdDay.columnas.forEach(col => {
+      [...HORARIOS, 'otra'].forEach(h => {
+        const slot = col.slots?.[h];
+        if (slot && slot.reservaCodigo === r.codigo) {
+          slot.reservaCodigo = '';
+          slot.costo = '';
+          slot.metodo = 'EFECTIVO';
+          delete slot.cobrado;
+          delete slot.fechaCobro;
+          delete slot.metodoCobro;
+        }
+      });
+    });
+  }
+  // 2) Remover entradas en cobrosPendientes[] de CUALQUIER día (porque el cobro se puede
+  //    haber registrado en otro día distinto al de la reserva)
+  Object.values(pdData).forEach(day => {
+    if (Array.isArray(day.cobrosPendientes)) {
+      day.cobrosPendientes = day.cobrosPendientes.filter(cb => cb.codigo !== r.codigo);
+    }
+  });
+  // 3) Limpiar flags de cobro Crédito Fiscal en la propia reserva
+  delete r._cobrado;
+  delete r._fechaCobro;
+  delete r._metodoCobro;
+}
+
 // Agrega una nota de cancelación a r.obs SIN borrar las observaciones existentes.
 // Si ya hay una nota previa de cancelación (mismo prefijo), no la duplica.
 function _agregarNotaCancelacion(r) {
@@ -4788,18 +4853,9 @@ function cambiarEst(est) {
       Object.keys(agDay.cells).forEach(k => { if (agDay.cells[k] === r.codigo) delete agDay.cells[k]; });
       saveAgGrid();
     }
-    const pdDay = pdData[r.fecha];
-    if (pdDay?.columnas) {
-      pdDay.columnas.forEach(col => {
-        [...HORARIOS, 'otra'].forEach(h => {
-          if (col.slots?.[h]?.reservaCodigo === r.codigo) {
-            col.slots[h].reservaCodigo = '';
-            col.slots[h].costo = '';
-          }
-        });
-      });
-      savePD();
-    }
+    // Limpieza COMPLETA: slots, cobros pendientes, flags _cobrado (v46 fix).
+    _limpiarPDDataYCobrosPorCancelacion(r);
+    savePD();
   }
   r.estado = est;
   saveSingle(r);
@@ -4835,21 +4891,9 @@ function eliminar(idxOCodigo) {
     });
     if (cambioAg) saveAgGrid();
   }
-  // Quitar de la pizarra también (desasignar de slots en columnas)
-  const pdDay = pdData[r.fecha];
-  if (pdDay?.columnas) {
-    let cambioPD = false;
-    pdDay.columnas.forEach(col => {
-      [...HORARIOS, 'otra'].forEach(h => {
-        if (col.slots?.[h]?.reservaCodigo === r.codigo) {
-          col.slots[h].reservaCodigo = '';
-          col.slots[h].costo = '';
-          cambioPD = true;
-        }
-      });
-    });
-    if (cambioPD) savePD();
-  }
+  // Limpieza COMPLETA: slots, cobros pendientes, flags _cobrado (v46 fix).
+  _limpiarPDDataYCobrosPorCancelacion(r);
+  savePD();
   saveSingle(r);
   renderAll();
   renderAgenda();
@@ -6516,11 +6560,18 @@ function recalcCerramos() {
   day.cuentas._linkPendiente = (ingServ['_LINK_PENDIENTE'] || 0) + (ingCobros['_LINK_PENDIENTE'] || 0);
   savePD();
 
-  // Propagar cerramos al día siguiente
+  // Propagar cerramos al día siguiente — PERO solo si el día siguiente NO está cerrado.
+  // Si recalculamos un día pasado (después de desbloquearlo), sobreescribir el abrimos
+  // congelado del día siguiente rompe la cadena financiera histórica de todos los días
+  // posteriores que ya cerraron con valores específicos.
   const fManana = getFechaSiguiente(f);
   const manana = getDayData(fManana);
-  CUENTAS.forEach(c => { manana.cuentas.abrimos[c] = day.cuentas.cerramos[c]; });
-  savePD();
+  if (!manana.cuentas?.diaCerrado) {
+    CUENTAS.forEach(c => { manana.cuentas.abrimos[c] = day.cuentas.cerramos[c]; });
+    savePD();
+  } else {
+    console.log('ℹ️ Día siguiente ' + fManana + ' está cerrado — no se propaga el cerramos para no descuadrar el historial.');
+  }
 
   // Actualizar UI
   renderCuentas(f);
@@ -7421,8 +7472,13 @@ function renderComisiones() {
       if (!vendedores.includes(v)) vendedores.push(v);
     }
     if (conteo[v]) {
-      conteo[v].total++;
-      if (r.estado !== 'cancelado') conteo[v].monto += parseFloat(r.costo)||0;
+      // Solo contar como "servicio agendado" si NO está cancelado (v46 fix).
+      // Antes el card mostraba "10 servicios agendados" incluyendo canceladas, lo cual
+      // inflaba la métrica del vendedor y confundía el seguimiento mensual.
+      if (r.estado !== 'cancelado') {
+        conteo[v].total++;
+        conteo[v].monto += parseFloat(r.costo)||0;
+      }
       conteo[v].reservas.push(r);
     }
   });
@@ -7577,7 +7633,7 @@ function renderNotificaciones() {
             <div style="font-size:11px;font-weight:800;color:${urgColor};margin-top:4px;">${urgencia} · ${fmtFecha(r.fecha)} · ${r.hora}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
-            <button onclick="cambiarEstRapido(${idx},'confirmado')" class="btn btn-g btn-sm">✅ Confirmar</button>
+            <button onclick="cambiarEstRapido('${r.codigo}','confirmado')" class="btn btn-g btn-sm">✅ Confirmar</button>
             <button onclick="verRes(${idx});toggleNotificaciones()" class="btn btn-gh btn-sm">👁 Ver</button>
           </div>
         </div>
@@ -7588,9 +7644,18 @@ function renderNotificaciones() {
   if (listaEl) listaEl.innerHTML = html;
 }
 
-function cambiarEstRapido(idx, est) {
-  reservas[idx].estado = est;
-  saveSingle(reservas[idx]);
+function cambiarEstRapido(idxOCodigo, est) {
+  // Aceptar código (preferido) o índice posicional. Resolver por código blindando contra
+  // race con sync que reordene reservas[] entre render y clic (mismo bug v44 en notificaciones).
+  let r;
+  if (typeof idxOCodigo === 'string' && /^MUD/.test(idxOCodigo)) {
+    r = reservas.find(rv => rv.codigo === idxOCodigo);
+  } else {
+    r = reservas[idxOCodigo];
+  }
+  if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  r.estado = est;
+  saveSingle(r);
   renderAll();
   renderNotificaciones();
 }
