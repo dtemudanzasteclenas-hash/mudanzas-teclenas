@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-06-v44';
+const APP_VERSION = '2026-05-06-v45';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3007,6 +3007,66 @@ function getAgDay(f) {
   return agGrid[f];
 }
 
+// Devuelve las filas correctas donde debe ubicarse cada hora de una reservación.
+// Reglas:
+//  - Horas ESTÁNDAR (8 AM, 11 AM, 2:30 PM, Nocturno) → fila igual al horario (fijo).
+//  - Horas CUSTOM (ej. 1:00 PM, 6:30 AM): respetar la decisión del usuario:
+//      (a) si el código ya está ubicado en esa columna en alguna fila válida, preservar.
+//      (b) si no, usar tRow (donde el usuario clicó o arrastró) si está libre.
+//      (c) último recurso: mapHoraToRow como fallback.
+// Esto permite que un servicio de "1:00 PM" aparezca en la fila 11:00 AM si Pedro lo ubica
+// ahí — la pizarra muestra el tag custom "🕐 1:00 PM" sobre la card, pero ocupa el slot
+// elegido. Antes mapHoraToRow forzaba todos los custom a su slot calculado e ignoraba
+// dónde Pedro había clicado.
+function _filasParaReserva(r, col, cells, tRow) {
+  const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
+  const filasUsadas = new Set();
+  const resultado = new Array(horas.length).fill(null);
+
+  // Pasada 1: horas estándar fijan su fila
+  horas.forEach((h, i) => {
+    if (AG_ROWS.includes(h)) {
+      resultado[i] = h;
+      filasUsadas.add(h);
+    }
+  });
+
+  // Filas en la columna donde el código ya está ubicado (excluyendo las ya tomadas por estándar)
+  const filasYaOcupadas = AG_ROWS.filter(rw =>
+    cells && cells[agCellKey(col, rw)] === r.codigo && !filasUsadas.has(rw)
+  );
+  let idxOcupadas = 0;
+
+  // Pasada 2: horas custom
+  horas.forEach((h, i) => {
+    if (resultado[i] !== null) return;
+    // (a) preservar ubicación manual existente
+    if (idxOcupadas < filasYaOcupadas.length) {
+      resultado[i] = filasYaOcupadas[idxOcupadas++];
+      filasUsadas.add(resultado[i]);
+      return;
+    }
+    // (b) usar tRow si es válido y libre
+    if (tRow && AG_ROWS.includes(tRow) && !filasUsadas.has(tRow)) {
+      resultado[i] = tRow;
+      filasUsadas.add(tRow);
+      return;
+    }
+    // (c) fallback mapHoraToRow
+    const fb = mapHoraToRow(h);
+    if (!filasUsadas.has(fb)) {
+      resultado[i] = fb;
+      filasUsadas.add(fb);
+    } else {
+      const libre = AG_ROWS.find(rw => !filasUsadas.has(rw));
+      resultado[i] = libre || fb;
+      filasUsadas.add(resultado[i]);
+    }
+  });
+
+  return resultado;
+}
+
 function agCellKey(col, row) { return `${col}__${row}`; }
 
 function addAgCol() {
@@ -3086,11 +3146,12 @@ function renderAgenda() {
       if (tCol === null || tRow === null) return;
 
       const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
-      // FIX: La FILA siempre corresponde al horario real del servicio (mapHoraToRow).
-      // tRow (la fila clickeada) se ignora porque la pizarra es por horario:
-      // un servicio de 11 AM debe ir en la fila de 11 AM, no donde clicó el usuario.
-      // tCol (columna) sí se respeta porque define el equipo asignado.
-      const rowsToFill = horas.map(h => ({ h, row: mapHoraToRow(h) }));
+      // Filas a llenar:
+      //  - Horas ESTÁNDAR van a su fila estándar (un servicio de 11 AM debe ir en fila 11 AM).
+      //  - Horas CUSTOM respetan tRow (la celda clickeada por el usuario). Eso permite que
+      //    "1:00 PM" se ubique en la fila 11:00 AM si Pedro lo elige ahí, mostrando tag custom.
+      const filas = _filasParaReserva(r, tCol, cells, tRow);
+      const rowsToFill = horas.map((h, i) => ({ h, row: filas[i] }));
 
       // Verificar que todas las celdas destino estén libres en la columna designada
       const todasLibres = rowsToFill.every(({ row }) => !cells[agCellKey(tCol, row)]);
@@ -3110,12 +3171,13 @@ function renderAgenda() {
   // corresponden a su(s) horario(s) en su columna. Eliminamos celdas en filas
   // incorrectas (residuo de bugs anteriores o de target manual erróneo) y
   // rellenamos las filas correctas que falten.
+  // Para horas CUSTOM se preserva la fila donde el usuario las ubicó manualmente.
   let filledAny = false;
   resDia.forEach(r => {
     if (!(r.codigo in colByCodigo)) return;
     const col = colByCodigo[r.codigo];
-    const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
-    const filasCorrectas = new Set(horas.map(h => mapHoraToRow(h)));
+    const filas = _filasParaReserva(r, col, cells, null);
+    const filasCorrectas = new Set(filas);
 
     // 1) Eliminar TODAS las celdas con el código que NO sean (col primaria, fila correcta).
     //    Esto cubre dos casos:
@@ -3194,11 +3256,10 @@ function renderAgenda() {
 
           if (!agGrid[f]) agGrid[f] = { numCols: (getAgDay(f).numCols), cells: {}, hidden: [] };
 
-          // FIX: la columna se respeta (eligió el equipo), pero las FILAS las
-          // determina el horario real de la reservación, NO la celda donde soltó.
-          const horasDrag = resDrag.horasOcupadas && resDrag.horasOcupadas.length > 0
-            ? resDrag.horasOcupadas : [resDrag.hora];
-          const filasCorrectas = horasDrag.map(h => mapHoraToRow(h));
+          // La columna se respeta (eligió el equipo). Las filas:
+          //  - Horas ESTÁNDAR → su fila estándar.
+          //  - Horas CUSTOM → la fila donde el usuario soltó (row), respetando su decisión.
+          const filasCorrectas = _filasParaReserva(resDrag, col, agGrid[f].cells, row);
 
           // Verificar que las filas correctas estén libres en la columna destino
           const ocupadas = filasCorrectas.filter(rw => {
