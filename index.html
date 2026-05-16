@@ -1753,8 +1753,8 @@ function _hayInputEnEdicion() {
 function renderAllSections() {
   // SI EL USUARIO ESTÁ ESCRIBIENDO en un input (gastos, montos, etc.), postponer
   // el re-render para no perder el foco ni el texto que está tipeando.
-  if (_hayInputEnEdicion()) {
-    console.log('⏸️ Render postpuesto: usuario está escribiendo en un input');
+  if (_hayInputEnEdicion() || (typeof _editandoFinanzasReciente === 'function' && _editandoFinanzasReciente())) {
+    console.log('⏸️ Render postpuesto: usuario está escribiendo (input o finanzas reciente)');
     clearTimeout(_renderRetryTimer);
     _renderRetryTimer = setTimeout(renderAllSections, 1500);
     return;
@@ -1776,8 +1776,8 @@ function scheduleFullSyncAndRender(delay = 600) {
   clearTimeout(_fullSyncTimer);
   _fullSyncTimer = setTimeout(async () => {
     // Si el usuario está escribiendo, esperar 2s y reintentar (sin tocar inputs activos)
-    if (_hayInputEnEdicion()) {
-      console.log('⏸️ scheduleFullSyncAndRender postpuesto: usuario escribiendo');
+    if (_hayInputEnEdicion() || (typeof _editandoFinanzasReciente === 'function' && _editandoFinanzasReciente())) {
+      console.log('⏸️ scheduleFullSyncAndRender postpuesto: usuario escribiendo (input o finanzas reciente)');
       scheduleFullSyncAndRender(2000);
       return;
     }
@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-06-v46';
+const APP_VERSION = '2026-05-16-v47';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -4946,6 +4946,30 @@ let editColIdx = null;
 let pdTabActual = 'pizarra';
 
 function savePD() { safeSetLS('mt_pd3', JSON.stringify(pdData)); syncToSupabase('mt_pd3', pdData); }
+// Guarda SOLO en localStorage, sin disparar sync a la nube ni el ciclo Realtime.
+// Se usa mientras el usuario escribe en gastos/ingresos/movimientos para que cada tecla
+// se persista al instante sin provocar un re-render que borre lo que está tipeando.
+function savePDLocal() { safeSetLS('mt_pd3', JSON.stringify(pdData)); }
+
+// Timestamp de la última edición de finanzas (gastos/otros ingresos/movimientos).
+// Si el usuario editó hace poco, NO re-renderizamos esos bloques desde un sync de Realtime
+// (eso destruía la fila que estaba escribiendo y "reiniciaba la página").
+var _ultimaEdicionFinanzas = 0;
+var _VENTANA_EDICION_FINANZAS_MS = 12000; // 12s de gracia tras la última tecla
+function _editandoFinanzasReciente() {
+  return (Date.now() - (_ultimaEdicionFinanzas||0)) < _VENTANA_EDICION_FINANZAS_MS;
+}
+// Debounce para el sync real + recálculo de cuentas: se ejecuta una sola vez,
+// ~1.5s después de que el usuario deja de escribir.
+var _finanzasSyncTimer = null;
+function _programarSyncFinanzas() {
+  clearTimeout(_finanzasSyncTimer);
+  _finanzasSyncTimer = setTimeout(() => {
+    try { syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('sync finanzas:', e); }
+    try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+    try { if (typeof buildTitulosDatalist === 'function') buildTitulosDatalist(); } catch(e) {}
+  }, 1500);
+}
 function pdHoy() { document.getElementById('pd-fecha').valueAsDate = new Date(); renderPD(); }
 function getPDFecha() { return document.getElementById('pd-fecha').value || new Date().toISOString().slice(0,10); }
 
@@ -5936,11 +5960,17 @@ function renderCuaderno() {
       </div>`;
   }
 
-  // Gastos, otros ingresos y movimientos
-  renderGastos();
-  renderOtrosIngresos();
-  renderMovimientos();
-  buildTitulosDatalist();
+  // Gastos, otros ingresos y movimientos.
+  // CRÍTICO: si el usuario editó finanzas hace pocos segundos, NO re-renderizar estos
+  // bloques. Re-dibujarlos destruye las filas/inputs que está escribiendo (era la causa
+  // de "no me deja agregar filas, se reinicia y se borra lo que anoté"). Los datos ya
+  // están guardados localmente vía savePDLocal — solo evitamos pisar el DOM en vivo.
+  if (!_editandoFinanzasReciente()) {
+    renderGastos();
+    renderOtrosIngresos();
+    renderMovimientos();
+    buildTitulosDatalist();
+  }
 
   // Cobros de pendientes del día
   const cobrosContainer = document.getElementById('cobros-dia-container');
@@ -6197,7 +6227,10 @@ function addGasto() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
   day.gastos.push({monto:'',titulo:'',desc:'',fondo:'CAJA CHICA'});
-  savePD(); renderGastos();
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  renderGastos();
+  _programarSyncFinanzas();
 }
 
 function renderGastos() {
@@ -6228,18 +6261,26 @@ function renderGastos() {
 
 function updateGasto(i, campo, val) {
   if (isDiaCerrado()) return;
-  const f=getPDFecha(); getDayData(f).gastos[i][campo]=val; savePD();
+  const f=getPDFecha();
+  getDayData(f).gastos[i][campo]=val;
+  // Guardado LOCAL instantáneo (sin red, sin re-render): cada tecla se persiste pero
+  // NO dispara el ciclo Realtime que re-dibujaba el bloque y borraba la fila en curso.
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  // Solo actualizar el total visible (cálculo liviano, no re-renderiza inputs).
   const total=getDayData(f).gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el=document.getElementById('total-gastos'); if(el) el.textContent='$'+total.toFixed(2);
-  renderStats2(f);
-  if(campo==='monto'||campo==='fondo') recalcCerramos();
-  if(campo==='titulo') buildTitulosDatalist();
+  // Recálculo de cuentas + sync a la nube: DIFERIDOS hasta que el usuario deja de escribir.
+  _programarSyncFinanzas();
 }
 
 function delGasto(i) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
-  const f=getPDFecha(); getDayData(f).gastos.splice(i,1); savePD(); renderGastos(); renderStats2(f);
-  recalcCerramos();
+  const f=getPDFecha(); getDayData(f).gastos.splice(i,1);
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  renderGastos(); renderStats2(f);
+  _programarSyncFinanzas();
 }
 
 // ==================== OTROS INGRESOS ====================
@@ -6248,7 +6289,10 @@ function addOtroIngreso() {
   const f = getPDFecha(); const day = getDayData(f);
   if (!day.otrosIngresos) day.otrosIngresos = [];
   day.otrosIngresos.push({monto:'',titulo:'',desc:'',destino:'CAJA CHICA'});
-  savePD(); renderOtrosIngresos();
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  renderOtrosIngresos();
+  _programarSyncFinanzas();
 }
 
 function renderOtrosIngresos() {
@@ -6282,20 +6326,23 @@ function updateOtroIngreso(i, campo, val) {
   if (isDiaCerrado()) return;
   const f=getPDFecha(); const day=getDayData(f);
   if (!day.otrosIngresos) day.otrosIngresos = [];
-  day.otrosIngresos[i][campo]=val; savePD();
+  day.otrosIngresos[i][campo]=val;
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
   const total=day.otrosIngresos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el=document.getElementById('total-otros-ingresos'); if(el) el.textContent='$'+total.toFixed(2);
-  renderStats2(f);
-  if(campo==='monto'||campo==='destino') recalcCerramos();
-  if(campo==='titulo') buildTitulosDatalist();
+  _programarSyncFinanzas();
 }
 
 function delOtroIngreso(i) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f=getPDFecha(); const day=getDayData(f);
   if (!day.otrosIngresos) return;
-  day.otrosIngresos.splice(i,1); savePD(); renderOtrosIngresos(); renderStats2(f);
-  recalcCerramos();
+  day.otrosIngresos.splice(i,1);
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  renderOtrosIngresos(); renderStats2(f);
+  _programarSyncFinanzas();
 }
 
 // ==================== MOVIMIENTOS ENTRE CUENTAS ====================
@@ -6303,7 +6350,10 @@ function addMovimiento() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
   day.movimientos.push({monto:'',origen:'CAJA CHICA',destino:'GUARDADO',desc:''});
-  savePD(); renderMovimientos(); recalcCerramos();
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  renderMovimientos();
+  _programarSyncFinanzas();
 }
 
 function renderMovimientos() {
@@ -6335,13 +6385,20 @@ function renderMovimientos() {
 function updateMovimiento(i, campo, val) {
   if (isDiaCerrado()) return;
   const f=getPDFecha(); const day=getDayData(f);
-  day.movimientos[i][campo]=val; savePD(); recalcCerramos();
+  day.movimientos[i][campo]=val;
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  _programarSyncFinanzas();
 }
 
 function delMovimiento(i) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f=getPDFecha(); const day=getDayData(f);
-  day.movimientos.splice(i,1); savePD(); renderMovimientos(); recalcCerramos();
+  day.movimientos.splice(i,1);
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  renderMovimientos();
+  _programarSyncFinanzas();
 }
 
 // ==================== COBRO DE PAGOS PENDIENTES ====================
