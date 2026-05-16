@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-16-v47';
+const APP_VERSION = '2026-05-16-v48';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3400,7 +3400,15 @@ function renderAgenda() {
             </div>`;
         } else {
           const horaCustom = hayHoraCustom ? `<div style="font-size:9px;font-weight:800;background:rgba(0,0,0,.3);display:inline-block;padding:1px 6px;border-radius:3px;margin-bottom:2px;">🕐 ${_displayHora}</div>` : '';
+          // Badge de estado: ✅ completado · ⏳ sin confirmar. Confirmado no muestra badge.
+          const estBadge = r.estado === 'completado'
+            ? `<div style="position:absolute;top:5px;right:5px;background:#16a34a;color:#fff;font-size:9px;font-weight:900;padding:2px 7px;border-radius:10px;z-index:2;">✅ HECHO</div>`
+            : r.estado === 'pendiente'
+            ? `<div style="position:absolute;top:5px;right:5px;background:#f59e0b;color:#fff;font-size:9px;font-weight:900;padding:2px 7px;border-radius:10px;z-index:2;">⏳ S/CONFIRMAR</div>`
+            : '';
+          if (r.estado === 'pendiente') cell.style.outline = '2px dashed #f59e0b';
           cell.innerHTML = `
+            ${estBadge}
             <div style="padding:7px 9px;height:100%;display:flex;flex-direction:column;color:#fff;cursor:grab;box-sizing:border-box;gap:3px;">
               <div onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;flex:1;min-height:0;">
                 ${horaCustom}
@@ -6196,7 +6204,40 @@ function cerrarDia() {
   } else {
     const tieneArqueo = CUENTAS.some(c => day.cuentas.arqueo && day.cuentas.arqueo[c]);
     if (!tieneArqueo) { alert('Ingresa el conteo real antes de cerrar el día.'); return; }
-    if (!confirm('¿Cerrar el día? No podrás editar gastos, ingresos ni pagos hasta desbloquear.')) return;
+    // Asistente de cierre: revisar pendientes antes de bloquear
+    let confirmados = 0, sinMarcar = [];
+    (day.columnas||[]).forEach(col => {
+      [...HORARIOS,'otra'].forEach(h => {
+        const cod = col.slots?.[h]?.reservaCodigo;
+        if (!cod) return;
+        const r = reservas.find(rv => rv.codigo === cod);
+        if (!r) return;
+        if (r.estado === 'completado') confirmados++;
+        else if (r.estado !== 'cancelado') sinMarcar.push(`${r.nombre} ${r.apellido||''}`.trim());
+      });
+    });
+    const linkHoy = (day.columnas||[]).reduce((s,col)=>{
+      return s + [...HORARIOS,'otra'].reduce((ss,h)=>{
+        const sl = col.slots?.[h];
+        if (sl && sl.metodo === 'LINK' && sl.reservaCodigo) {
+          const r = reservas.find(rv=>rv.codigo===sl.reservaCodigo);
+          if (r) return ss + (parseFloat(r.costo)||0);
+        }
+        return ss;
+      },0);
+    },0);
+    const pendCobro = (day.columnas||[]).reduce((n,col)=>{
+      return n + [...HORARIOS,'otra'].filter(h=>{
+        const sl=col.slots?.[h]; return sl && sl.metodo==='PENDIENTE' && !sl.cobrado && sl.reservaCodigo;
+      }).length;
+    },0);
+    let resumen = `📋 ANTES DE CERRAR EL DÍA ${f}\n\n`;
+    resumen += `✅ ${confirmados} servicio(s) completado(s)\n`;
+    if (sinMarcar.length) resumen += `⚠️ ${sinMarcar.length} sin marcar como completado:\n   - ${sinMarcar.slice(0,6).join('\n   - ')}${sinMarcar.length>6?'\n   ...':''}\n`;
+    if (linkHoy>0) resumen += `💳 LINK $${linkHoy.toFixed(2)} cae mañana en CUSCATLÁN\n`;
+    if (pendCobro>0) resumen += `🟡 ${pendCobro} cobro(s) PENDIENTE sin marcar\n`;
+    resumen += `\n¿Cerrar el día de todos modos? No podrás editar hasta desbloquear.`;
+    if (!confirm(resumen)) return;
     day.cuentas.diaCerrado = true;
   }
   savePD();
@@ -6402,31 +6443,48 @@ function delMovimiento(i) {
 }
 
 // ==================== COBRO DE PAGOS PENDIENTES ====================
+var _cobroCtx = null;
 function cobrarPendiente(codigo, fechaOriginal) {
-  // Verificar que ni el día original ni el día de cobro estén cerrados
   const dayOrigCheck = getDayData(fechaOriginal);
   if (dayOrigCheck?.cuentas?.diaCerrado) {
     alert('⚠️ El día ' + fechaOriginal + ' está cerrado. Desbloqueá ese día para marcar el cobro o registrá el pago como un "otro ingreso" en el día actual.');
     return;
   }
+  const r = reservas.find(rv => rv.codigo === codigo);
+  _cobroCtx = { codigo, fechaOriginal };
+  const info = document.getElementById('cob-info');
+  if (info) info.textContent = r ? `${r.nombre} ${r.apellido||''} · $${r.costo||'0'} · ${fmtFecha(fechaOriginal)}` : codigo;
+  const fechaEl = document.getElementById('cob-fecha');
+  if (fechaEl) fechaEl.value = getPDFecha();
+  document.getElementById('mo-cobro').classList.add('open');
+}
 
-  const metodo = prompt('¿Cómo se recibió el pago?\n\n1 = EFECTIVO (→ Caja Chica)\n2 = CUSCA (→ Cuscatlán)\n3 = LINK (→ pendiente → Cuscatlán mañana)', '1');
-  if (!metodo) return;
-  const metodoMap = {'1':'EFECTIVO','2':'CUSCA','3':'LINK'};
-  const metodoFinal = metodoMap[metodo] || metodoMap['1'];
+function cerrarModalCobro() {
+  document.getElementById('mo-cobro').classList.remove('open');
+  _cobroCtx = null;
+}
 
-  const hoy = getPDFecha();
-  const fechaCobro = prompt('¿Fecha de cobro? (YYYY-MM-DD)', hoy);
+function enviarRecordatorioCobroWA() {
+  if (!_cobroCtx) return;
+  const r = reservas.find(rv => rv.codigo === _cobroCtx.codigo);
+  if (!r) { alert('No se encontró la reservación.'); return; }
+  const tel = String(r.tel||'').split(/[\/,;]/)[0].replace(/\D/g,'');
+  if (!tel) { alert('Sin teléfono.'); return; }
+  const msg = `Buen día, le saludamos de *Mudanzas Tecleñas*. Le recordamos amablemente que tiene pendiente el pago de la mudanza del *${fmtFecha(_cobroCtx.fechaOriginal)}* por un monto de *$${parseFloat(r.costo||0).toFixed(2)}*. Puede cancelar en efectivo, transferencia o link de pago. ¡Gracias!`;
+  window.open(`https://wa.me/503${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+function confirmarCobroModal() {
+  if (!_cobroCtx) return;
+  const { codigo, fechaOriginal } = _cobroCtx;
+  const metodoFinal = document.getElementById('cob-metodo').value;
+  const fechaCobro = document.getElementById('cob-fecha').value;
   if (!fechaCobro || !/^\d{4}-\d{2}-\d{2}$/.test(fechaCobro)) { alert('Fecha inválida.'); return; }
-
-  // Verificar que el día de cobro no esté cerrado
   const dayCobroCheck = getDayData(fechaCobro);
   if (dayCobroCheck?.cuentas?.diaCerrado) {
     alert('⚠️ El día de cobro ' + fechaCobro + ' está cerrado. Elegí otra fecha o desbloqueá ese día.');
     return;
   }
-
-  // Buscar el slot original y marcarlo como cobrado
   const dayOrig = getDayData(fechaOriginal);
   let montoCobrado = 0;
   let slotMarcado = false;
@@ -6440,14 +6498,14 @@ function cobrarPendiente(codigo, fechaOriginal) {
         const res = reservas.find(r => r.codigo === codigo);
         const costoSlot = parseFloat(slot.costo) || 0;
         const costoRes = res ? parseFloat(res.costo) || 0 : 0;
-        montoCobrado = costoSlot + costoRes;
+        // Tomar el costo del slot si fue ingresado; si no, el de la reservación.
+        // (Antes sumaba ambos, lo que duplicaba si los dos tenían el mismo valor.)
+        montoCobrado = costoSlot > 0 ? costoSlot : costoRes;
         slotMarcado = true;
       }
     });
   });
-
   if (!slotMarcado) {
-    // Crédito fiscal sin slot PENDIENTE — buscar la reserva directamente
     const res = reservas.find(r => r.codigo === codigo);
     if (res) {
       res._cobrado = true;
@@ -6457,24 +6515,15 @@ function cobrarPendiente(codigo, fechaOriginal) {
       slotMarcado = true;
     }
   }
-
   if (!slotMarcado || montoCobrado <= 0) { alert('No se encontró el pago pendiente.'); return; }
-
-  // Registrar el cobro en el día de cobro
   const dayCobro = getDayData(fechaCobro);
   if (!dayCobro.cobrosPendientes) dayCobro.cobrosPendientes = [];
-  dayCobro.cobrosPendientes.push({
-    codigo,
-    monto: montoCobrado,
-    metodo: metodoFinal,
-    fechaOriginal,
-    fecha: fechaCobro
-  });
-
+  dayCobro.cobrosPendientes.push({ codigo, monto: montoCobrado, metodo: metodoFinal, fechaOriginal, fecha: fechaCobro });
   savePD(); safeSetLS('mt2_reservas', JSON.stringify(reservas));
   recalcCerramos();
   renderNotificaciones();
   if (pdTabActual === 'cuaderno') renderCuaderno();
+  cerrarModalCobro();
   alert(`✅ Pago de $${montoCobrado.toFixed(2)} registrado como cobrado (${metodoFinal}) en ${fechaCobro}.`);
 }
 
@@ -7612,7 +7661,13 @@ function renderNotificaciones() {
     return !pagosPendientes.some(p => p.reserva.codigo === r.codigo);
   });
 
-  const totalNotifs = pendientes.length + pagosPendientes.length + empresasPendientes.length;
+  // Servicios PASADOS que siguen "confirmado" (no se marcaron completado/cancelado)
+  const _hoyStr = new Date().toISOString().slice(0,10);
+  const pasadosSinCerrar = reservas.filter(r =>
+    r.estado === 'confirmado' && r.fecha && r.fecha < _hoyStr
+  ).sort((a,b)=> new Date(a.fecha)-new Date(b.fecha));
+
+  const totalNotifs = pendientes.length + pagosPendientes.length + empresasPendientes.length + pasadosSinCerrar.length;
   const countEl = document.getElementById('notif-count');
   const listaEl = document.getElementById('notif-lista');
   const btnEl = document.getElementById('notif-btn');
@@ -7632,6 +7687,25 @@ function renderNotificaciones() {
   hoy.setHours(0,0,0,0);
 
   let html = '';
+
+  // --- SERVICIOS PASADOS SIN CERRAR (lo más urgente, va primero) ---
+  if (pasadosSinCerrar.length > 0) {
+    html += `<div style="background:#fef3c7;border:2px solid #d97706;border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:#92400e;margin-bottom:4px;">⏰ SERVICIOS PASADOS SIN CERRAR</div>
+      <div style="font-size:11px;color:#92400e;margin-bottom:8px;">¿Se hicieron o se cancelaron? Marcalos para no inflar tus números.</div>`;
+    html += pasadosSinCerrar.slice(0,30).map(r => {
+      return `<div style="background:#fff;border-radius:7px;padding:8px 12px;margin-bottom:6px;border-left:4px solid #d97706;">
+        <div style="font-size:12px;font-weight:700;color:#92400e;">${r.nombre} ${r.apellido||''}</div>
+        <div style="font-size:11px;color:#6b7280;">📞 ${r.tel} · ${fmtFecha(r.fecha)} · ${r.hora} · $${r.costo||'0'}</div>
+        <div style="display:flex;gap:5px;margin-top:6px;">
+          <button onclick="cambiarEstRapido('${r.codigo}','completado')" class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">✅ Se hizo</button>
+          <button onclick="eliminar('${r.codigo}')" class="btn btn-sm" style="background:#fee2e2;color:#d42b2b;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">✕ Se canceló</button>
+        </div>
+      </div>`;
+    }).join('');
+    if (pasadosSinCerrar.length > 30) html += `<div style="font-size:11px;color:#92400e;text-align:center;">+${pasadosSinCerrar.length-30} más…</div>`;
+    html += `</div>`;
+  }
 
   // --- PAGOS PENDIENTES (en rojo, primero) ---
   if (pagosPendientes.length > 0 || empresasPendientes.length > 0) {
@@ -7888,6 +7962,35 @@ function alertaPendientesUrgentes() {
   <div class="mf">
     <button class="btn btn-gh" onclick="cancelarHoraCambio()">Cancelar</button>
     <button class="btn btn-p" onclick="confirmarHoraCambio()">✅ Confirmar y mover</button>
+  </div>
+</div>
+</div>
+
+<div class="mo" id="mo-cobro" onclick="if(event.target===this)cerrarModalCobro()">
+<div class="modal" style="width:420px;">
+  <div class="mh" style="background:#16a34a;">
+    <h2>💰 Registrar cobro</h2>
+    <button class="mc" onclick="cerrarModalCobro()">✕</button>
+  </div>
+  <div class="mb">
+    <div id="cob-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
+    <div class="fg">
+      <label>¿Cómo se recibió el pago? *</label>
+      <select id="cob-metodo">
+        <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
+        <option value="CUSCA">CUSCA → Cuscatlán</option>
+        <option value="LINK">LINK → Cuscatlán mañana (95%)</option>
+      </select>
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Fecha de cobro *</label>
+      <input type="date" id="cob-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="enviarRecordatorioCobroWA()" style="margin-right:auto;">📱 Recordar por WA</button>
+    <button class="btn btn-gh" onclick="cerrarModalCobro()">Cancelar</button>
+    <button class="btn btn-p" style="background:#16a34a;" onclick="confirmarCobroModal()">✅ Registrar cobro</button>
   </div>
 </div>
 </div>
