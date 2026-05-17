@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-16-v49';
+const APP_VERSION = '2026-05-16-v50';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5282,7 +5282,8 @@ function buildColumnaTV(col, idx, f) {
     total += parseFloat(s.costo) || 0;
   });
 
-  return `<div class="tv-pz-col" style="border-top:4px solid ${borderColor};">
+  return `<div class="tv-pz-col" style="border-top:4px solid ${col.finalizada?'#16a34a':borderColor};${col.finalizada?'opacity:.55;':''}">
+    ${col.finalizada?`<div style="background:#16a34a;color:#fff;font-size:13px;font-weight:900;text-align:center;padding:2px 0;">✅ FINALIZADO</div>`:''}
     <div class="tv-pz-header">
       <div class="tv-pz-titulo">
         <span class="tv-pz-codigo">${esc(col.camion || col.nombre || '')}</span>
@@ -5529,8 +5530,11 @@ function buildColumna2(col, idx, f) {
   const propPorPersona = numMiembros > 0 && propTotal > 0 ? (propTotal / numMiembros).toFixed(2) : '0.00';
   const placa = col.camion ? col.camion.split('·')[0].trim() : '';
 
+  const finalizada = col.finalizada === true;
+  const borde = finalizada ? '#16a34a' : color;
   return `
-  <div style="min-width:240px;max-width:255px;flex-shrink:0;background:#fff;border-radius:10px;box-shadow:0 2px 16px rgba(26,58,107,.12);overflow:hidden;border-top:5px solid ${color};display:flex;flex-direction:column;">
+  <div style="min-width:240px;max-width:255px;flex-shrink:0;background:${finalizada?'#f0fdf4':'#fff'};border-radius:10px;box-shadow:0 2px 16px rgba(26,58,107,.12);overflow:hidden;border-top:5px solid ${borde};display:flex;flex-direction:column;position:relative;">
+    ${finalizada?`<div style="background:#16a34a;color:#fff;font-size:11px;font-weight:900;text-align:center;padding:3px 0;letter-spacing:.05em;">✅ GRUPO FINALIZADO</div>`:''}
     <div data-pd-header style="padding:12px 14px 10px;border-bottom:1px solid #e8eef9;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
         <div>
@@ -5556,10 +5560,44 @@ function buildColumna2(col, idx, f) {
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:${color};">$${totalCol.toFixed(2)}</span>
       </div>
       ${totalPagos>0?`<div style="text-align:right;font-size:11px;color:#d97706;font-weight:700;margin-top:2px;">Personal: $${totalPagos.toFixed(2)}</div>`:''}
+      <button onclick="toggleFinalizarColumna(${idx})" style="width:100%;margin-top:10px;background:${finalizada?'#fef3c7':'#16a34a'};color:${finalizada?'#92400e':'#fff'};border:none;border-radius:7px;padding:8px 0;font-size:12px;font-weight:800;cursor:pointer;font-family:'Barlow',sans-serif;">${finalizada?'↩️ Reabrir grupo':'✅ Concluir grupo'}</button>
     </div>
   </div>`;
 }
 
+
+function toggleFinalizarColumna(idx) {
+  const f = getPDFecha();
+  const day = getDayData(f);
+  const col = day.columnas[idx];
+  if (!col) return;
+  if (col.finalizada) {
+    if (!confirm(`¿Reabrir el grupo "${col.nombre}"? Vas a poder volver a editar sus servicios y pagos.`)) return;
+    col.finalizada = false;
+    savePD(); renderPD();
+    return;
+  }
+  // Concluir: marcar reservaciones del grupo como completadas
+  const codigos = new Set();
+  [...HORARIOS, 'otra'].forEach(h => {
+    const cod = col.slots?.[h]?.reservaCodigo;
+    if (cod) codigos.add(cod);
+  });
+  if (!confirm(`¿Concluir el grupo "${col.nombre}"?\n\n• ${codigos.size} servicio(s) se marcarán como COMPLETADOS\n• El grupo quedará como FINALIZADO\n• Podés reabrirlo si necesitás corregir algo`)) return;
+  codigos.forEach(cod => {
+    const r = reservas.find(rv => rv.codigo === cod);
+    if (r && r.estado !== 'cancelado') {
+      r.estado = 'completado';
+      saveSingle(r);
+    }
+  });
+  col.finalizada = true;
+  savePD();
+  renderPD();
+  renderAll();
+  try { renderAgenda(); } catch(e) {}
+  renderNotificaciones();
+}
 
 function toggleSlot(id) {
   const panel = document.getElementById(id);
