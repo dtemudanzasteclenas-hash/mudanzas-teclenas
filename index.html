@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-16-v51';
+const APP_VERSION = '2026-05-16-v52';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3258,6 +3258,7 @@ function renderAgenda() {
               agDragSource = null; return;
             }
             resDrag.estado = 'confirmado';
+            _quitarNotaCancelacion(resDrag);
             saveSingle(resDrag);
           }
 
@@ -4844,6 +4845,14 @@ function _agregarNotaCancelacion(r) {
   }
 }
 
+// Quita la nota "Servicio cancelado por el cliente..." de r.obs al reactivar/reagendar.
+// Conserva el resto de observaciones manuales intactas.
+function _quitarNotaCancelacion(r) {
+  if (!r || !r.obs) return;
+  const lineas = r.obs.split('\n').filter(l => !/^Servicio cancelado por el cliente/i.test(l.trim()));
+  r.obs = lineas.join('\n').trim();
+}
+
 function cambiarEst(est) {
   // CRÍTICO: resolver por código, no por índice. Si reservas[] se reordenó por sync mientras
   // el modal estaba abierto, reservas[verIdx] podría apuntar a OTRA reservación → cancelaríamos
@@ -4864,6 +4873,9 @@ function cambiarEst(est) {
     // Limpieza COMPLETA: slots, cobros pendientes, flags _cobrado (v46 fix).
     _limpiarPDDataYCobrosPorCancelacion(r);
     savePD();
+  } else {
+    // Reactivar/reagendar: quitar la nota de cancelación de las observaciones
+    _quitarNotaCancelacion(r);
   }
   r.estado = est;
   saveSingle(r);
@@ -7869,6 +7881,7 @@ function cambiarEstRapido(idxOCodigo, est) {
     r = reservas[idxOCodigo];
   }
   if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  if (est !== 'cancelado') _quitarNotaCancelacion(r);
   r.estado = est;
   saveSingle(r);
   renderAll();
