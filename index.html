@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-16-v53';
+const APP_VERSION = '2026-05-19-v54';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -7737,9 +7737,22 @@ function renderComisiones() {
       </tr>`).join('');
 }
 
+// ¿Este código ya tiene un cobro registrado? La fuente de verdad es pdData.cobrosPendientes[]
+// (se guarda en app_data y SÍ persiste en la nube). El flag r._cobrado NO persiste en Supabase
+// — por eso un cobro de Crédito Fiscal "se deshacía solo" tras cualquier sync.
+function _yaCobrado(codigo) {
+  if (!codigo) return false;
+  for (const day of Object.values(pdData || {})) {
+    if (Array.isArray(day?.cobrosPendientes) && day.cobrosPendientes.some(cb => cb.codigo === codigo)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function renderNotificaciones() {
   const pendientes = reservas.filter(r => r.estado === 'pendiente');
-  
+
   // Pagos pendientes de empresas (crédito fiscal con método PENDIENTE en la pizarra)
   const pagosPendientes = [];
   const _codigosYaAgregados = new Set();
@@ -7750,7 +7763,7 @@ function renderNotificaciones() {
         if (!slot || !slot.reservaCodigo) return;
         if (slot.metodo === 'PENDIENTE' && !slot.cobrado) {
           const r = reservas.find(rv => rv.codigo === slot.reservaCodigo);
-          if (r && r.estado === 'completado' && !_codigosYaAgregados.has(r.codigo)) {
+          if (r && r.estado === 'completado' && !_codigosYaAgregados.has(r.codigo) && !_yaCobrado(r.codigo)) {
             _codigosYaAgregados.add(r.codigo);
             pagosPendientes.push({ reserva: r, fecha, equipo: col.nombre });
           }
@@ -7762,7 +7775,8 @@ function renderNotificaciones() {
   const empresasPendientes = reservas.filter(r =>
     r.estado === 'completado' &&
     r.tipoCliente === 'Crédito Fiscal' &&
-    !r._cobrado
+    !r._cobrado &&
+    !_yaCobrado(r.codigo)
   ).filter(r => {
     // Check if already in pagosPendientes
     return !pagosPendientes.some(p => p.reserva.codigo === r.codigo);
