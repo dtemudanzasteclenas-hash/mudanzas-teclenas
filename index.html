@@ -2270,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-16-v52';
+const APP_VERSION = '2026-05-16-v53';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5097,14 +5097,17 @@ function renderPD() {
   const neto = totalServicios - totalGastos - totalPersonal;
 
   const statsEl = document.getElementById('pd-stats');
-  if (statsEl) statsEl.innerHTML = `
-    <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
-    <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
-    <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-    <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -5% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
-    <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
-    <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>
-  `;
+  // El render de stats va aislado: si algo falla acá NO debe impedir que se vea la pizarra.
+  try {
+    if (statsEl) statsEl.innerHTML = `
+      <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
+      <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
+      <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
+      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -5% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
+      <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
+      <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>
+    `;
+  } catch(e) { console.warn('render stats pd error:', e); }
 
   // Pizarra
   const piz = document.getElementById('pd-pizarra');
@@ -5765,34 +5768,40 @@ function updatePago(f, colIdx, mIdx, val) {
 function _calcLinkPorDia(fHasta, diasAtras) {
   const porDia = [];
   let total = 0;
-  const limite = new Date(fHasta + 'T12:00:00');
-  const desde = new Date(limite); desde.setDate(desde.getDate() - (diasAtras||13));
-  Object.keys(pdData).sort().forEach(fecha => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
-    const d = new Date(fecha + 'T12:00:00');
-    if (d < desde || d > limite) return;
-    const day = pdData[fecha];
-    if (!day?.columnas) return;
-    let linkDia = 0;
-    const contados = new Set();
-    day.columnas.forEach(col => {
-      [...HORARIOS, 'otra'].forEach(h => {
-        const sl = col.slots?.[h];
-        if (!sl || sl.metodo !== 'LINK' || !sl.reservaCodigo) return;
-        if (contados.has(sl.reservaCodigo)) return;
-        contados.add(sl.reservaCodigo);
-        const res = reservas.find(rv => rv.codigo === sl.reservaCodigo);
-        const cSlot = parseFloat(sl.costo) || 0;
-        const cRes = res ? parseFloat(res.costo) || 0 : 0;
-        linkDia += (cSlot > 0 ? cSlot : cRes);
+  // Blindado: cualquier dato corrupto sincronizado (columnas no-array, fecha inválida, etc.)
+  // NO debe tumbar el render de stats. Ante cualquier error devuelve acumulado 0.
+  try {
+    const limite = new Date((fHasta||'') + 'T12:00:00');
+    if (isNaN(limite.getTime())) return { porDia, total };
+    const desde = new Date(limite); desde.setDate(desde.getDate() - (diasAtras||13));
+    Object.keys(pdData || {}).sort().forEach(fecha => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
+      const d = new Date(fecha + 'T12:00:00');
+      if (d < desde || d > limite) return;
+      const day = pdData[fecha];
+      if (!day || !Array.isArray(day.columnas)) return;
+      let linkDia = 0;
+      const contados = new Set();
+      day.columnas.forEach(col => {
+        if (!col || !col.slots) return;
+        [...HORARIOS, 'otra'].forEach(h => {
+          const sl = col.slots?.[h];
+          if (!sl || sl.metodo !== 'LINK' || !sl.reservaCodigo) return;
+          if (contados.has(sl.reservaCodigo)) return;
+          contados.add(sl.reservaCodigo);
+          const res = (reservas||[]).find(rv => rv.codigo === sl.reservaCodigo);
+          const cSlot = parseFloat(sl.costo) || 0;
+          const cRes = res ? parseFloat(res.costo) || 0 : 0;
+          linkDia += (cSlot > 0 ? cSlot : cRes);
+        });
       });
+      if (linkDia > 0) {
+        const neto = linkDia * 0.95;
+        porDia.push({ fecha, linkNeto: neto });
+        total += neto;
+      }
     });
-    if (linkDia > 0) {
-      const neto = linkDia * 0.95;
-      porDia.push({ fecha, linkNeto: neto });
-      total += neto;
-    }
-  });
+  } catch(e) { console.warn('_calcLinkPorDia error:', e); }
   return { porDia, total };
 }
 
@@ -5817,13 +5826,15 @@ function renderStats2(f) {
   const totalPersonal=day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
   const linkNeto=totalLink*0.95; const neto=totalServicios-totalGastos-totalPersonal;
   const statsEl=document.getElementById('pd-stats');
-  if(statsEl) statsEl.innerHTML=`
-    <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
-    <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
-    <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-    <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -5% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
-    <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
-    <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>`;
+  try {
+    if(statsEl) statsEl.innerHTML=`
+      <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
+      <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
+      <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
+      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -5% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
+      <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
+      <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>`;
+  } catch(e) { console.warn('render stats2 error:', e); }
 }
 
 // ==================== MODAL COLUMNA ====================
