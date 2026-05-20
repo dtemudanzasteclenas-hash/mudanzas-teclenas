@@ -597,19 +597,22 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <label style="font-size:13px;font-weight:600;">Fecha:</label>
       <input type="date" id="ag-fecha" oninput="renderAgenda()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
       <button class="btn btn-gh btn-sm" onclick="agHoy()">Hoy</button>
-      <button class="btn btn-p btn-sm" onclick="forceSync()" style="background:#0ea5e9;" title="Descarga los datos más recientes desde la nube">🔄 Actualizar</button>
-      <!-- Botón "Limpiar caché" oculto (v26): el sync es automático, no debería necesitarse más.
-           Mantiene la función hardReloadDatos() accesible vía consola o clic en el indicador de sync. -->
-      <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#dc2626;display:none;" title="Limpia el caché local y recarga todo desde la nube">🧹 Limpiar caché</button>
-      <!-- Herramientas de recuperación post-migración (v58) -->
-      <button class="btn btn-p btn-sm" onclick="descargarBackupCompleto()" style="background:#0f766e;" title="Descarga un JSON con todos los datos (reservas, agenda, pizarra, comentarios). HACÉ ESTO ANTES DE CUALQUIER LIMPIEZA.">💾 Backup completo</button>
-      <button class="btn btn-p btn-sm" onclick="diagnosticarDuplicados()" style="background:#7c3aed;" title="Analiza los datos y reporta cuántas reservaciones están duplicadas (sin borrar nada)">🔍 Diagnóstico</button>
-      <button class="btn btn-p btn-sm" onclick="limpiarDuplicados()" style="background:#dc2626;" title="Borra los duplicados (después de hacer el backup)">🧹 Limpiar duplicados</button>
-      <button class="btn btn-p btn-sm" onclick="reubicarDesdePizarra()" style="background:#0891b2;" title="Reubica las reservaciones en la agenda usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
-      <button class="btn btn-p btn-sm" onclick="migrarTodosLosCodigosA6Digitos()" style="background:#92400e;" title="Renumera todas las reservaciones viejas (MUD...) al formato 000-000 SIN duplicar y preservando su ubicación">🔢 Renumerar a 000-000</button>
       <button class="btn btn-p btn-sm" onclick="imprimirAgendaDia()" style="background:#16a34a;">📄 Descargar PDF del día</button>
       <button class="btn btn-p btn-sm" onclick="toggleTVMode('agenda')" style="background:#0f172a;">🖥️ Modo TV</button>
+      <!-- Botón único que despliega herramientas administrativas (ocultas para no presionarlas por error) -->
+      <button class="btn btn-p btn-sm" onclick="document.getElementById('admin-tools').style.display=document.getElementById('admin-tools').style.display==='flex'?'none':'flex'" style="background:#6b7280;" title="Herramientas administrativas (mostrar/ocultar)">⚙️</button>
     </div>
+  </div>
+  <!-- Herramientas administrativas — ocultas por defecto. Se muestran tocando ⚙️ -->
+  <div id="admin-tools" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">
+    <span style="font-size:11px;font-weight:800;color:#9a3412;text-transform:uppercase;letter-spacing:.05em;">⚠️ Herramientas administrativas:</span>
+    <button class="btn btn-p btn-sm" onclick="forceSync()" style="background:#0ea5e9;" title="Descarga los datos más recientes desde la nube">🔄 Actualizar</button>
+    <button class="btn btn-p btn-sm" onclick="descargarBackupCompleto()" style="background:#0f766e;" title="Descarga un JSON con todos los datos">💾 Backup completo</button>
+    <button class="btn btn-p btn-sm" onclick="diagnosticarDuplicados()" style="background:#7c3aed;" title="Analiza y reporta duplicados (no borra nada)">🔍 Diagnóstico</button>
+    <button class="btn btn-p btn-sm" onclick="limpiarDuplicados()" style="background:#dc2626;" title="Borra los duplicados (hacer backup antes)">🧹 Limpiar duplicados</button>
+    <button class="btn btn-p btn-sm" onclick="reubicarDesdePizarra()" style="background:#0891b2;" title="Reubica usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
+    <button class="btn btn-p btn-sm" onclick="migrarTodosLosCodigosA6Digitos()" style="background:#92400e;" title="Renumera códigos viejos al formato 000-000">🔢 Renumerar a 000-000</button>
+    <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#991b1b;" title="Limpia el caché local y recarga todo desde la nube">🧹 Limpiar caché</button>
   </div>
 
   <!-- Leyenda -->
@@ -2283,7 +2286,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v64';
+const APP_VERSION = '2026-05-20-v65';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -8102,7 +8105,9 @@ function _yaCobrado(codigo) {
 function renderNotificaciones() {
   const pendientes = reservas.filter(r => r.estado === 'pendiente');
 
-  // Pagos pendientes de empresas (crédito fiscal con método PENDIENTE en la pizarra)
+  // Pagos pendientes: SOLO los servicios cuyo slot en la pizarra tiene método 'PENDIENTE'
+  // y no están cobrados todavía. NO se incluyen automáticamente los Crédito Fiscal —
+  // el método de pago lo decide el usuario en la pizarra, independiente del tipo de cliente.
   const pagosPendientes = [];
   const _codigosYaAgregados = new Set();
   Object.entries(pdData).forEach(([fecha, day]) => {
@@ -8112,24 +8117,16 @@ function renderNotificaciones() {
         if (!slot || !slot.reservaCodigo) return;
         if (slot.metodo === 'PENDIENTE' && !slot.cobrado) {
           const r = reservas.find(rv => rv.codigo === slot.reservaCodigo);
-          if (r && r.estado === 'completado' && !_codigosYaAgregados.has(r.codigo) && !_yaCobrado(r.codigo)) {
-            _codigosYaAgregados.add(r.codigo);
-            pagosPendientes.push({ reserva: r, fecha, equipo: col.nombre });
-          }
+          if (!r || r.estado === 'cancelado') return;
+          if (_codigosYaAgregados.has(r.codigo)) return;
+          if (_yaCobrado(r.codigo)) return;
+          _codigosYaAgregados.add(r.codigo);
+          pagosPendientes.push({ reserva: r, fecha, equipo: col.nombre });
         }
       });
     });
   });
-  // Also find completed reservations with tipoCliente='Crédito Fiscal' that are PENDIENTE payment
-  const empresasPendientes = reservas.filter(r =>
-    r.estado === 'completado' &&
-    r.tipoCliente === 'Crédito Fiscal' &&
-    !r._cobrado &&
-    !_yaCobrado(r.codigo)
-  ).filter(r => {
-    // Check if already in pagosPendientes
-    return !pagosPendientes.some(p => p.reserva.codigo === r.codigo);
-  });
+  const empresasPendientes = []; // sección eliminada: Crédito Fiscal ≠ PENDIENTE automático
 
   // Servicios PASADOS que siguen "confirmado" (no se marcaron completado/cancelado)
   const _hoyStr = new Date().toISOString().slice(0,10);
