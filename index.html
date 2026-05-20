@@ -1777,9 +1777,16 @@ let _renderRetryTimer = null;
 // Sync completo (app_data + reservaciones) y render de todas las vistas.
 // Usado por realtime y polling para mantener la TV al día sin interacción manual.
 let _fullSyncTimer = null;
+var _limpiezaEnCurso = false;
 function scheduleFullSyncAndRender(delay = 600) {
   clearTimeout(_fullSyncTimer);
   _fullSyncTimer = setTimeout(async () => {
+    // Limpieza de duplicados corriendo: hardReplace pisaría las eliminaciones a medio camino.
+    if (_limpiezaEnCurso) {
+      console.log('⏸️ scheduleFullSyncAndRender postpuesto: limpieza de duplicados en curso');
+      scheduleFullSyncAndRender(2000);
+      return;
+    }
     // Si el usuario está escribiendo, esperar 2s y reintentar (sin tocar inputs activos)
     if (_hayInputEnEdicion() || (typeof _editandoFinanzasReciente === 'function' && _editandoFinanzasReciente())) {
       console.log('⏸️ scheduleFullSyncAndRender postpuesto: usuario escribiendo (input o finanzas reciente)');
@@ -2275,7 +2282,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v61';
+const APP_VERSION = '2026-05-20-v62';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3612,6 +3619,8 @@ async function limpiarDuplicados() {
   if (duplicados.length === 0) { alert('No hay duplicados que limpiar.'); return; }
   const totalSobrantes = duplicados.reduce((s,g) => s + (g.length - 1), 0);
   if (!confirm(`Voy a borrar ${totalSobrantes} reservación(es) duplicada(s) repartidas en ${duplicados.length} grupos.\n\n• Criterio estricto: SOLO se borran si coinciden nombre + apellido + teléfono + fecha + hora + costo + dirección de carga + dirección de descarga.\n• Conservo la copia con código MUD... (la original).\n• Si en un grupo no hay MUD, conservo la primera.\n• Actualizo la agenda y la pizarra para que apunten a la sobreviviente.\n• Antes de borrar nada, descargo un JSON con las reservaciones que voy a eliminar (por si necesitás restaurar alguna).\n\n⚠️ Asegurate de tener el "💾 Backup completo" ya guardado.\n\n¿Continuar?`)) return;
+  // Activar flag: scheduleFullSyncAndRender NO debe hacer hardReplace mientras corre esta limpieza.
+  _limpiezaEnCurso = true;
   // Mapping: codigo_a_borrar -> codigo_sobreviviente (para reapuntar agGrid/pdData)
   const reapuntar = {};
   const codigosABorrar = [];
@@ -3663,21 +3672,39 @@ async function limpiarDuplicados() {
       day.cobrosPendientes.forEach(cb => { if (reapuntar[cb.codigo]) cb.codigo = reapuntar[cb.codigo]; });
     }
   });
+  // Reapuntar comentarios (local) — sin esto los comentarios quedan huérfanos apuntando a códigos borrados
+  if (typeof comentarios !== 'undefined' && comentarios) {
+    Object.values(comentarios).forEach(arr => {
+      if (Array.isArray(arr)) arr.forEach(c => { if (reapuntar[c.reservacion]) c.reservacion = reapuntar[c.reservacion]; });
+    });
+    safeSetLS('mt_comentarios', JSON.stringify(comentarios));
+  }
   // Persistir local
   safeSetLS('mt2_reservas', JSON.stringify(reservas));
   safeSetLS('mt_aggrid', JSON.stringify(agGrid));
   safeSetLS('mt_pd3', JSON.stringify(pdData));
-  // Borrar de Supabase los códigos duplicados
+  // Borrar de Supabase los códigos duplicados + actualizar tabla comentarios
   let ok = 0, err = 0;
   if (supabaseOK) {
     for (const cv of codigosABorrar) {
       try { const r = await deleteReservaFromSupabase(cv); if (r) ok++; else err++; } catch(e) { err++; }
     }
-    if (typeof syncToSupabase === 'function') {
+    // Actualizar tabla comentarios en Supabase: reapuntar reservacion_codigo viejo → sobreviviente
+    for (const cv of codigosABorrar) {
+      const nuevo = reapuntar[cv];
+      try { await sb.from('comentarios').update({ reservacion_codigo: nuevo }).eq('reservacion_codigo', cv); }
+      catch(e) { console.warn('update comentarios sb error:', cv, e); }
+    }
+    // FLUSH inmediato (sin debounce) — sin esto, Realtime puede pisar agGrid/pdData con la versión vieja.
+    if (typeof flushSyncToSupabase === 'function') {
+      await flushSyncToSupabase('mt_aggrid', agGrid);
+      await flushSyncToSupabase('mt_pd3', pdData);
+    } else if (typeof syncToSupabase === 'function') {
       syncToSupabase('mt_aggrid', agGrid);
       syncToSupabase('mt_pd3', pdData);
     }
   }
+  _limpiezaEnCurso = false;
   alert(`✅ Limpieza completada.\n\n• ${codigosABorrar.length} duplicados borrados localmente\n• ${ok} borrados de la nube${err>0?'\n• '+err+' fallaron — tocá de nuevo para reintentar':''}\n\nReservaciones restantes: ${reservas.length}`);
   renderAll();
   try { renderAgenda(); } catch(e) {}
@@ -3695,24 +3722,34 @@ async function reubicarDesdePizarra() {
     if (!agGrid[fecha].cells) agGrid[fecha].cells = {};
     day.columnas.forEach((col, idx) => {
       if (!col?.slots) return;
+      // Detectar la primera reserva válida asignada a esta columna y reubicarla
+      // respetando la lógica v61 (custom no consume slot extra si hay estándar).
+      const codigosVistos = new Set();
       [...HORARIOS, 'otra'].forEach(h => {
         const cod = col.slots?.[h]?.reservaCodigo;
         if (!cod) return;
+        if (codigosVistos.has(cod)) return; // mismo código en múltiples slots → procesar una sola vez
+        codigosVistos.add(cod);
         const r = (reservas||[]).find(rv => rv.codigo === cod);
         if (!r || r.fecha !== fecha) return;
         if (r.estado === 'cancelado') return;
-        const filaDestino = (h === 'otra') ? (typeof mapHoraToRow === 'function' ? mapHoraToRow(r.hora) : '8:00 AM') : h;
-        const k = agCellKey(idx, filaDestino);
-        if (agGrid[fecha].cells[k] !== cod) {
-          agGrid[fecha].cells[k] = cod;
-          cambios++;
-        }
+        // Filas únicas que debe ocupar (incluye multi-hora correctamente)
+        const tRowHint = (h === 'otra') ? (typeof mapHoraToRow === 'function' ? mapHoraToRow(r.hora) : '8:00 AM') : h;
+        const filas = _filasParaReserva(r, idx, agGrid[fecha].cells, tRowHint);
+        filas.forEach(filaDestino => {
+          const k = agCellKey(idx, filaDestino);
+          if (agGrid[fecha].cells[k] !== cod) {
+            agGrid[fecha].cells[k] = cod;
+            cambios++;
+          }
+        });
       });
     });
     agGrid[fecha].numCols = Math.max(agGrid[fecha].numCols||6, day.columnas.length);
   });
   safeSetLS('mt_aggrid', JSON.stringify(agGrid));
-  if (typeof syncToSupabase === 'function') syncToSupabase('mt_aggrid', agGrid);
+  if (typeof flushSyncToSupabase === 'function') await flushSyncToSupabase('mt_aggrid', agGrid);
+  else if (typeof syncToSupabase === 'function') syncToSupabase('mt_aggrid', agGrid);
   alert(`✅ ${cambios} celda(s) reubicada(s) en la agenda usando los equipos de la pizarra.`);
   renderAgenda();
 }
@@ -4923,7 +4960,8 @@ function abrirWhatsAppAuto(r) {
   const msg = generarMensajeWhatsApp(r);
   // Detectar múltiples teléfonos (separados por / , ; o "y")
   const telsRaw = String(r.tel).split(/[\/,;]|\s+y\s+/i).map(t => t.trim()).filter(t => t);
-  const telsLimpios = telsRaw.map(t => t.replace(/\D/g,'')).filter(t => t.length >= 7);
+  // Filtrar: 7+ dígitos y al menos un dígito ≠ 0 (descarta basura tipo "00000000")
+  const telsLimpios = telsRaw.map(t => t.replace(/\D/g,'')).filter(t => t.length >= 7 && /[1-9]/.test(t));
   if (telsLimpios.length === 0) return;
   // Abrir SIEMPRE el primer teléfono — predecible, sin prompt bloqueante que el navegador pueda
   // tratar como interacción no-iniciada-por-usuario (lo cual causaría bloqueo de window.open).
