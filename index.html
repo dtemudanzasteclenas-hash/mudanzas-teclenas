@@ -569,6 +569,14 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   <button class="sb-btn" onclick="openWAReader()"><span class="ic">💬</span>Leer WhatsApp</button>
   <button class="sb-btn" onclick="nav('clientes')"><span class="ic">👥</span>Clientes</button>
   <button class="sb-btn" onclick="nav('comisiones')"><span class="ic">💰</span>Comisiones</button>
+  <!-- Buscador rápido por código (para sistema de descuentos) -->
+  <div style="margin-top:16px;padding:12px 11px;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;">
+    <div style="font-size:11px;font-weight:800;color:#92400e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">🎟️ Código de descuento</div>
+    <input type="text" id="codigo-descuento" placeholder="000-000" inputmode="numeric"
+      onkeydown="if(event.key==='Enter')buscarPorCodigoDescuento()"
+      style="width:100%;border:1.5px solid #d97706;border-radius:6px;padding:7px 10px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;background:#fff;box-sizing:border-box;text-align:center;font-weight:700;letter-spacing:.05em;">
+    <button onclick="buscarPorCodigoDescuento()" style="width:100%;margin-top:6px;background:#d97706;color:#fff;border:none;border-radius:6px;padding:7px 0;font-size:12px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">Buscar reservación</button>
+  </div>
 </aside>
 
 <main class="main">
@@ -2286,7 +2294,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v65';
+const APP_VERSION = '2026-05-20-v66';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -4284,13 +4292,52 @@ function _normSearch(s) {
   return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 }
 function filtrarRes() {
-  const q = _normSearch(document.getElementById('q-res').value);
+  const qRaw = document.getElementById('q-res').value;
+  const q = _normSearch(qRaw);
+  const qDigitos = qRaw.replace(/\D/g,'');
   const est = document.getElementById('q-est').value;
-  const f = reservas.filter(r =>
-    (!q || _normSearch(r.nombre+' '+r.apellido).includes(q) || _normSearch(r.codigo).includes(q) || _normSearch(r.tel||'').includes(q)) &&
-    (!est || r.estado === est)
-  );
+  const f = reservas.filter(r => {
+    if (est && r.estado !== est) return false;
+    if (!q) return true;
+    if (_normSearch(r.nombre+' '+r.apellido).includes(q)) return true;
+    if (_normSearch(r.codigo).includes(q)) return true;
+    // Por dígitos: "123456" o "123-456" matchea código con esos dígitos
+    if (qDigitos.length >= 6 && String(r.codigo||'').replace(/\D/g,'').includes(qDigitos)) return true;
+    if (_normSearch(r.tel||'').includes(q)) return true;
+    return false;
+  });
   renderTable('tb-res', f, true);
+}
+
+// Buscador rápido por código (sistema de descuentos). Tipea los 6 dígitos en el sidebar:
+//   - encuentra la reservación,
+//   - va a Reservaciones,
+//   - filtra por el teléfono del cliente para listar TODAS sus mudanzas,
+//   - abre el modal de la reservación encontrada.
+function buscarPorCodigoDescuento() {
+  const inp = document.getElementById('codigo-descuento');
+  if (!inp) return;
+  const raw = inp.value.trim();
+  const digitos = raw.replace(/\D/g,'');
+  if (digitos.length < 6) { alert('Ingresá los 6 dígitos del código (formato 000-000).'); return; }
+  // Buscar reservación por código (con o sin guión, o que contenga esos dígitos)
+  const r = reservas.find(rv => {
+    const cod = String(rv.codigo||'');
+    if (cod === raw) return true;
+    if (cod.replace(/\D/g,'').includes(digitos)) return true;
+    return false;
+  });
+  if (!r) { alert(`No encontré ninguna reservación con código "${raw}".`); return; }
+  // Ir a Reservaciones y filtrar por teléfono del cliente
+  nav('reservaciones');
+  setTimeout(() => {
+    const qRes = document.getElementById('q-res');
+    if (qRes) { qRes.value = r.tel || ''; filtrarRes(); }
+    // Abrir el modal de la reservación encontrada
+    const idx = reservas.indexOf(r);
+    if (idx >= 0) verRes(idx);
+    inp.value = '';
+  }, 100);
 }
 
 // ==================== NUEVA RESERVACIÓN ====================
