@@ -2282,7 +2282,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v62';
+const APP_VERSION = '2026-05-20-v63';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2548,13 +2548,21 @@ window.addEventListener('online', () => {
   setTimeout(() => reintentarSavesPendientes(true), 1000);
 });
 
+// Genera un código de 6 dígitos formato 000-000, único contra el array reservas actual.
+// Las reservaciones VIEJAS con código MUD... mantienen su código (no se migran).
+function _formatCod6() {
+  const n = Math.floor(Math.random() * 1000000);
+  const s = String(n).padStart(6, '0');
+  return s.slice(0,3) + '-' + s.slice(3);
+}
 function genCod() {
-  // Máximo número de código existente
-  const max = reservas.reduce((m,r) => { const n=parseInt(String(r.codigo).replace(/\D/g,''))||0; return n>m?n:m; }, 99693);
-  // Sufijo aleatorio de 2 caracteres para evitar colisiones entre vendedores offline
-  // que generarían el mismo "siguiente" número simultáneamente. Ej: MUD00009985X-A3
-  const suf = Math.random().toString(36).substring(2,4).toUpperCase();
-  return 'MUD' + String(max+1).padStart(9,'0') + '-' + suf;
+  const usados = new Set((reservas||[]).map(r => r.codigo));
+  for (let i = 0; i < 500; i++) {
+    const c = _formatCod6();
+    if (!usados.has(c)) return c;
+  }
+  // Fallback ultra improbable: sufijo extra random para asegurar unicidad
+  return _formatCod6() + '-' + Math.random().toString(36).substring(2,4).toUpperCase();
 }
 
 // ==================== NAV ====================
