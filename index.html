@@ -598,7 +598,6 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <input type="date" id="ag-fecha" oninput="renderAgenda()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
       <button class="btn btn-gh btn-sm" onclick="agHoy()">Hoy</button>
       <button class="btn btn-p btn-sm" onclick="forceSync()" style="background:#0ea5e9;" title="Descarga los datos más recientes desde la nube">🔄 Actualizar</button>
-      <button class="btn btn-p btn-sm" onclick="reconstruirAgendaDesdePizarra()" style="background:#7c3aed;" title="Vuelve a colocar las reservaciones en sus columnas usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
       <!-- Botón "Limpiar caché" oculto (v26): el sync es automático, no debería necesitarse más.
            Mantiene la función hardReloadDatos() accesible vía consola o clic en el indicador de sync. -->
       <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#dc2626;display:none;" title="Limpia el caché local y recarga todo desde la nube">🧹 Limpiar caché</button>
@@ -658,7 +657,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   <div class="sec-title">📋 <span>Reservaciones</span></div>
   <div class="flex gap2 mb3" style="justify-content:space-between;align-items:center;flex-wrap:wrap;">
     <div class="search-row">
-      <input type="text" id="q-res" placeholder="🔍 Buscar por código (000-000), nombre o teléfono..." oninput="filtrarRes()">
+      <input type="text" id="q-res" placeholder="🔍 Buscar cliente..." oninput="filtrarRes()">
       <select id="q-est" onchange="filtrarRes()">
         <option value="">Todos los estados</option>
         <option value="pendiente">Pendiente</option>
@@ -668,7 +667,6 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       </select>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn btn-gh btn-sm" onclick="migrarCodigosA6digitos()" title="Convierte los códigos viejos al formato 000-000" style="background:#fef3c7;color:#92400e;">🔢 Migrar códigos</button>
       <button class="btn btn-gh btn-sm" onclick="exportarReservas()" title="Descarga un JSON con todas las reservaciones para migrar a otro dispositivo">📤 Exportar JSON</button>
       <button class="btn btn-gh btn-sm" onclick="document.getElementById('import-reservas-input').click()" title="Importa reservaciones desde un JSON previamente exportado">📥 Importar JSON</button>
       <input type="file" id="import-reservas-input" accept=".json" style="display:none" onchange="importarReservas(this.files[0])">
@@ -1207,7 +1205,6 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
           <div class="pdf-f" style="flex:2"><label>Lugar de descarga</label><div class="v" id="p-desc"></div></div>
         </div>
         <div id="p-srv-bloque"></div>
-        <div id="p-equipo-block"></div>
         <div class="pdf-obs"><strong style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--gris2);">Observaciones:</strong><br><span id="p-obs"></span></div>
         <div class="pdf-firma">
           <div style="margin-top:14px;">Yo: _______________________________ como cliente hago constar que he revisado la unidad entregada al finalizar el servicio y está en las mismas condiciones.</div>
@@ -1775,17 +1772,9 @@ let _renderRetryTimer = null;
 // Sync completo (app_data + reservaciones) y render de todas las vistas.
 // Usado por realtime y polling para mantener la TV al día sin interacción manual.
 let _fullSyncTimer = null;
-var _migracionEnCurso = false;
 function scheduleFullSyncAndRender(delay = 600) {
   clearTimeout(_fullSyncTimer);
   _fullSyncTimer = setTimeout(async () => {
-    // Migración corriendo: postergar — no podemos hacer hardReplace de reservas[]
-    // mid-migración o se pierden las que ya renombramos pero todavía no subieron.
-    if (_migracionEnCurso) {
-      console.log('⏸️ scheduleFullSyncAndRender postpuesto: migración de códigos en curso');
-      scheduleFullSyncAndRender(2000);
-      return;
-    }
     // Si el usuario está escribiendo, esperar 2s y reintentar (sin tocar inputs activos)
     if (_hayInputEnEdicion() || (typeof _editandoFinanzasReciente === 'function' && _editandoFinanzasReciente())) {
       console.log('⏸️ scheduleFullSyncAndRender postpuesto: usuario escribiendo (input o finanzas reciente)');
@@ -2281,7 +2270,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-19-v57';
+const APP_VERSION = '2026-05-19-v58-rollback';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2547,20 +2536,13 @@ window.addEventListener('online', () => {
   setTimeout(() => reintentarSavesPendientes(true), 1000);
 });
 
-// Genera un código de 6 dígitos formato 000-000, único contra el array reservas actual.
-function _formatCod6() {
-  const n = Math.floor(Math.random() * 1000000);
-  const s = String(n).padStart(6, '0');
-  return s.slice(0,3) + '-' + s.slice(3);
-}
 function genCod() {
-  const usados = new Set((reservas||[]).map(r => r.codigo));
-  for (let i = 0; i < 200; i++) {
-    const c = _formatCod6();
-    if (!usados.has(c)) return c;
-  }
-  // Fallback ultra improbable: sufijo extra random
-  return _formatCod6() + '-' + Math.random().toString(36).substring(2,4).toUpperCase();
+  // Máximo número de código existente
+  const max = reservas.reduce((m,r) => { const n=parseInt(String(r.codigo).replace(/\D/g,''))||0; return n>m?n:m; }, 99693);
+  // Sufijo aleatorio de 2 caracteres para evitar colisiones entre vendedores offline
+  // que generarían el mismo "siguiente" número simultáneamente. Ej: MUD00009985X-A3
+  const suf = Math.random().toString(36).substring(2,4).toUpperCase();
+  return 'MUD' + String(max+1).padStart(9,'0') + '-' + suf;
 }
 
 // ==================== NAV ====================
@@ -3102,58 +3084,6 @@ function addAgCol() {
   renderAgenda();
 }
 
-// Reconstruye agGrid.cells usando la pizarra (pdData) como fuente de verdad.
-// Para cada slot ocupado en cualquier día, ubica la reservación en la columna
-// correspondiente de la agenda en el horario de ese slot. Las reservas que NO están
-// asignadas a ningún equipo en la pizarra siguen en "Sin ubicar" — hay que arrastrarlas
-// manualmente. Útil tras una migración o cuando la agenda se desincronizó.
-async function reconstruirAgendaDesdePizarra() {
-  if (!confirm('Voy a reubicar las reservaciones usando los equipos asignados en la pizarra.\n\n• Cada reservación asignada a un equipo va a la columna y horario correspondiente.\n• Las que NO están en la pizarra siguen en "Sin ubicar" hasta que las arrastres.\n• Esto sobreescribe la agenda actual.\n\n¿Continuar?')) return;
-  let cambios = 0;
-  let fechasAfectadas = 0;
-  Object.entries(pdData||{}).forEach(([fecha, day]) => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
-    if (!Array.isArray(day?.columnas) || day.columnas.length === 0) return;
-    if (!agGrid[fecha]) agGrid[fecha] = { numCols: 6, cells: {}, hidden: [] };
-    if (!agGrid[fecha].cells) agGrid[fecha].cells = {};
-    let cambioDia = false;
-    day.columnas.forEach((col, idx) => {
-      if (!col?.slots) return;
-      [...HORARIOS, 'otra'].forEach(h => {
-        const cod = col.slots?.[h]?.reservaCodigo;
-        if (!cod) return;
-        const r = (reservas||[]).find(rv => rv.codigo === cod);
-        if (!r || r.fecha !== fecha) return;
-        if (r.estado === 'cancelado') return;
-        // Determinar las filas correctas (horas estándar a su slot; custom al horario clicado)
-        const filas = (typeof _filasParaReserva === 'function')
-          ? _filasParaReserva(r, idx, agGrid[fecha].cells, h)
-          : [h === 'otra' ? '8:00 AM' : h];
-        filas.forEach(rw => {
-          const k = agCellKey(idx, rw);
-          if (agGrid[fecha].cells[k] !== cod) {
-            agGrid[fecha].cells[k] = cod;
-            cambios++;
-            cambioDia = true;
-          }
-        });
-      });
-    });
-    if (cambioDia) {
-      agGrid[fecha].numCols = Math.max(agGrid[fecha].numCols||6, day.columnas.length);
-      fechasAfectadas++;
-    }
-  });
-  if (cambios === 0) {
-    alert('No encontré nada para reubicar. Las reservaciones sin ubicar no estaban asignadas a ningún equipo en la pizarra — hay que arrastrarlas manualmente desde el banner amarillo.');
-    return;
-  }
-  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
-  if (typeof flushSyncToSupabase === 'function') await flushSyncToSupabase('mt_aggrid', agGrid);
-  alert(`✅ ${cambios} celda(s) reubicada(s) en ${fechasAfectadas} día(s).\n\nSi alguna quedó en el banner "Sin ubicar", es porque no estaba en la pizarra de ese día — arrastrala a la columna donde la querés.`);
-  renderAgenda();
-}
-
 function renderAgenda() {
   const f = document.getElementById('ag-fecha')?.value || new Date().toISOString().slice(0,10);
   if (!document.getElementById('ag-fecha').value) document.getElementById('ag-fecha').valueAsDate = new Date();
@@ -3605,110 +3535,6 @@ function agSinUbicarTouchStart(codigo) {
 }
 
 // ==================== EXPORTAR / IMPORTAR RESERVACIONES ====================
-// MIGRACIÓN de códigos viejos al formato 000-000.
-// Renombra TODAS las reservaciones sin formato ddd-ddd, propaga el cambio a agGrid,
-// pdData (slots + cobrosPendientes) y comentarios. Sube los nuevos a Supabase y borra los viejos.
-async function migrarCodigosA6digitos() {
-  const esNuevo = c => /^\d{3}-\d{3}$/.test(c||'');
-  const viejos = reservas.filter(r => !esNuevo(r.codigo));
-  if (viejos.length === 0) { alert('✅ No hay códigos viejos por migrar. Todas las reservaciones ya tienen formato 000-000.'); return; }
-  if (!confirm(`Voy a renumerar ${viejos.length} reservación(es) al formato 000-000.\n\n• Los códigos viejos dejarán de funcionar.\n• Se actualizan la agenda, la pizarra, los cobros y los comentarios.\n• Esto sube los cambios a la nube.\n\n⚠️ Asegurate de que NO haya otros dispositivos editando simultáneamente.\n\n¿Continuar?`)) return;
-  _migracionEnCurso = true;
-  const usados = new Set(reservas.map(r => r.codigo).filter(esNuevo));
-  const mapping = {};
-  for (const r of viejos) {
-    let nuevo = null;
-    for (let i = 0; i < 1000; i++) {
-      const cand = _formatCod6();
-      if (!usados.has(cand)) { nuevo = cand; break; }
-    }
-    if (!nuevo) { alert('❌ Error generando código único. Avisale a Pedro.'); return; }
-    mapping[r.codigo] = nuevo;
-    usados.add(nuevo);
-  }
-  const codigosViejos = Object.keys(mapping);
-  // 1) Reservas — guardar copia del código viejo antes de mutar (para borrar luego de Supabase)
-  reservas.forEach(r => {
-    if (mapping[r.codigo]) { r._codigoViejo = r.codigo; r.codigo = mapping[r.codigo]; }
-  });
-  // 2) agGrid
-  Object.values(agGrid||{}).forEach(day => {
-    if (day && day.cells) {
-      Object.keys(day.cells).forEach(k => {
-        if (mapping[day.cells[k]]) day.cells[k] = mapping[day.cells[k]];
-      });
-    }
-    if (day && Array.isArray(day.hidden)) {
-      day.hidden = day.hidden.map(c => mapping[c] || c);
-    }
-  });
-  // 3) pdData
-  Object.values(pdData||{}).forEach(day => {
-    (day.columnas||[]).forEach(col => {
-      Object.values(col.slots||{}).forEach(slot => {
-        if (slot && mapping[slot.reservaCodigo]) slot.reservaCodigo = mapping[slot.reservaCodigo];
-      });
-    });
-    if (Array.isArray(day.cobrosPendientes)) {
-      day.cobrosPendientes.forEach(cb => { if (mapping[cb.codigo]) cb.codigo = mapping[cb.codigo]; });
-    }
-  });
-  // 4) comentarios (local)
-  Object.values(comentarios||{}).forEach(arr => {
-    if (Array.isArray(arr)) arr.forEach(c => { if (mapping[c.reservacion]) c.reservacion = mapping[c.reservacion]; });
-  });
-  // 5) Cola de pendientes — si hay reservas con código viejo encoladas, renombrarlas
-  try {
-    const colaPend = _getPendingSaves();
-    if (Array.isArray(colaPend) && colaPend.length > 0) {
-      const colaNueva = colaPend.map(p => mapping[p.codigo] ? { ...p, codigo: mapping[p.codigo] } : p);
-      _setPendingSaves(colaNueva);
-    }
-  } catch(e) { console.warn('migración cola pendientes:', e); }
-  // 6) Persistir LOCAL
-  safeSetLS('mt2_reservas', JSON.stringify(reservas));
-  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
-  safeSetLS('mt_pd3', JSON.stringify(pdData));
-  safeSetLS('mt_comentarios', JSON.stringify(comentarios||{}));
-  // 7) Supabase — subir renombradas + borrar viejas + actualizar tabla comentarios
-  let ok = 0, err = 0;
-  if (supabaseOK) {
-    for (const r of reservas) {
-      if (!r._codigoViejo) continue;
-      try { const res = await saveReservaToSupabase(r); if (res) ok++; else err++; } catch(e) { err++; }
-    }
-    for (const cv of codigosViejos) {
-      try { await deleteReservaFromSupabase(cv); } catch(e) {}
-    }
-    // Actualizar la tabla comentarios en Supabase: cambiar reservacion_codigo viejo → nuevo
-    // Sin esto, al hacer loadComentariosFromSupabase los comentarios apuntan al código viejo
-    // (que ya no existe en reservas) y se "pierden" de la UI.
-    for (const cv of codigosViejos) {
-      const nuevo = mapping[cv];
-      try {
-        await sb.from('comentarios').update({ reservacion_codigo: nuevo }).eq('reservacion_codigo', cv);
-      } catch(e) { console.warn('update comentarios sb error:', cv, e); }
-    }
-    await flushSyncToSupabase('mt_aggrid', agGrid);
-    await flushSyncToSupabase('mt_pd3', pdData);
-  }
-  reservas.forEach(r => { delete r._codigoViejo; });
-  safeSetLS('mt2_reservas', JSON.stringify(reservas));
-  // Solo marcar como hecha si NO hubo errores de upload (si falló alguno, dejar la opción
-  // de volver a correr la migración para reintentar los que faltaron).
-  if (err === 0) localStorage.setItem('mt_migracion_codigos_done', '1');
-  _migracionEnCurso = false;
-  if (supabaseOK) {
-    alert(`✅ Migración completa.\n\n• ${viejos.length} reservaciones renumeradas\n• ${ok} subidas a la nube${err>0?'\n• '+err+' errores de sync — corré el botón de nuevo para reintentar':''}`);
-  } else {
-    alert(`⚠️ ${viejos.length} reservaciones renumeradas localmente. No hay conexión a la nube — los cambios subirán cuando recupere internet.`);
-  }
-  renderAll();
-  try { renderAgenda(); } catch(e) {}
-  try { renderPD(); } catch(e) {}
-  try { renderNotificaciones(); } catch(e) {}
-}
-
 function exportarReservas() {
   if (!reservas || reservas.length === 0) { alert('No hay reservaciones que exportar.'); return; }
   const blob = new Blob([JSON.stringify(reservas, null, 2)], { type: 'application/json' });
@@ -4107,21 +3933,12 @@ function _normSearch(s) {
   return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 }
 function filtrarRes() {
-  const qRaw = document.getElementById('q-res').value;
-  const q = _normSearch(qRaw);
-  const qDigitos = qRaw.replace(/\D/g,'');
+  const q = _normSearch(document.getElementById('q-res').value);
   const est = document.getElementById('q-est').value;
-  const f = reservas.filter(r => {
-    if (est && r.estado !== est) return false;
-    if (!q) return true;
-    if (_normSearch(r.nombre+' '+r.apellido).includes(q)) return true;
-    if (_normSearch(r.codigo).includes(q)) return true;
-    // Búsqueda por dígitos: "123456" o "123-456" matchea código exacto "123-456".
-    // Umbral 6 = código completo (evita matches espurios masivos con 3 dígitos).
-    if (qDigitos.length >= 6 && String(r.codigo||'').replace(/\D/g,'').startsWith(qDigitos)) return true;
-    if (_normSearch(r.tel||'').includes(q)) return true;
-    return false;
-  });
+  const f = reservas.filter(r =>
+    (!q || _normSearch(r.nombre+' '+r.apellido).includes(q) || _normSearch(r.codigo).includes(q) || _normSearch(r.tel||'').includes(q)) &&
+    (!est || r.estado === est)
+  );
   renderTable('tb-res', f, true);
 }
 
@@ -4551,33 +4368,6 @@ function verRes(idx) {
     srvBloque += `<div class="pdf-srv" style="border-color:#d97706;"><strong>📫 EMPAQUE DE CAJAS:</strong> Cajas: ${r.empaque.cajas} | Resmas papel: ${r.empaque.resmas} | Tape: ${r.empaque.tape} rollos | Espumas: ${r.empaque.espuma} pliegos | Guantes: ${r.empaque.guantes} pares | Pilots: ${r.empaque.pilot}${perc}${r.empaque.obs ? ' | '+r.empaque.obs : ''}</div>`;
   }
   document.getElementById('p-srv-bloque').innerHTML = srvBloque;
-  // Equipo asignado en la pizarra (si la mudanza ya tenía equipo asignado).
-  // Solo se muestra si la reservación está en algún slot de pdData[r.fecha].
-  const equipoBlock = document.getElementById('p-equipo-block');
-  if (equipoBlock) {
-    try {
-      const pdDay = pdData[r.fecha];
-      let colAsig = null;
-      if (pdDay?.columnas) {
-        colAsig = pdDay.columnas.find(col => {
-          if (!col.slots) return false;
-          return [...HORARIOS, 'otra'].some(h => col.slots[h]?.reservaCodigo === r.codigo);
-        });
-      }
-      if (colAsig && Array.isArray(colAsig.miembros) && colAsig.miembros.length > 0) {
-        const miembrosHTML = colAsig.miembros.map(m => {
-          const esM = MOTORISTAS && MOTORISTAS.has(m.nombre);
-          const esEv = m.eventual === true;
-          const etq = esM ? '<span style="color:#d42b2b;font-weight:900;">(M)</span> ' : (esEv ? '<span style="color:#d97706;font-weight:900;">(E)</span> ' : '');
-          return `<span style="display:inline-block;background:#eef2ff;border:1px solid #c7d5f0;border-radius:6px;padding:2px 8px;margin:2px;font-size:11px;">${etq}${m.nombre}</span>`;
-        }).join('');
-        const camion = colAsig.camion ? ` · 🚛 ${colAsig.camion}` : '';
-        equipoBlock.innerHTML = `<div class="pdf-srv" style="border-color:#1e4fa0;background:#f8faff;"><strong>👥 EQUIPO ASIGNADO:</strong> ${colAsig.nombre || '—'}${camion}<div style="margin-top:4px;">${miembrosHTML}</div></div>`;
-      } else {
-        equipoBlock.innerHTML = '';
-      }
-    } catch(e) { equipoBlock.innerHTML = ''; console.warn('equipo block error:', e); }
-  }
   document.getElementById('p-obs').textContent = r.obs || '—';
 
   // WhatsApp
@@ -5102,7 +4892,7 @@ function eliminar(idxOCodigo) {
   // clic del usuario, el array reservas pudo reordenarse por sync y reservas[idx] apuntaría a
   // otra reservación, causando que canceláramos la equivocada.
   let r;
-  if (typeof idxOCodigo === 'string' && (/^\d{3}-\d{3}/.test(idxOCodigo) || /^MUD/.test(idxOCodigo))) {
+  if (typeof idxOCodigo === 'string' && /^MUD/.test(idxOCodigo)) {
     r = reservas.find(rv => rv.codigo === idxOCodigo);
   } else {
     r = reservas[idxOCodigo];
@@ -8110,7 +7900,7 @@ function cambiarEstRapido(idxOCodigo, est) {
   // Aceptar código (preferido) o índice posicional. Resolver por código blindando contra
   // race con sync que reordene reservas[] entre render y clic (mismo bug v44 en notificaciones).
   let r;
-  if (typeof idxOCodigo === 'string' && (/^\d{3}-\d{3}/.test(idxOCodigo) || /^MUD/.test(idxOCodigo))) {
+  if (typeof idxOCodigo === 'string' && /^MUD/.test(idxOCodigo)) {
     r = reservas.find(rv => rv.codigo === idxOCodigo);
   } else {
     r = reservas[idxOCodigo];
