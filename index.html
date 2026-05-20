@@ -2275,7 +2275,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-19-v59-recuperacion';
+const APP_VERSION = '2026-05-19-v60-recuperacion';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3568,13 +3568,18 @@ function descargarBackupCompleto() {
 // Identifica grupos de reservaciones duplicadas (mismo nombre + tel + fecha + hora + costo).
 // SOLO LECTURA — no borra nada. Muestra reporte para que Pedro decida si limpiar.
 function _claveDuplicado(r) {
+  // Criterio estricto: solo se consideran duplicados si TODOS estos campos coinciden.
+  // Incluye carga y descarga para evitar borrar reservaciones legítimamente distintas
+  // (mismo cliente puede tener 2 mudanzas distintas el mismo día a distintos lugares).
   return [
     (r.nombre||'').trim().toLowerCase(),
     (r.apellido||'').trim().toLowerCase(),
     String(r.tel||'').replace(/\D/g,''),
     r.fecha||'',
     r.hora||'',
-    String(parseFloat(r.costo)||0)
+    String(parseFloat(r.costo)||0),
+    (r.carga||'').trim().toLowerCase(),
+    (r.descarga||'').trim().toLowerCase()
   ].join('|');
 }
 function _agruparDuplicados() {
@@ -3609,10 +3614,11 @@ async function limpiarDuplicados() {
   const duplicados = _agruparDuplicados();
   if (duplicados.length === 0) { alert('No hay duplicados que limpiar.'); return; }
   const totalSobrantes = duplicados.reduce((s,g) => s + (g.length - 1), 0);
-  if (!confirm(`Voy a borrar ${totalSobrantes} reservación(es) duplicada(s) repartidas en ${duplicados.length} grupos.\n\n• Conservo la copia con código MUD... (la original).\n• Si en un grupo no hay MUD, conservo la primera.\n• Actualizo la agenda y la pizarra para que apunten a la sobreviviente.\n\n⚠️ Hiciste el "💾 Backup completo" antes, ¿no?\n\n¿Continuar?`)) return;
+  if (!confirm(`Voy a borrar ${totalSobrantes} reservación(es) duplicada(s) repartidas en ${duplicados.length} grupos.\n\n• Criterio estricto: SOLO se borran si coinciden nombre + apellido + teléfono + fecha + hora + costo + dirección de carga + dirección de descarga.\n• Conservo la copia con código MUD... (la original).\n• Si en un grupo no hay MUD, conservo la primera.\n• Actualizo la agenda y la pizarra para que apunten a la sobreviviente.\n• Antes de borrar nada, descargo un JSON con las reservaciones que voy a eliminar (por si necesitás restaurar alguna).\n\n⚠️ Asegurate de tener el "💾 Backup completo" ya guardado.\n\n¿Continuar?`)) return;
   // Mapping: codigo_a_borrar -> codigo_sobreviviente (para reapuntar agGrid/pdData)
   const reapuntar = {};
   const codigosABorrar = [];
+  const borradasParaBackup = [];
   duplicados.forEach(g => {
     let sobreviviente = g.find(r => /^MUD/i.test(r.codigo||''));
     if (!sobreviviente) sobreviviente = g[0];
@@ -3620,9 +3626,25 @@ async function limpiarDuplicados() {
       if (r.codigo !== sobreviviente.codigo) {
         reapuntar[r.codigo] = sobreviviente.codigo;
         codigosABorrar.push(r.codigo);
+        borradasParaBackup.push(r);
       }
     });
   });
+  // Backup de seguridad: descargar las reservaciones que se van a borrar ANTES de borrarlas.
+  try {
+    const blob = new Blob([JSON.stringify({
+      fecha: new Date().toISOString(),
+      motivo: 'duplicados borrados por limpiarDuplicados()',
+      cantidad: borradasParaBackup.length,
+      reservaciones: borradasParaBackup
+    }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    a.href = url; a.download = `duplicados_borrados_${ts}.json`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  } catch(e) { console.warn('No se pudo descargar backup de borrados:', e); }
   // Quitar del array reservas
   reservas = reservas.filter(r => !codigosABorrar.includes(r.codigo));
   // Reapuntar agGrid
