@@ -598,6 +598,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <input type="date" id="ag-fecha" oninput="renderAgenda()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
       <button class="btn btn-gh btn-sm" onclick="agHoy()">Hoy</button>
       <button class="btn btn-p btn-sm" onclick="forceSync()" style="background:#0ea5e9;" title="Descarga los datos más recientes desde la nube">🔄 Actualizar</button>
+      <button class="btn btn-p btn-sm" onclick="reconstruirAgendaDesdePizarra()" style="background:#7c3aed;" title="Vuelve a colocar las reservaciones en sus columnas usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
       <!-- Botón "Limpiar caché" oculto (v26): el sync es automático, no debería necesitarse más.
            Mantiene la función hardReloadDatos() accesible vía consola o clic en el indicador de sync. -->
       <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#dc2626;display:none;" title="Limpia el caché local y recarga todo desde la nube">🧹 Limpiar caché</button>
@@ -2280,7 +2281,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-19-v56';
+const APP_VERSION = '2026-05-19-v57';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3098,6 +3099,58 @@ function addAgCol() {
   const day = getAgDay(f);
   day.numCols++;
   saveAgGrid();
+  renderAgenda();
+}
+
+// Reconstruye agGrid.cells usando la pizarra (pdData) como fuente de verdad.
+// Para cada slot ocupado en cualquier día, ubica la reservación en la columna
+// correspondiente de la agenda en el horario de ese slot. Las reservas que NO están
+// asignadas a ningún equipo en la pizarra siguen en "Sin ubicar" — hay que arrastrarlas
+// manualmente. Útil tras una migración o cuando la agenda se desincronizó.
+async function reconstruirAgendaDesdePizarra() {
+  if (!confirm('Voy a reubicar las reservaciones usando los equipos asignados en la pizarra.\n\n• Cada reservación asignada a un equipo va a la columna y horario correspondiente.\n• Las que NO están en la pizarra siguen en "Sin ubicar" hasta que las arrastres.\n• Esto sobreescribe la agenda actual.\n\n¿Continuar?')) return;
+  let cambios = 0;
+  let fechasAfectadas = 0;
+  Object.entries(pdData||{}).forEach(([fecha, day]) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
+    if (!Array.isArray(day?.columnas) || day.columnas.length === 0) return;
+    if (!agGrid[fecha]) agGrid[fecha] = { numCols: 6, cells: {}, hidden: [] };
+    if (!agGrid[fecha].cells) agGrid[fecha].cells = {};
+    let cambioDia = false;
+    day.columnas.forEach((col, idx) => {
+      if (!col?.slots) return;
+      [...HORARIOS, 'otra'].forEach(h => {
+        const cod = col.slots?.[h]?.reservaCodigo;
+        if (!cod) return;
+        const r = (reservas||[]).find(rv => rv.codigo === cod);
+        if (!r || r.fecha !== fecha) return;
+        if (r.estado === 'cancelado') return;
+        // Determinar las filas correctas (horas estándar a su slot; custom al horario clicado)
+        const filas = (typeof _filasParaReserva === 'function')
+          ? _filasParaReserva(r, idx, agGrid[fecha].cells, h)
+          : [h === 'otra' ? '8:00 AM' : h];
+        filas.forEach(rw => {
+          const k = agCellKey(idx, rw);
+          if (agGrid[fecha].cells[k] !== cod) {
+            agGrid[fecha].cells[k] = cod;
+            cambios++;
+            cambioDia = true;
+          }
+        });
+      });
+    });
+    if (cambioDia) {
+      agGrid[fecha].numCols = Math.max(agGrid[fecha].numCols||6, day.columnas.length);
+      fechasAfectadas++;
+    }
+  });
+  if (cambios === 0) {
+    alert('No encontré nada para reubicar. Las reservaciones sin ubicar no estaban asignadas a ningún equipo en la pizarra — hay que arrastrarlas manualmente desde el banner amarillo.');
+    return;
+  }
+  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+  if (typeof flushSyncToSupabase === 'function') await flushSyncToSupabase('mt_aggrid', agGrid);
+  alert(`✅ ${cambios} celda(s) reubicada(s) en ${fechasAfectadas} día(s).\n\nSi alguna quedó en el banner "Sin ubicar", es porque no estaba en la pizarra de ese día — arrastrala a la columna donde la querés.`);
   renderAgenda();
 }
 
