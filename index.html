@@ -2275,7 +2275,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-19-v60-recuperacion';
+const APP_VERSION = '2026-05-20-v61';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3019,62 +3019,57 @@ function getAgDay(f) {
   return agGrid[f];
 }
 
-// Devuelve las filas correctas donde debe ubicarse cada hora de una reservación.
-// Reglas:
-//  - Horas ESTÁNDAR (8 AM, 11 AM, 2:30 PM, Nocturno) → fila igual al horario (fijo).
-//  - Horas CUSTOM (ej. 1:00 PM, 6:30 AM): respetar la decisión del usuario:
-//      (a) si el código ya está ubicado en esa columna en alguna fila válida, preservar.
-//      (b) si no, usar tRow (donde el usuario clicó o arrastró) si está libre.
-//      (c) último recurso: mapHoraToRow como fallback.
-// Esto permite que un servicio de "1:00 PM" aparezca en la fila 11:00 AM si Pedro lo ubica
-// ahí — la pizarra muestra el tag custom "🕐 1:00 PM" sobre la card, pero ocupa el slot
-// elegido. Antes mapHoraToRow forzaba todos los custom a su slot calculado e ignoraba
-// dónde Pedro había clicado.
+// Devuelve las filas únicas que la reservación debe ocupar en la columna.
+// Reglas (v61):
+//  - Horas ESTÁNDAR (8 AM, 11 AM, 2:30 PM, Nocturno) ocupan su fila correspondiente.
+//  - Si HAY horas estándar tachadas, las horas CUSTOM NO ocupan filas adicionales.
+//    El horario custom (ej. "6:00 am") se considera información (hora real) y se
+//    muestra como tag sobre la card del primer slot ocupado, pero no consume slot.
+//  - Si TODAS las horas son custom, ocupan UNA fila — la elegida por el usuario
+//    (tRow donde clicó/arrastró) o la fila donde el código ya está, o mapHoraToRow
+//    como fallback.
+// IMPORTANTE: ya no devolvemos un array paralelo a horas. Devolvemos solo las filas
+// únicas a ocupar (puede ser menor que horas.length cuando hay custom + estándar).
 function _filasParaReserva(r, col, cells, tRow) {
   const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
   const filasUsadas = new Set();
-  const resultado = new Array(horas.length).fill(null);
+  const resultado = [];
 
-  // Pasada 1: horas estándar fijan su fila
-  horas.forEach((h, i) => {
-    if (AG_ROWS.includes(h)) {
-      resultado[i] = h;
+  // Pasada 1: horas estándar fijan su fila (única por fila)
+  horas.forEach(h => {
+    if (AG_ROWS.includes(h) && !filasUsadas.has(h)) {
+      resultado.push(h);
       filasUsadas.add(h);
     }
   });
 
-  // Filas en la columna donde el código ya está ubicado (excluyendo las ya tomadas por estándar)
-  const filasYaOcupadas = AG_ROWS.filter(rw =>
-    cells && cells[agCellKey(col, rw)] === r.codigo && !filasUsadas.has(rw)
-  );
-  let idxOcupadas = 0;
+  const hayEstandar = resultado.length > 0;
+  const horasCustom = horas.filter(h => !AG_ROWS.includes(h));
 
-  // Pasada 2: horas custom
-  horas.forEach((h, i) => {
-    if (resultado[i] !== null) return;
+  // Si HAY horas estándar tachadas, las custom NO consumen fila extra.
+  // El horario custom se mostrará como tag informativo encima de la card del estándar.
+  if (hayEstandar) return resultado;
+
+  // Solo CUSTOM: ocupar exactamente UNA fila (la primera custom decide).
+  if (horasCustom.length > 0) {
+    const h0 = horasCustom[0];
     // (a) preservar ubicación manual existente
-    if (idxOcupadas < filasYaOcupadas.length) {
-      resultado[i] = filasYaOcupadas[idxOcupadas++];
-      filasUsadas.add(resultado[i]);
-      return;
+    const filasYaOcupadas = AG_ROWS.filter(rw =>
+      cells && cells[agCellKey(col, rw)] === r.codigo
+    );
+    if (filasYaOcupadas.length > 0) {
+      resultado.push(filasYaOcupadas[0]);
+      return resultado;
     }
-    // (b) usar tRow si es válido y libre
-    if (tRow && AG_ROWS.includes(tRow) && !filasUsadas.has(tRow)) {
-      resultado[i] = tRow;
-      filasUsadas.add(tRow);
-      return;
+    // (b) usar tRow si es válido
+    if (tRow && AG_ROWS.includes(tRow)) {
+      resultado.push(tRow);
+      return resultado;
     }
     // (c) fallback mapHoraToRow
-    const fb = mapHoraToRow(h);
-    if (!filasUsadas.has(fb)) {
-      resultado[i] = fb;
-      filasUsadas.add(fb);
-    } else {
-      const libre = AG_ROWS.find(rw => !filasUsadas.has(rw));
-      resultado[i] = libre || fb;
-      filasUsadas.add(resultado[i]);
-    }
-  });
+    resultado.push(mapHoraToRow(h0));
+    return resultado;
+  }
 
   return resultado;
 }
@@ -3157,18 +3152,13 @@ function renderAgenda() {
       const tRow = window._agendaTargetRow || null;
       if (tCol === null || tRow === null) return;
 
-      const horas = r.horasOcupadas && r.horasOcupadas.length > 0 ? r.horasOcupadas : [r.hora];
-      // Filas a llenar:
-      //  - Horas ESTÁNDAR van a su fila estándar (un servicio de 11 AM debe ir en fila 11 AM).
-      //  - Horas CUSTOM respetan tRow (la celda clickeada por el usuario). Eso permite que
-      //    "1:00 PM" se ubique en la fila 11:00 AM si Pedro lo elige ahí, mostrando tag custom.
+      // Filas únicas a ocupar (estándar fijan su fila; custom no consume extra si hay estándar).
       const filas = _filasParaReserva(r, tCol, cells, tRow);
-      const rowsToFill = horas.map((h, i) => ({ h, row: filas[i] }));
 
       // Verificar que todas las celdas destino estén libres en la columna designada
-      const todasLibres = rowsToFill.every(({ row }) => !cells[agCellKey(tCol, row)]);
+      const todasLibres = filas.every(row => !cells[agCellKey(tCol, row)]);
       if (todasLibres) {
-        rowsToFill.forEach(({ row }) => { cells[agCellKey(tCol, row)] = r.codigo; });
+        filas.forEach(row => { cells[agCellKey(tCol, row)] = r.codigo; });
         anyPlaced = true;
       }
       // Si NO están libres, la reservación queda sin ubicar y aparece en el banner
@@ -3176,7 +3166,14 @@ function renderAgenda() {
     // Limpiar target después de intentar ubicar
     window._agendaTargetCol = null;
     window._agendaTargetRow = null;
-    if (anyPlaced) saveAgGrid();
+    if (anyPlaced) {
+      // CRÍTICO: usar flush sin debounce para que la ubicación se suba a Supabase ANTES
+      // de que un Realtime push (disparado por saveSingle al crear la reserva) traiga la
+      // versión vieja de agGrid y borre el cell recién agregado.
+      safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+      if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_aggrid', agGrid);
+      else saveAgGrid();
+    }
   }
 
   // SANEAMIENTO + RELLENO: cada reservación debe ocupar EXACTAMENTE las filas que
