@@ -601,6 +601,11 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <!-- Botón "Limpiar caché" oculto (v26): el sync es automático, no debería necesitarse más.
            Mantiene la función hardReloadDatos() accesible vía consola o clic en el indicador de sync. -->
       <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#dc2626;display:none;" title="Limpia el caché local y recarga todo desde la nube">🧹 Limpiar caché</button>
+      <!-- Herramientas de recuperación post-migración (v58) -->
+      <button class="btn btn-p btn-sm" onclick="descargarBackupCompleto()" style="background:#0f766e;" title="Descarga un JSON con todos los datos (reservas, agenda, pizarra, comentarios). HACÉ ESTO ANTES DE CUALQUIER LIMPIEZA.">💾 Backup completo</button>
+      <button class="btn btn-p btn-sm" onclick="diagnosticarDuplicados()" style="background:#7c3aed;" title="Analiza los datos y reporta cuántas reservaciones están duplicadas (sin borrar nada)">🔍 Diagnóstico</button>
+      <button class="btn btn-p btn-sm" onclick="limpiarDuplicados()" style="background:#dc2626;" title="Borra los duplicados (después de hacer el backup)">🧹 Limpiar duplicados</button>
+      <button class="btn btn-p btn-sm" onclick="reubicarDesdePizarra()" style="background:#0891b2;" title="Reubica las reservaciones en la agenda usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
       <button class="btn btn-p btn-sm" onclick="imprimirAgendaDia()" style="background:#16a34a;">📄 Descargar PDF del día</button>
       <button class="btn btn-p btn-sm" onclick="toggleTVMode('agenda')" style="background:#0f172a;">🖥️ Modo TV</button>
     </div>
@@ -2270,7 +2275,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-19-v58-rollback';
+const APP_VERSION = '2026-05-19-v59-recuperacion';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3535,6 +3540,164 @@ function agSinUbicarTouchStart(codigo) {
 }
 
 // ==================== EXPORTAR / IMPORTAR RESERVACIONES ====================
+// ==================== HERRAMIENTAS DE RECUPERACIÓN POST-MIGRACIÓN (v58+) ====================
+
+// Backup COMPLETO de TODO lo que hay en el navegador. Descarga un JSON con
+// reservas + agGrid + pdData + comentarios. CORRELO ANTES DE LIMPIAR DUPLICADOS.
+function descargarBackupCompleto() {
+  const payload = {
+    fecha_backup: new Date().toISOString(),
+    app_version: (typeof APP_VERSION !== 'undefined' ? APP_VERSION : ''),
+    reservas: reservas || [],
+    agGrid: agGrid || {},
+    pdData: pdData || {},
+    comentarios: (typeof comentarios !== 'undefined' ? comentarios : {})
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  a.href = url;
+  a.download = `backup_mudanzas_teclenas_${ts}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  alert(`✅ Backup descargado.\n\n• ${payload.reservas.length} reservaciones\n• ${Object.keys(payload.agGrid).length} días en la agenda\n• ${Object.keys(payload.pdData).length} días en la pizarra\n\nGuardá el archivo en un lugar seguro ANTES de tocar "Limpiar duplicados".`);
+}
+
+// Identifica grupos de reservaciones duplicadas (mismo nombre + tel + fecha + hora + costo).
+// SOLO LECTURA — no borra nada. Muestra reporte para que Pedro decida si limpiar.
+function _claveDuplicado(r) {
+  return [
+    (r.nombre||'').trim().toLowerCase(),
+    (r.apellido||'').trim().toLowerCase(),
+    String(r.tel||'').replace(/\D/g,''),
+    r.fecha||'',
+    r.hora||'',
+    String(parseFloat(r.costo)||0)
+  ].join('|');
+}
+function _agruparDuplicados() {
+  const grupos = {};
+  (reservas||[]).forEach(r => {
+    const k = _claveDuplicado(r);
+    if (!grupos[k]) grupos[k] = [];
+    grupos[k].push(r);
+  });
+  return Object.values(grupos).filter(g => g.length > 1);
+}
+function diagnosticarDuplicados() {
+  const duplicados = _agruparDuplicados();
+  if (duplicados.length === 0) {
+    alert('✅ No detecté reservaciones duplicadas.\n\nTotal: ' + (reservas||[]).length + ' reservaciones únicas.');
+    return;
+  }
+  const totalSobrantes = duplicados.reduce((s,g) => s + (g.length - 1), 0);
+  let preview = duplicados.slice(0, 8).map(g => {
+    const r0 = g[0];
+    return `• ${r0.nombre} ${r0.apellido||''} · ${r0.fecha} ${r0.hora} · $${r0.costo} → ${g.length} copias`;
+  }).join('\n');
+  if (duplicados.length > 8) preview += `\n... +${duplicados.length - 8} grupos más`;
+  alert(`🔍 DIAGNÓSTICO DE DUPLICADOS\n\nTotal reservaciones: ${(reservas||[]).length}\nGrupos de duplicados: ${duplicados.length}\nReservaciones sobrantes para borrar: ${totalSobrantes}\n\n— Primeros grupos —\n${preview}\n\nSi querés borrarlos:\n1. Apretá "💾 Backup completo" primero.\n2. Después "🧹 Limpiar duplicados".`);
+}
+
+// Borra las copias sobrantes. Para cada grupo de duplicados:
+//  - Si hay una con código MUD... (formato viejo), esa se queda (es la original).
+//  - Si no hay MUD, se queda la primera por orden y se borran las demás.
+// Actualiza agGrid y pdData para que las celdas apunten al sobreviviente.
+async function limpiarDuplicados() {
+  const duplicados = _agruparDuplicados();
+  if (duplicados.length === 0) { alert('No hay duplicados que limpiar.'); return; }
+  const totalSobrantes = duplicados.reduce((s,g) => s + (g.length - 1), 0);
+  if (!confirm(`Voy a borrar ${totalSobrantes} reservación(es) duplicada(s) repartidas en ${duplicados.length} grupos.\n\n• Conservo la copia con código MUD... (la original).\n• Si en un grupo no hay MUD, conservo la primera.\n• Actualizo la agenda y la pizarra para que apunten a la sobreviviente.\n\n⚠️ Hiciste el "💾 Backup completo" antes, ¿no?\n\n¿Continuar?`)) return;
+  // Mapping: codigo_a_borrar -> codigo_sobreviviente (para reapuntar agGrid/pdData)
+  const reapuntar = {};
+  const codigosABorrar = [];
+  duplicados.forEach(g => {
+    let sobreviviente = g.find(r => /^MUD/i.test(r.codigo||''));
+    if (!sobreviviente) sobreviviente = g[0];
+    g.forEach(r => {
+      if (r.codigo !== sobreviviente.codigo) {
+        reapuntar[r.codigo] = sobreviviente.codigo;
+        codigosABorrar.push(r.codigo);
+      }
+    });
+  });
+  // Quitar del array reservas
+  reservas = reservas.filter(r => !codigosABorrar.includes(r.codigo));
+  // Reapuntar agGrid
+  Object.values(agGrid||{}).forEach(day => {
+    if (day && day.cells) {
+      Object.keys(day.cells).forEach(k => {
+        if (reapuntar[day.cells[k]]) day.cells[k] = reapuntar[day.cells[k]];
+      });
+    }
+  });
+  // Reapuntar pdData
+  Object.values(pdData||{}).forEach(day => {
+    (day.columnas||[]).forEach(col => {
+      Object.values(col.slots||{}).forEach(slot => {
+        if (slot && reapuntar[slot.reservaCodigo]) slot.reservaCodigo = reapuntar[slot.reservaCodigo];
+      });
+    });
+    if (Array.isArray(day.cobrosPendientes)) {
+      day.cobrosPendientes.forEach(cb => { if (reapuntar[cb.codigo]) cb.codigo = reapuntar[cb.codigo]; });
+    }
+  });
+  // Persistir local
+  safeSetLS('mt2_reservas', JSON.stringify(reservas));
+  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  // Borrar de Supabase los códigos duplicados
+  let ok = 0, err = 0;
+  if (supabaseOK) {
+    for (const cv of codigosABorrar) {
+      try { const r = await deleteReservaFromSupabase(cv); if (r) ok++; else err++; } catch(e) { err++; }
+    }
+    if (typeof syncToSupabase === 'function') {
+      syncToSupabase('mt_aggrid', agGrid);
+      syncToSupabase('mt_pd3', pdData);
+    }
+  }
+  alert(`✅ Limpieza completada.\n\n• ${codigosABorrar.length} duplicados borrados localmente\n• ${ok} borrados de la nube${err>0?'\n• '+err+' fallaron — tocá de nuevo para reintentar':''}\n\nReservaciones restantes: ${reservas.length}`);
+  renderAll();
+  try { renderAgenda(); } catch(e) {}
+  try { renderPD(); } catch(e) {}
+}
+
+// Reubica las reservaciones en la agenda usando los equipos asignados en la pizarra.
+async function reubicarDesdePizarra() {
+  if (!confirm('Voy a reubicar las reservaciones en la agenda usando los equipos asignados en la pizarra.\n\n• Cada reservación con equipo en la pizarra va a esa columna y horario.\n• Las que no tienen equipo siguen en "Sin ubicar".\n\n¿Continuar?')) return;
+  let cambios = 0;
+  Object.entries(pdData||{}).forEach(([fecha, day]) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
+    if (!Array.isArray(day?.columnas) || day.columnas.length === 0) return;
+    if (!agGrid[fecha]) agGrid[fecha] = { numCols: 6, cells: {}, hidden: [] };
+    if (!agGrid[fecha].cells) agGrid[fecha].cells = {};
+    day.columnas.forEach((col, idx) => {
+      if (!col?.slots) return;
+      [...HORARIOS, 'otra'].forEach(h => {
+        const cod = col.slots?.[h]?.reservaCodigo;
+        if (!cod) return;
+        const r = (reservas||[]).find(rv => rv.codigo === cod);
+        if (!r || r.fecha !== fecha) return;
+        if (r.estado === 'cancelado') return;
+        const filaDestino = (h === 'otra') ? (typeof mapHoraToRow === 'function' ? mapHoraToRow(r.hora) : '8:00 AM') : h;
+        const k = agCellKey(idx, filaDestino);
+        if (agGrid[fecha].cells[k] !== cod) {
+          agGrid[fecha].cells[k] = cod;
+          cambios++;
+        }
+      });
+    });
+    agGrid[fecha].numCols = Math.max(agGrid[fecha].numCols||6, day.columnas.length);
+  });
+  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+  if (typeof syncToSupabase === 'function') syncToSupabase('mt_aggrid', agGrid);
+  alert(`✅ ${cambios} celda(s) reubicada(s) en la agenda usando los equipos de la pizarra.`);
+  renderAgenda();
+}
+
 function exportarReservas() {
   if (!reservas || reservas.length === 0) { alert('No hay reservaciones que exportar.'); return; }
   const blob = new Blob([JSON.stringify(reservas, null, 2)], { type: 'application/json' });
