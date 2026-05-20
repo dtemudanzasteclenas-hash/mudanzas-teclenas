@@ -606,6 +606,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <button class="btn btn-p btn-sm" onclick="diagnosticarDuplicados()" style="background:#7c3aed;" title="Analiza los datos y reporta cuántas reservaciones están duplicadas (sin borrar nada)">🔍 Diagnóstico</button>
       <button class="btn btn-p btn-sm" onclick="limpiarDuplicados()" style="background:#dc2626;" title="Borra los duplicados (después de hacer el backup)">🧹 Limpiar duplicados</button>
       <button class="btn btn-p btn-sm" onclick="reubicarDesdePizarra()" style="background:#0891b2;" title="Reubica las reservaciones en la agenda usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
+      <button class="btn btn-p btn-sm" onclick="migrarTodosLosCodigosA6Digitos()" style="background:#92400e;" title="Renumera todas las reservaciones viejas (MUD...) al formato 000-000 SIN duplicar y preservando su ubicación">🔢 Renumerar a 000-000</button>
       <button class="btn btn-p btn-sm" onclick="imprimirAgendaDia()" style="background:#16a34a;">📄 Descargar PDF del día</button>
       <button class="btn btn-p btn-sm" onclick="toggleTVMode('agenda')" style="background:#0f172a;">🖥️ Modo TV</button>
     </div>
@@ -2282,7 +2283,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v63';
+const APP_VERSION = '2026-05-20-v64';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3720,6 +3721,126 @@ async function limpiarDuplicados() {
 }
 
 // Reubica las reservaciones en la agenda usando los equipos asignados en la pizarra.
+// Renumera TODAS las reservaciones que no tienen formato 000-000 al nuevo formato.
+// USA UPDATE directo en Supabase (no DELETE+INSERT) → NO duplica reservaciones.
+// PRESERVA la ubicación en la agenda (agGrid.cells) y en la pizarra (pdData.slots)
+// porque cambia el código en la celda, no la celda misma.
+// NO modifica costos, estados, ni datos del cliente.
+async function migrarTodosLosCodigosA6Digitos() {
+  const esNuevo = c => /^\d{3}-\d{3}$/.test(c||'');
+  const viejos = reservas.filter(r => !esNuevo(r.codigo));
+  if (viejos.length === 0) {
+    alert('✅ Todas las reservaciones ya tienen el formato 000-000.');
+    return;
+  }
+  if (!confirm(`Voy a renumerar ${viejos.length} reservación(es) al formato 000-000.\n\n• Se preserva la ubicación de cada una en la agenda.\n• Se preserva el equipo asignado en la pizarra.\n• NO se modifican costos, estados, ni datos del cliente.\n• NO se duplica ni se borra ninguna reservación.\n• Funciona con UPDATE directo en la nube (cambio de código en su lugar).\n\n⚠️ Asegurate de tener el "💾 Backup completo" guardado.\n⚠️ Cerrá el programa en otros dispositivos.\n\n¿Continuar?`)) return;
+  // Pausar sync para que no nos pisen mid-operación
+  _limpiezaEnCurso = true;
+  // Generar mapping {codigoViejo: codigoNuevo}
+  const usados = new Set(reservas.map(r => r.codigo).filter(esNuevo));
+  const mapping = {};
+  for (const r of viejos) {
+    let nuevo = null;
+    for (let i = 0; i < 1000; i++) {
+      const cand = _formatCod6();
+      if (!usados.has(cand)) { nuevo = cand; break; }
+    }
+    if (!nuevo) { _limpiezaEnCurso = false; alert('❌ Error generando códigos únicos.'); return; }
+    mapping[r.codigo] = nuevo;
+    usados.add(nuevo);
+  }
+  // Subir UPDATEs a Supabase ANTES de aplicar local — si algún UPDATE falla,
+  // no aplicamos esa entrada localmente (queda con código viejo).
+  const fallidos = new Set();
+  let okSb = 0;
+  if (supabaseOK) {
+    for (const cv of Object.keys(mapping)) {
+      const nv = mapping[cv];
+      try {
+        // 1) UPDATE comentarios PRIMERO (por si hay FK)
+        await sb.from('comentarios').update({ reservacion_codigo: nv }).eq('reservacion_codigo', cv);
+        // 2) UPDATE reservaciones (cambio de código en la misma fila)
+        const { error } = await sb.from('reservaciones').update({ codigo: nv }).eq('codigo', cv);
+        if (error) {
+          // Si falló reservaciones, intentar rollback de comentarios
+          try { await sb.from('comentarios').update({ reservacion_codigo: cv }).eq('reservacion_codigo', nv); } catch(e) {}
+          fallidos.add(cv);
+          console.warn('UPDATE reservaciones falló para', cv, error);
+        } else {
+          okSb++;
+        }
+      } catch(e) {
+        fallidos.add(cv);
+        console.warn('UPDATE excepción para', cv, e);
+      }
+    }
+  }
+  // Aplicar mapping LOCAL (solo para los que tuvieron éxito en Supabase)
+  reservas.forEach(r => {
+    if (mapping[r.codigo] && !fallidos.has(r.codigo)) {
+      r.codigo = mapping[r.codigo];
+    }
+  });
+  // agGrid: cells values + hidden
+  Object.values(agGrid||{}).forEach(day => {
+    if (day && day.cells) {
+      Object.keys(day.cells).forEach(k => {
+        const v = day.cells[k];
+        if (mapping[v] && !fallidos.has(v)) day.cells[k] = mapping[v];
+      });
+    }
+    if (day && Array.isArray(day.hidden)) {
+      day.hidden = day.hidden.map(c => (mapping[c] && !fallidos.has(c)) ? mapping[c] : c);
+    }
+  });
+  // pdData: slots + cobrosPendientes
+  Object.values(pdData||{}).forEach(day => {
+    (day.columnas||[]).forEach(col => {
+      Object.values(col.slots||{}).forEach(slot => {
+        const v = slot && slot.reservaCodigo;
+        if (v && mapping[v] && !fallidos.has(v)) slot.reservaCodigo = mapping[v];
+      });
+    });
+    if (Array.isArray(day.cobrosPendientes)) {
+      day.cobrosPendientes.forEach(cb => {
+        if (mapping[cb.codigo] && !fallidos.has(cb.codigo)) cb.codigo = mapping[cb.codigo];
+      });
+    }
+  });
+  // comentarios local
+  if (typeof comentarios !== 'undefined' && comentarios) {
+    Object.values(comentarios).forEach(arr => {
+      if (Array.isArray(arr)) arr.forEach(c => {
+        if (mapping[c.reservacion] && !fallidos.has(c.reservacion)) c.reservacion = mapping[c.reservacion];
+      });
+    });
+    safeSetLS('mt_comentarios', JSON.stringify(comentarios));
+  }
+  // Cola pendientes
+  try {
+    const cola = _getPendingSaves ? _getPendingSaves() : [];
+    if (Array.isArray(cola) && cola.length > 0) {
+      const colaNueva = cola.map(p => (mapping[p.codigo] && !fallidos.has(p.codigo)) ? { ...p, codigo: mapping[p.codigo] } : p);
+      if (typeof _setPendingSaves === 'function') _setPendingSaves(colaNueva);
+    }
+  } catch(e) { console.warn('migrando cola pendientes:', e); }
+  // Persistir local
+  safeSetLS('mt2_reservas', JSON.stringify(reservas));
+  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  // Flush agGrid y pdData inmediato
+  if (supabaseOK && typeof flushSyncToSupabase === 'function') {
+    await flushSyncToSupabase('mt_aggrid', agGrid);
+    await flushSyncToSupabase('mt_pd3', pdData);
+  }
+  _limpiezaEnCurso = false;
+  const fallidosCount = fallidos.size;
+  alert(`✅ Renumeración completada.\n\n• ${okSb} renumeradas en la nube\n• ${viejos.length - fallidosCount} con código nuevo aplicado localmente${fallidosCount>0?'\n• '+fallidosCount+' fallaron — quedaron con código viejo. Volvé a apretar el botón para reintentar.':''}\n\nNO se duplicó ni se borró ninguna reservación.`);
+  renderAll();
+  try { renderAgenda(); } catch(e) {}
+  try { renderPD(); } catch(e) {}
+}
+
 async function reubicarDesdePizarra() {
   if (!confirm('Voy a reubicar las reservaciones en la agenda usando los equipos asignados en la pizarra.\n\n• Cada reservación con equipo en la pizarra va a esa columna y horario.\n• Las que no tienen equipo siguen en "Sin ubicar".\n\n¿Continuar?')) return;
   let cambios = 0;
