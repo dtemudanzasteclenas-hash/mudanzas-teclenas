@@ -2294,7 +2294,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v66';
+const APP_VERSION = '2026-05-20-v67';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5754,6 +5754,11 @@ function buildColumna2(col, idx, f) {
     </div>`;
   }).join('');
 
+  // Registro de qué códigos YA mostraron su precio en esta columna (en orden de HORARIOS).
+  // El precio se muestra SOLO en el primer slot donde aparece el código; los demás slots
+  // del mismo servicio dicen "Precio en horario principal". Robusto: no depende de
+  // horasOcupadas (que puede quedar desactualizado tras asignaciones en la pizarra).
+  const _preciosMostradosEnCol = new Set();
   // Build each horario slot
   const slotsHtml = HORARIOS.map((h, hi) => {
     const slot = col.slots[h] || {costo:'',metodo:'EFECTIVO',reservaCodigo:''};
@@ -5823,8 +5828,11 @@ function buildColumna2(col, idx, f) {
       </div>`;
     }
 
-    // Determine if this is a secondary hora (price should not show)
-    const isSecondaryHora = asignadaR && asignadaR.horasOcupadas && asignadaR.horasOcupadas.length > 1 && asignadaR.horasOcupadas[0] !== h;
+    // Secundario = su código YA mostró precio en un slot anterior de esta columna.
+    // Así el precio aparece una sola vez (en el primer horario que ocupa) y no se "duplica"
+    // visualmente cuando un servicio cubre varios horarios (8 AM + 11 AM, etc.).
+    const isSecondaryHora = asignadaR && _preciosMostradosEnCol.has(asignadaR.codigo);
+    if (asignadaR && !isSecondaryHora) _preciosMostradosEnCol.add(asignadaR.codigo);
     const resIdx = asignadaR ? reservas.indexOf(asignadaR) : -1;
     // Show custom hora label for non-standard times
     const customHoraLabel = asignadaR && !HORARIOS.includes(asignadaR.hora) ? asignadaR.hora : '';
