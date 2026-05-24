@@ -1554,6 +1554,12 @@ function startAutoRefresh() {
     // Saltarse si pestaña está en background (ahorra llamadas inútiles)
     if (document.hidden) return;
     if (!supabaseOK || _syncInProgress) return;
+    // CRÍTICO: NO traer datos de la nube (hardReplace) mientras el usuario edita finanzas
+    // o tiene un input activo. Si lo hacemos, pisamos el gasto/ingreso recién agregado que
+    // todavía no se subió (está en el debounce de 1.5s) y "se borra en el momento".
+    if (typeof _hayInputEnEdicion === 'function' && _hayInputEnEdicion()) return;
+    if (typeof _editandoFinanzasReciente === 'function' && _editandoFinanzasReciente()) return;
+    if (typeof _limpiezaEnCurso !== 'undefined' && _limpiezaEnCurso) return;
     try {
       // Check si hay cambios más recientes en Supabase
       const { data, error } = await sb.from('app_data').select('id,updated_at');
@@ -2294,7 +2300,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v67';
+const APP_VERSION = '2026-05-20-v68';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
