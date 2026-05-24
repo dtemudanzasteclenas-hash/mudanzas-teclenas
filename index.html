@@ -2300,7 +2300,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v69';
+const APP_VERSION = '2026-05-20-v70';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -4077,7 +4077,11 @@ function removeFromGrid(f, key) {
   } else {
     delete agGrid[f].cells[key];
   }
-  saveAgGrid();
+  // Flush inmediato: saveSingle abajo dispara Realtime → hardReplace de agGrid podría
+  // resucitar la celda borrada si el cambio aún estaba en debounce.
+  safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_aggrid', agGrid);
+  else saveAgGrid();
 
   // Marcar como cancelada y quitar de la pizarra (igual que eliminar())
   if (r) {
@@ -5273,7 +5277,10 @@ function cambiarEst(est) {
     const agDay = agGrid[r.fecha];
     if (agDay?.cells) {
       Object.keys(agDay.cells).forEach(k => { if (agDay.cells[k] === r.codigo) delete agDay.cells[k]; });
-      saveAgGrid();
+      // Flush inmediato: saveSingle abajo dispara Realtime → evitar que resucite la celda.
+      safeSetLS('mt_aggrid', JSON.stringify(agGrid));
+      if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_aggrid', agGrid);
+      else saveAgGrid();
     }
     // Limpieza COMPLETA: slots, cobros pendientes, flags _cobrado (v46 fix).
     _limpiarPDDataYCobrosPorCancelacion(r);
@@ -5292,12 +5299,11 @@ function cambiarEst(est) {
 }
 
 function eliminar(idxOCodigo) {
-  // Acepta código (string que empieza con MUD) o índice numérico (compat con onclicks viejos).
-  // Si recibimos índice, lo resolvemos a código primero — porque entre el render del HTML y el
-  // clic del usuario, el array reservas pudo reordenarse por sync y reservas[idx] apuntaría a
-  // otra reservación, causando que canceláramos la equivocada.
+  // Acepta CÓDIGO (cualquier string: MUD... o 000-000) o índice numérico (compat viejo).
+  // Resolver por código es lo correcto: el array reservas puede reordenarse por sync entre
+  // el render del HTML y el clic, y reservas[idx] apuntaría a otra reservación.
   let r;
-  if (typeof idxOCodigo === 'string' && /^MUD/.test(idxOCodigo)) {
+  if (typeof idxOCodigo === 'string') {
     r = reservas.find(rv => rv.codigo === idxOCodigo);
   } else {
     r = reservas[idxOCodigo];
@@ -5370,7 +5376,15 @@ let pdData; try { pdData = JSON.parse(localStorage.getItem('mt_pd3') || '{}'); }
 let editColIdx = null;
 let pdTabActual = 'pizarra';
 
-function savePD() { safeSetLS('mt_pd3', JSON.stringify(pdData)); syncToSupabase('mt_pd3', pdData); }
+function savePD() {
+  // Toda escritura a pdData activa la ventana de gracia: así el polling y el sync de Realtime
+  // NO hacen hardReplace y pisan el cambio recién hecho antes de que suba (debounce 400ms).
+  // Cubre de forma general updateSlot2, updatePago, updatePropina, extenderHorario,
+  // quitarExtension, guardarColumna, elimColumna, updateCuenta, etc.
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  syncToSupabase('mt_pd3', pdData);
+}
 // Guarda SOLO en localStorage, sin disparar sync a la nube ni el ciclo Realtime.
 // Se usa mientras el usuario escribe en gastos/ingresos/movimientos para que cada tecla
 // se persista al instante sin provocar un re-render que borre lo que está tipeando.
@@ -7052,7 +7066,14 @@ function confirmarCobroModal() {
   const dayCobro = getDayData(fechaCobro);
   if (!dayCobro.cobrosPendientes) dayCobro.cobrosPendientes = [];
   dayCobro.cobrosPendientes.push({ codigo, monto: montoCobrado, metodo: metodoFinal, fechaOriginal, fecha: fechaCobro });
-  savePD(); safeSetLS('mt2_reservas', JSON.stringify(reservas));
+  // CRÍTICO: el cobro toca pdData (slot.cobrado) Y reservaciones (saveSingle dispara Realtime).
+  // Sin flush + ventana de gracia, el sync traía pdData viejo y "desmarcaba" el cobro,
+  // reapareciendo como pendiente. Subimos inmediato y protegemos con la ventana.
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  safeSetLS('mt2_reservas', JSON.stringify(reservas));
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
+  else savePD();
   recalcCerramos();
   renderNotificaciones();
   if (pdTabActual === 'cuaderno') renderCuaderno();
@@ -8317,10 +8338,10 @@ function renderNotificaciones() {
 }
 
 function cambiarEstRapido(idxOCodigo, est) {
-  // Aceptar código (preferido) o índice posicional. Resolver por código blindando contra
-  // race con sync que reordene reservas[] entre render y clic (mismo bug v44 en notificaciones).
+  // Aceptar CÓDIGO (cualquier string: MUD... o 000-000) o índice posicional. Resolver por
+  // código blinda contra race con sync que reordene reservas[] entre render y clic (bug v44).
   let r;
-  if (typeof idxOCodigo === 'string' && /^MUD/.test(idxOCodigo)) {
+  if (typeof idxOCodigo === 'string') {
     r = reservas.find(rv => rv.codigo === idxOCodigo);
   } else {
     r = reservas[idxOCodigo];
