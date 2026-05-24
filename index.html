@@ -1196,6 +1196,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <button id="tb-edit" onclick="showTab('edit')">✏️ Editar</button>
       <button id="tb-coment" onclick="showTab('coment')">💬 Comentarios</button>
       <button id="tb-est" onclick="showTab('est')">🔄 Estado</button>
+      <button id="tb-dup" onclick="duplicarReserva()" style="background:#7c3aed;color:#fff;">📋 Duplicar</button>
     </div>
 
     <!-- PDF -->
@@ -2300,7 +2301,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v70';
+const APP_VERSION = '2026-05-20-v71';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5296,6 +5297,86 @@ function cambiarEst(est) {
   try { renderPD(); } catch(e) {}
   alert(`✅ Estado cambiado a: ${est}`);
   closeVer();
+}
+
+// Abre el formulario de NUEVA reservación con todos los datos de la reservación actual
+// precargados. NO modifica el original — al guardar se crea una reservación nueva con
+// código propio. Útil para reagendar un servicio bajo los mismos términos (otro día, etc.).
+function duplicarReserva() {
+  const orig = _resolveVerR();
+  if (!orig) { alert('⚠️ No se pudo identificar la reservación a duplicar.'); return; }
+  closeVer();
+  openNueva(); // resetea y abre el form en blanco
+  setTimeout(() => {
+    try {
+      // Datos básicos
+      const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val != null ? val : ''; };
+      set('f-nombre', orig.nombre);
+      set('f-apellido', orig.apellido);
+      set('f-email', orig.email);
+      set('f-costo', orig.costo);
+      set('f-personal', orig.personal || '5');
+      set('f-carga', orig.carga);
+      set('f-descarga', orig.descarga);
+      set('f-obs', orig.obs);
+      set('f-fecha', orig.fecha); // misma fecha; el usuario la cambia si reagenda a otro día
+      const fEst = document.getElementById('f-estado'); if (fEst) fEst.value = (orig.estado === 'cancelado' || orig.estado === 'completado') ? 'confirmado' : (orig.estado || 'confirmado');
+
+      // Teléfonos (principal + extras separados por / , ; o "y")
+      const tels = String(orig.tel || '').split(/[\/,;]|\s+y\s+/i).map(t => t.trim()).filter(t => t);
+      set('f-tel', tels[0] || '');
+      const cont = document.getElementById('f-tels-extra'); if (cont) cont.innerHTML = '';
+      for (let i = 1; i < tels.length; i++) { if (typeof _crearInputTelExtra === 'function') _crearInputTelExtra('f-tels-extra', tels[i]); }
+
+      // Horarios: marcar checkboxes estándar + agregar customs
+      const horas = (orig.horasOcupadas && orig.horasOcupadas.length > 0) ? orig.horasOcupadas : [orig.hora];
+      const h8 = document.getElementById('f-h-8'); if (h8) h8.checked = horas.includes('8:00 AM');
+      const h11 = document.getElementById('f-h-11'); if (h11) h11.checked = horas.includes('11:00 AM');
+      const h230 = document.getElementById('f-h-230'); if (h230) h230.checked = horas.includes('2:30 PM');
+      const extraCont = document.getElementById('f-horas-extra'); if (extraCont) extraCont.innerHTML = '';
+      _horaExtraCount = 0;
+      horas.filter(h => !['8:00 AM','11:00 AM','2:30 PM'].includes(h)).forEach(h => {
+        if (typeof addHoraExtra === 'function') {
+          addHoraExtra();
+          const inputs = document.querySelectorAll('#f-horas-extra input[type="text"]');
+          if (inputs.length) inputs[inputs.length-1].value = h;
+        }
+      });
+      if (typeof updateHoraLabels === 'function') updateHoraLabels();
+
+      // Unidad + rampa
+      if (orig.unidad && typeof selTruck === 'function') selTruck(orig.unidad);
+      if (orig.unidad === 'grande') { const fr = document.getElementById('f-rampa'); if (fr && orig.rampa) fr.value = orig.rampa; }
+
+      // Camión específico
+      const ce = document.getElementById('f-camion-especifico'); if (ce) { ce.value = orig.camionEspecifico || ''; if (typeof onCamionEspecificoChange === 'function') onCamionEspecificoChange(); }
+
+      // Tipo de cliente
+      const tcMap = { 'Consumidor Final':'cf', 'Crédito Fiscal':'cred', 'Exento de IVA':'exento' };
+      const tcKey = tcMap[orig.tipoCliente] || 'cf';
+      const tcEl = document.getElementById('tc-'+tcKey); if (tcEl) tcEl.checked = true;
+      if (typeof selectTipoCliente === 'function') selectTipoCliente(tcKey);
+
+      // Servicios (transporte/embalaje/empaque) + materiales
+      srvActivos = new Set(orig.servicios && orig.servicios.length ? orig.servicios : ['transporte']);
+      ['transporte','embalaje','empaque'].forEach(s => {
+        const stab = document.getElementById('stab-'+s); const panel = document.getElementById('panel-'+s);
+        if (stab) stab.classList.toggle('active', srvActivos.has(s));
+        if (panel) panel.classList.toggle('active', srvActivos.has(s));
+      });
+      if (orig.embalaje) {
+        set('m-plastico', orig.embalaje.plastico); set('m-carton', orig.embalaje.carton);
+        set('m-espuma-emb', orig.embalaje.espuma); set('m-pilot-emb', orig.embalaje.pilot); set('m-obs-emb', orig.embalaje.obs);
+      }
+      if (orig.empaque) {
+        set('m-cajas', orig.empaque.cajas); set('m-resmas', orig.empaque.resmas); set('m-tape', orig.empaque.tape);
+        set('m-pilot-emp', orig.empaque.pilot); set('m-espuma-emp', orig.empaque.espuma); set('m-guantes', orig.empaque.guantes);
+        set('m-percheros', orig.empaque.percheros); set('m-obs-emp', orig.empaque.obs);
+      }
+      // Mensaje guía
+      alert('📋 Formulario precargado con los datos del servicio. Modificá lo que necesites (ej. la fecha) y guardá — se creará una reservación NUEVA sin tocar la original.');
+    } catch(e) { console.warn('duplicarReserva error:', e); }
+  }, 180);
 }
 
 function eliminar(idxOCodigo) {
