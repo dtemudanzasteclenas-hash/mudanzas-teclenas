@@ -2300,7 +2300,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v68';
+const APP_VERSION = '2026-05-20-v69';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5994,7 +5994,7 @@ function buildColumna2(col, idx, f) {
 }
 
 
-function toggleFinalizarColumna(idx) {
+async function toggleFinalizarColumna(idx) {
   const f = getPDFecha();
   const day = getDayData(f);
   const col = day.columnas[idx];
@@ -6002,8 +6002,9 @@ function toggleFinalizarColumna(idx) {
   if (col.finalizada) {
     if (!confirm(`¿Reabrir el grupo "${col.nombre}"? Vas a poder volver a editar sus servicios y pagos.`)) return;
     col.finalizada = false;
+    _ultimaEdicionFinanzas = Date.now();
     safeSetLS('mt_pd3', JSON.stringify(pdData));
-    flushSyncToSupabase('mt_pd3', pdData);
+    await flushSyncToSupabase('mt_pd3', pdData);
     renderPD();
     return;
   }
@@ -6015,12 +6016,14 @@ function toggleFinalizarColumna(idx) {
   });
   if (!confirm(`¿Concluir el grupo "${col.nombre}"?\n\n• ${codigos.size} servicio(s) se marcarán como COMPLETADOS\n• El grupo quedará como FINALIZADO\n• Podés reabrirlo si necesitás corregir algo`)) return;
   col.finalizada = true;
-  // CRÍTICO: persistir pdData ANTES de los saveSingle. Cada saveSingle dispara Realtime de
-  // reservaciones → scheduleFullSyncAndRender → hardReplace de pdData. Si pdData todavía no
-  // se subió (savePD es debounced 400ms), el push trae la versión vieja SIN finalizada y el
-  // grupo "se reabre solo". flushSyncToSupabase sube pdData inmediato, sin debounce.
+  // CRÍTICO: persistir pdData y ESPERAR a que suba ANTES de los saveSingle. Cada saveSingle
+  // dispara Realtime de reservaciones → scheduleFullSyncAndRender → hardReplace de pdData.
+  // Si pdData todavía no terminó de subir, el push trae la versión vieja SIN finalizada y el
+  // grupo "se reabre solo". await flushSyncToSupabase asegura que suba primero.
+  // _ultimaEdicionFinanzas bloquea el polling y el scheduleFullSyncAndRender por la ventana de gracia.
+  _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
-  flushSyncToSupabase('mt_pd3', pdData);
+  await flushSyncToSupabase('mt_pd3', pdData);
   codigos.forEach(cod => {
     const r = reservas.find(rv => rv.codigo === cod);
     if (r && r.estado !== 'cancelado') {
@@ -6028,6 +6031,7 @@ function toggleFinalizarColumna(idx) {
       saveSingle(r);
     }
   });
+  _ultimaEdicionFinanzas = Date.now();
   renderPD();
   renderAll();
   try { renderAgenda(); } catch(e) {}
@@ -6067,9 +6071,15 @@ function assignSlot(f, colIdx, hora, codigo) {
       }
     });
   }
-  savePD();
+  // CRÍTICO: activar ventana de gracia (bloquea polling/Realtime hardReplace) + guardar local
+  // + flush inmediato. Sin esto, un sync traía la versión vieja de pdData (sin la asignación)
+  // y la quitaba "un segundo después".
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
   renderPD();
   recalcCerramos();
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
+  else savePD();
 }
 
 function deassignSlot(f, colIdx, hora) {
@@ -6098,9 +6108,12 @@ function deassignSlot(f, colIdx, hora) {
     }
   }
   day.columnas[colIdx].slots[hora].reservaCodigo = '';
-  savePD();
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
   renderPD();
   recalcCerramos();
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
+  else savePD();
 }
 
 function extenderHorario(f, colIdx, horaOrigen, hiOrigen) {
