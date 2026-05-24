@@ -2301,7 +2301,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v71';
+const APP_VERSION = '2026-05-20-v72';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -6053,6 +6053,31 @@ function buildColumna2(col, idx, f) {
   const propPorPersona = numMiembros > 0 && propTotal > 0 ? (propTotal / numMiembros).toFixed(2) : '0.00';
   const placa = col.camion ? col.camion.split('·')[0].trim() : '';
 
+  // ── SERVICIOS EXTRA (fuera de la cuota de 3) ──
+  // Permite reflejar qué mudanzas adicionales realizó este equipo. Acepta cualquier
+  // reservación del día (cualquier horario). Es INFORMATIVO: no altera el total del equipo
+  // ni los totales del día (la comisión extra se registra aparte).
+  const extras = Array.isArray(col.serviciosExtra) ? col.serviciosExtra : [];
+  const extrasAsignados = extras.map(cod => reservas.find(rv => rv.codigo === cod)).filter(Boolean);
+  const resDiaParaExtra = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado' && !extras.includes(r.codigo));
+  const serviciosExtraHtml = `
+    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d97706;">
+      <div style="font-size:10px;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">⭐ Servicios extra (fuera de cuota)</div>
+      ${extrasAsignados.map(r => `
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:6px 9px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <div style="min-width:0;cursor:pointer;" onclick="verRes(${reservas.indexOf(r)})">
+            <div style="font-size:11px;font-weight:700;color:#92400e;">${r.nombre} ${r.apellido||''} · ${r.hora}</div>
+            <div style="font-size:10px;color:#6b7280;">📞 ${r.tel} · $${r.costo||'0'} · ${r.codigo}</div>
+          </div>
+          <button onclick="delServicioExtra('${f}',${idx},'${r.codigo}')" style="background:#fee2e2;border:none;border-radius:4px;padding:2px 7px;font-size:10px;color:#d42b2b;cursor:pointer;flex-shrink:0;">✕</button>
+        </div>`).join('')}
+      <select onchange="if(this.value){addServicioExtra('${f}',${idx},this.value);this.value='';}"
+        style="width:100%;border:1.5px solid #d97706;border-radius:6px;padding:6px 8px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;cursor:pointer;">
+        <option value="">+ Agregar servicio extra…</option>
+        ${resDiaParaExtra.map(r => `<option value="${r.codigo}">${r.hora} · ${r.nombre} ${r.apellido||''} · $${r.costo||'0'}</option>`).join('')}
+      </select>
+    </div>`;
+
   const finalizada = col.finalizada === true;
   const borde = finalizada ? '#16a34a' : color;
   return `
@@ -6078,6 +6103,7 @@ function buildColumna2(col, idx, f) {
     </div>
     <div style="padding:4px 14px 10px;flex:1;">
       ${slotsHtml}
+      ${serviciosExtraHtml}
       <div style="margin-top:8px;padding-top:8px;border-top:2px solid ${color};display:flex;justify-content:space-between;align-items:center;">
         <span style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Total</span>
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:${color};">$${totalCol.toFixed(2)}</span>
@@ -6131,6 +6157,39 @@ async function toggleFinalizarColumna(idx) {
   renderAll();
   try { renderAgenda(); } catch(e) {}
   renderNotificaciones();
+}
+
+// Asigna una mudanza del día como "servicio extra" de un equipo (refleja quién hizo el
+// trabajo adicional fuera de su cuota). Es informativo: no altera totales financieros.
+function addServicioExtra(f, colIdx, codigo) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para editar.'); return;
+  }
+  const day = getDayData(f);
+  const col = day.columnas[colIdx];
+  if (!col) return;
+  if (!Array.isArray(col.serviciosExtra)) col.serviciosExtra = [];
+  if (!col.serviciosExtra.includes(codigo)) col.serviciosExtra.push(codigo);
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
+  else savePD();
+  renderPD();
+}
+
+function delServicioExtra(f, colIdx, codigo) {
+  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para editar.'); return;
+  }
+  const day = getDayData(f);
+  const col = day.columnas[colIdx];
+  if (!col || !Array.isArray(col.serviciosExtra)) return;
+  col.serviciosExtra = col.serviciosExtra.filter(c => c !== codigo);
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
+  else savePD();
+  renderPD();
 }
 
 function toggleSlot(id) {
