@@ -2301,7 +2301,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v72';
+const APP_VERSION = '2026-05-20-v73';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -6046,6 +6046,16 @@ function buildColumna2(col, idx, f) {
     }
   });
   if (otraAsignadaR && !contados.has(otraAsignadaR.codigo)) totalCol += parseFloat(otraAsignadaR.costo)||0;
+  // Servicios extra (4to, 5to servicio fuera de cuota): SUMAN al total que produjo el equipo.
+  // El total del día (piz-total-val) cuenta cada mudanza una sola vez por reserva, así que
+  // esto NO lo duplica.
+  const _extrasCol = Array.isArray(col.serviciosExtra) ? col.serviciosExtra : [];
+  _extrasCol.forEach(cod => {
+    if (contados.has(cod)) return;
+    contados.add(cod);
+    const r = reservas.find(rv => rv.codigo === cod);
+    if (r && r.estado !== 'cancelado') totalCol += parseFloat(r.costo)||0;
+  });
   const totalPagos = (col.miembros||[]).reduce((s,m)=>s+(parseFloat(m.pago)||0),0);
   const propinas = col.propinas || ['','',''];
   const propTotal = propinas.reduce((s,p) => s+(parseFloat(p)||0), 0);
@@ -6055,8 +6065,8 @@ function buildColumna2(col, idx, f) {
 
   // ── SERVICIOS EXTRA (fuera de la cuota de 3) ──
   // Permite reflejar qué mudanzas adicionales realizó este equipo. Acepta cualquier
-  // reservación del día (cualquier horario). Es INFORMATIVO: no altera el total del equipo
-  // ni los totales del día (la comisión extra se registra aparte).
+  // reservación del día (cualquier horario). SUMA al total que produjo el equipo, pero
+  // NO duplica el total del día (ese cuenta cada mudanza una sola vez por reserva).
   const extras = Array.isArray(col.serviciosExtra) ? col.serviciosExtra : [];
   const extrasAsignados = extras.map(cod => reservas.find(rv => rv.codigo === cod)).filter(Boolean);
   const resDiaParaExtra = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado' && !extras.includes(r.codigo));
