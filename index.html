@@ -2301,7 +2301,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v73';
+const APP_VERSION = '2026-05-20-v74';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -8142,6 +8142,11 @@ ${(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre
   document.getElementById('wa-preview-msg').textContent = msg;
 }
 
+// El lector de WhatsApp funciona como ESCÁNER: extrae los datos y los vuelca en el
+// formulario normal de "Nueva reservación". Pedro revisa, ajusta fecha/horario, y guarda
+// con el flujo estándar guardar() — que ya ubica bien en la agenda y abre la confirmación
+// WhatsApp. Antes el lector tenía su propio guardado (agendarDesdeWA) que no respetaba la
+// fecha/horario en la agenda; ahora reusa el flujo confiable de ingreso manual.
 function agendarDesdeWA() {
   const nombre = document.getElementById('wa-nombre').value.trim();
   const tel    = document.getElementById('wa-tel').value.trim();
@@ -8149,57 +8154,55 @@ function agendarDesdeWA() {
   const desc   = document.getElementById('wa-descarga').value.trim();
   const fecha  = document.getElementById('wa-fecha').value;
   const unidad = document.getElementById('wa-unidad').value;
+  let costo    = document.getElementById('wa-costo').value.trim();
+  const obs    = document.getElementById('wa-obs').value;
+  const hora   = getHoraValue('wa-hora','wa-hora-custom');
 
-  const errores = [];
-  if (!nombre) errores.push('• Nombre del cliente');
-  if (!tel)    errores.push('• Teléfono');
-  if (!carga)  errores.push('• Dirección de carga');
-  if (!desc)   errores.push('• Dirección de descarga');
-  if (!fecha)  errores.push('• Fecha del servicio');
-  if (!unidad) errores.push('• Unidad');
-  if (errores.length) { alert('Faltan datos:\n\n'+errores.join('\n')); return; }
+  if (!nombre) { alert('Falta el nombre del cliente.'); return; }
+  if (!tel)    { alert('Falta el teléfono.'); return; }
 
-  let costo = document.getElementById('wa-costo').value.trim();
-  if (costo && !isNaN(parseFloat(costo))) costo = parseFloat(costo).toFixed(2);
-
-  const partes = nombre.split(' ');
-  const apellido = partes.length > 1 ? partes.slice(1).join(' ') : '';
-
-  const horaPrincipal = getHoraValue('wa-hora','wa-hora-custom');
-  const r = {
-    codigo: genCod(),
-    nombre: partes[0], apellido,
-    tel, email: '',
-    fecha,
-    hora: horaPrincipal,
-    horasOcupadas: [horaPrincipal],
-    unidad, rampa: '',
-    costo,
-    tipoCliente: 'Consumidor Final',
-    personal: '5',
-    carga, descarga: desc,
-    obs: document.getElementById('wa-obs').value,
-    estado: 'confirmado',
-    servicios: ['transporte'],
-    embalaje: null, empaque: null,
-    vendedor: usuarioActual ? usuarioActual.nombre : ''
-  };
-
-  reservas.unshift(r);
-  saveSingle(r);
-  registrarClienteEnSupabase(r).catch(e => console.warn('Error registrando cliente:', e));
-  // Propagar destino del lector WA (col+row) al target de agenda para ubicación manual
-  if (typeof window._waTargetCol === 'number') window._agendaTargetCol = window._waTargetCol;
-  if (window._waTargetHora) window._agendaTargetRow = window._waTargetHora;
+  // Capturar destino de celda (si el lector se abrió clicando una celda de la agenda)
+  const targetCol  = (typeof window._waTargetCol === 'number') ? window._waTargetCol : null;
+  const targetHora = window._waTargetHora || null;
   window._waTargetCol = null;
   window._waTargetHora = null;
-  renderAll();
-  const agFecha = document.getElementById('ag-fecha');
-  if (agFecha) { agFecha.value = r.fecha; renderAgenda(); }
 
-  document.getElementById('wa-exito-cod').textContent = `Reservación ${r.codigo} creada`;
-  document.getElementById('wa-paso2').style.display = 'none';
-  document.getElementById('wa-paso3').style.display = 'block';
+  // Cerrar el lector y abrir el formulario NORMAL de nueva reservación
+  closeWAReader();
+  if (targetCol !== null && targetHora) openNuevaEnCelda(targetCol, targetHora);
+  else openNueva();
+
+  // Volcar los datos extraídos en el formulario normal (corre después del setup de openNueva)
+  setTimeout(() => {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = (val != null ? val : ''); };
+    const partes = nombre.split(' ');
+    set('f-nombre', partes[0] || nombre);
+    set('f-apellido', partes.length > 1 ? partes.slice(1).join(' ') : '');
+    set('f-tel', tel);
+    set('f-carga', carga);
+    set('f-descarga', desc);
+    set('f-costo', costo);
+    set('f-obs', obs);
+    if (fecha) set('f-fecha', fecha);
+    // Unidad
+    if (unidad && typeof selTruck === 'function') selTruck(unidad);
+    // Horario: marcar el checkbox estándar o agregar el horario custom
+    const h8 = document.getElementById('f-h-8'), h11 = document.getElementById('f-h-11'), h230 = document.getElementById('f-h-230');
+    if (h8) h8.checked = false; if (h11) h11.checked = false; if (h230) h230.checked = false;
+    const extraCont = document.getElementById('f-horas-extra'); if (extraCont) extraCont.innerHTML = '';
+    _horaExtraCount = 0;
+    if (hora === '8:00 AM' && h8) h8.checked = true;
+    else if (hora === '11:00 AM' && h11) h11.checked = true;
+    else if (hora === '2:30 PM' && h230) h230.checked = true;
+    else if (hora) {
+      if (typeof addHoraExtra === 'function') {
+        addHoraExtra();
+        const inputs = document.querySelectorAll('#f-horas-extra input[type="text"]');
+        if (inputs.length) inputs[inputs.length-1].value = hora;
+      }
+    }
+    if (typeof updateHoraLabels === 'function') updateHoraLabels();
+  }, 220);
 }
 
 function enviarConfirmacionWA() {
@@ -8553,7 +8556,7 @@ function alertaPendientesUrgentes() {
     <!-- PASO 2: Confirmación de datos extraídos -->
     <div id="wa-paso2" style="display:none;">
       <div style="background:#d1fae5;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#065f46;font-weight:600;">
-        ✅ Datos extraídos correctamente. Revisa y completa la información antes de agendar.
+        ✅ Datos extraídos. Al tocar "Pasar al formulario" se abre la reservación con todo precargado — revisás fecha/horario y guardás normal.
       </div>
 
       <div class="sec-div">Datos del cliente</div>
@@ -8598,7 +8601,7 @@ function alertaPendientesUrgentes() {
       <div class="flex gap2 mt3" style="justify-content:space-between;align-items:center;">
         <button class="btn btn-gh" onclick="volverPaso1()">← Volver</button>
         <div class="flex gap2">
-          <button class="btn" style="background:#128c7e;color:#fff;" onclick="agendarDesdeWA()">📋 Agendar reservación</button>
+          <button class="btn" style="background:#128c7e;color:#fff;" onclick="agendarDesdeWA()">📝 Pasar al formulario</button>
           <button class="btn btn-w" onclick="enviarConfirmacionWA()">📱 Enviar confirmación por WhatsApp</button>
         </div>
       </div>
