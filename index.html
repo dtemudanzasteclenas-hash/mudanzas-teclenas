@@ -619,6 +619,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <button class="btn btn-p btn-sm" onclick="diagnosticarDuplicados()" style="background:#7c3aed;" title="Analiza y reporta duplicados (no borra nada)">🔍 Diagnóstico</button>
     <button class="btn btn-p btn-sm" onclick="limpiarDuplicados()" style="background:#dc2626;" title="Borra los duplicados (hacer backup antes)">🧹 Limpiar duplicados</button>
     <button class="btn btn-p btn-sm" onclick="reubicarDesdePizarra()" style="background:#0891b2;" title="Reubica usando los equipos asignados en la pizarra">🧩 Reubicar desde pizarra</button>
+    <button class="btn btn-p btn-sm" onclick="rescatarCuadernoDeNube()" style="background:#b45309;" title="Rescata los gastos de la fecha seleccionada leyendo directo de la nube (por si se borraron del local)">💰 Rescatar gastos de la nube</button>
     <button class="btn btn-p btn-sm" onclick="migrarTodosLosCodigosA6Digitos()" style="background:#92400e;" title="Renumera códigos viejos al formato 000-000">🔢 Renumerar a 000-000</button>
     <button class="btn btn-p btn-sm" onclick="hardReloadDatos()" style="background:#991b1b;" title="Limpia el caché local y recarga todo desde la nube">🧹 Limpiar caché</button>
   </div>
@@ -2301,7 +2302,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v75';
+const APP_VERSION = '2026-05-20-v76';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3857,6 +3858,42 @@ async function migrarTodosLosCodigosA6Digitos() {
   renderAll();
   try { renderAgenda(); } catch(e) {}
   try { renderPD(); } catch(e) {}
+}
+
+// Rescata el cuaderno (gastos, ingresos, movimientos, cuentas) de una fecha LEYENDO
+// DIRECTAMENTE de la nube, ignorando el pdData local que pudo quedar pisado sin los gastos.
+// Si la nube tiene más gastos que el local para esa fecha, restaura la versión de la nube.
+async function rescatarCuadernoDeNube() {
+  const f = getPDFecha();
+  if (!supabaseOK) { alert('⚠️ Sin conexión a la nube. No puedo rescatar.'); return; }
+  let pdNube = null;
+  try { pdNube = await loadFromSupabase('mt_pd3'); } catch(e) {}
+  if (!pdNube) { alert('No pude leer el cuaderno de la nube.'); return; }
+  const dNube = pdNube[f];
+  const dLocal = pdData[f];
+  const gNube = (dNube && Array.isArray(dNube.gastos)) ? dNube.gastos.filter(g => (g.titulo||'').trim() || parseFloat(g.monto)>0) : [];
+  const gLocal = (dLocal && Array.isArray(dLocal.gastos)) ? dLocal.gastos.filter(g => (g.titulo||'').trim() || parseFloat(g.monto)>0) : [];
+  if (gNube.length === 0) {
+    alert(`En la nube, el ${f} no tiene gastos guardados.\n\nLos gastos locales actuales: ${gLocal.length}.\n\nSi los gastos que perdiste no están ni acá ni en la nube, solo se pueden recuperar desde un backup descargado.`);
+    return;
+  }
+  if (gNube.length <= gLocal.length) {
+    alert(`La nube tiene ${gNube.length} gasto(s) para el ${f} y el local tiene ${gLocal.length}.\n\nNo hay nada más reciente que rescatar — ya tenés todos los que están guardados.`);
+    return;
+  }
+  // La nube tiene MÁS gastos que el local: restaurar la versión completa de la nube para esa fecha
+  let preview = gNube.slice(0,12).map(g => `• ${g.titulo||'(sin título)'} — $${g.monto||'0'} (${g.fondo||''})`).join('\n');
+  if (gNube.length > 12) preview += `\n… +${gNube.length-12} más`;
+  if (!confirm(`🔎 Encontré ${gNube.length} gasto(s) en la nube para el ${f} (local tiene ${gLocal.length}).\n\n${preview}\n\n¿Restaurar la versión de la nube para este día?`)) return;
+  if (!pdData[f]) pdData[f] = { columnas:[], gastos:[], cuentas:{abrimos:{},cerramos:{}} };
+  pdData[f].gastos = dNube.gastos;
+  if (Array.isArray(dNube.otrosIngresos)) pdData[f].otrosIngresos = dNube.otrosIngresos;
+  if (Array.isArray(dNube.movimientos)) pdData[f].movimientos = dNube.movimientos;
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  if (typeof flushSyncToSupabase === 'function') await flushSyncToSupabase('mt_pd3', pdData);
+  renderPD();
+  alert(`✅ Restaurados ${gNube.length} gasto(s) del ${f} desde la nube.`);
 }
 
 async function reubicarDesdePizarra() {
