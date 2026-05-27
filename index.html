@@ -1453,6 +1453,29 @@ async function loadFromSupabase(key) {
   } catch(e) { console.warn('Load exception:', e.message); return null; }
 }
 
+// Cuenta items financieros REALES de un día (gastos + otros ingresos + movimientos con contenido).
+function _contarItemsFinancieros(day) {
+  if (!day) return 0;
+  const g  = (day.gastos||[]).filter(x => (x.titulo||'').trim() || parseFloat(x.monto)>0).length;
+  const oi = (day.otrosIngresos||[]).filter(x => (x.titulo||'').trim() || parseFloat(x.monto)>0).length;
+  const mv = (day.movimientos||[]).filter(x => parseFloat(x.monto)>0).length;
+  return g + oi + mv;
+}
+// Merge que NUNCA pierde datos del cuaderno: base = nube, pero si una fecha LOCAL tiene más
+// items financieros que la nube (gastos no subidos aún), conserva el local. También conserva
+// fechas que solo existen localmente.
+function _mergePdDataSeguro(local, nube) {
+  const resultado = {};
+  Object.keys(nube||{}).forEach(f => { resultado[f] = nube[f]; });
+  Object.keys(local||{}).forEach(f => {
+    const nLocal = _contarItemsFinancieros(local[f]);
+    const nNube  = _contarItemsFinancieros(nube && nube[f]);
+    if (!nube || !(f in nube)) { resultado[f] = local[f]; return; } // solo existe local
+    if (nLocal > nNube) { resultado[f] = local[f]; }                 // local tiene gastos no subidos
+  });
+  return resultado;
+}
+
 async function syncAllFromSupabase(silent) {
   if (!sb || _syncInProgress) return;
   _syncInProgress = true;
@@ -1463,13 +1486,11 @@ async function syncAllFromSupabase(silent) {
 
     const pd = await loadFromSupabase('mt_pd3');
     if (pd) {
-      if (hardReplace) {
-        pdData = pd;
-      } else {
-        const local = pdData || {};
-        Object.keys(pd).forEach(f => { local[f] = pd[f]; });
-        pdData = local;
-      }
+      // MERGE PROTECTOR: aunque sea hardReplace, NUNCA pisamos una fecha local que tenga MÁS
+      // gastos/ingresos/movimientos que la nube (datos anotados que aún no subieron). Así se
+      // evita perder el cuaderno al sincronizar. Si Pedro borró items, la nube se impone igual
+      // cuando tiene >= que el local.
+      pdData = _mergePdDataSeguro(pdData || {}, pd);
       safeSetLS('mt_pd3', JSON.stringify(pdData));
     }
 
@@ -2302,7 +2323,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v76';
+const APP_VERSION = '2026-05-20-v77';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
