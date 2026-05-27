@@ -727,7 +727,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <div id="pd-fecha-label" style="font-size:13px;color:var(--gris2);font-weight:500;"></div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <input type="date" id="pd-fecha" oninput="renderPD()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
+      <input type="date" id="pd-fecha" onchange="cambiarFechaPD()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
       <button class="btn btn-gh btn-sm" onclick="pdHoy()">Hoy</button>
       <button class="btn btn-p btn-sm" onclick="abrirModalColumna()">+ Agregar equipo</button>
       <button class="btn btn-gh btn-sm" onclick="imprimirPD()">🖨️ Imprimir</button>
@@ -2301,7 +2301,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v74';
+const APP_VERSION = '2026-05-20-v75';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5490,8 +5490,26 @@ function _programarSyncFinanzas() {
     try { if (typeof buildTitulosDatalist === 'function') buildTitulosDatalist(); } catch(e) {}
   }, 1500);
 }
-function pdHoy() { document.getElementById('pd-fecha').valueAsDate = new Date(); renderPD(); }
+function pdHoy() { _flushFinanzasPendiente(); document.getElementById('pd-fecha').valueAsDate = new Date(); renderPD(); }
 function getPDFecha() { return document.getElementById('pd-fecha').value || new Date().toISOString().slice(0,10); }
+
+// Sube YA cualquier gasto/ingreso/movimiento pendiente (que estaba en el debounce de 1.5s).
+// CRÍTICO: se llama ANTES de cambiar de fecha en el cuaderno. Sin esto, los gastos recién
+// anotados que aún no subían a la nube se perdían cuando un sync hardReplace pisaba pdData.
+function _flushFinanzasPendiente() {
+  if (_finanzasSyncTimer) { clearTimeout(_finanzasSyncTimer); _finanzasSyncTimer = null; }
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); else syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('flush finanzas:', e); }
+  try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+}
+
+// Cambio de fecha en el cuaderno/pizarra: primero asegura subir lo pendiente del día actual,
+// después cambia. Evita perder gastos anotados que aún no se habían sincronizado.
+function cambiarFechaPD() {
+  _flushFinanzasPendiente();
+  renderPD();
+}
 
 function getDayData(f) {
   if (!pdData[f]) {
