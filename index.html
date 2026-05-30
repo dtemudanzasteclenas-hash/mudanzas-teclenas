@@ -1476,13 +1476,17 @@ function _mergePdDataSeguro(local, nube) {
   return resultado;
 }
 
-async function syncAllFromSupabase(silent) {
+async function syncAllFromSupabase(silent, hardReplace=false) {
   if (!sb || _syncInProgress) return;
   _syncInProgress = true;
   try {
-    // hardReplace=true: reemplazo TOTAL de localStorage por lo que venga de Supabase
-    // (usado al abrir la página). Si false, merge por fecha (para no perder cambios offline).
-    const hardReplace = arguments[1] === true;
+    // FIX A2 (2026-05-30): hardReplace ahora es parámetro NOMBRADO (antes se leía con
+    // arguments[1], frágil y mal documentado).
+    // hardReplace=true: reemplazo TOTAL de agGrid/conc por lo que venga de Supabase
+    //   (solo lo usa initData al cargar como admin).
+    // hardReplace=false (default): merge por fecha, NUNCA borra fechas locales no subidas
+    //   (para no perder cambios hechos sin internet). El polling y el realtime usan false
+    //   a propósito: por seguridad NO propagan borrados de fechas completas.
 
     const pd = await loadFromSupabase('mt_pd3');
     if (pd) {
@@ -1617,6 +1621,10 @@ function startAutoRefresh() {
         console.log('🔄 Cambios detectados en otro dispositivo, sincronizando...', {appData:needsRefresh, reservas:resChanged});
         await syncAllFromSupabase(true);
         const sbRes = await loadReservasFromSupabase();
+        // NOTA A3 (2026-05-30): el guard exige >0 filas A PROPÓSITO. En polling automático no
+        // queremos que una respuesta vacía transitoria borre la lista local en mitad de sesión.
+        // (loadReservasFromSupabase devuelve null si hay error, [] solo si la nube tiene 0 filas
+        // reales.) Si alguna vez se vacía la nube de verdad, usar forceSync manual.
         if (sbRes !== null && sbRes.length > 0) {
           reservas = sbRes;
           safeSetLS('mt2_reservas', JSON.stringify(reservas));
@@ -1925,7 +1933,9 @@ async function forceSync() {
   try {
     await syncAllFromSupabase(false);
     const sbRes = await loadReservasFromSupabase();
-    if (sbRes !== null && sbRes.length > 0) {
+    // FIX A3 (2026-05-30): en sync MANUAL sí aceptamos nube vacía (Pedro lo pidió a propósito),
+    // así puede reflejar una limpieza real. El polling automático sigue exigiendo >0 por seguridad.
+    if (sbRes !== null) {
       reservas = sbRes;
       safeSetLS('mt2_reservas', JSON.stringify(reservas));
       console.log('🔄 forceSync: ' + reservas.length + ' reservaciones');
@@ -2323,7 +2333,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-20-v77';
+const APP_VERSION = '2026-05-30-v78';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -5083,8 +5093,8 @@ function guardarEdicion() {
   // Limpiar agGrid SOLO si cambiaron fecha u horarios (para preservar la ubicación si el usuario
   // solo editó datos del cliente/obs). Si cambió fecha, limpiar de la fecha ANTERIOR.
   // CRÍTICO: tras editar reservación se dispara Realtime para reservaciones, lo que activa
-  // scheduleFullSyncAndRender → syncAllFromSupabase(true) que hace HARD REPLACE de agGrid.
-  // Si el sync local de agGrid está aún debounced (400ms), el push del servidor trae la
+  // scheduleFullSyncAndRender → syncAllFromSupabase(true) [silent=true; hace MERGE de agGrid,
+  // no hard replace]. Si el sync local de agGrid está aún debounced (400ms), el push del servidor trae la
   // versión vieja y resucita la celda eliminada → reservación duplicada en día viejo.
   // Por eso usamos flushSyncToSupabase (sin debounce) cuando cambia fecha u horas.
   if (fechaCambio) {
@@ -5105,10 +5115,20 @@ function guardarEdicion() {
           if (col.slots?.[h]?.reservaCodigo === r.codigo) {
             col.slots[h].reservaCodigo = '';
             col.slots[h].costo = '';
+            // FIX M3 (2026-05-30): limpiar también marcas de cobro, no solo el código/costo.
+            delete col.slots[h].cobrado;
+            delete col.slots[h].fechaCobro;
+            delete col.slots[h].metodoCobro;
             cambioPD = true;
           }
         });
       });
+      // FIX M3 (2026-05-30): quitar cobros pendientes registrados para esta reserva en el día viejo.
+      if (Array.isArray(pdOld.cobrosPendientes)) {
+        const antes = pdOld.cobrosPendientes.length;
+        pdOld.cobrosPendientes = pdOld.cobrosPendientes.filter(cb => cb.codigo !== r.codigo);
+        if (pdOld.cobrosPendientes.length !== antes) cambioPD = true;
+      }
       if (cambioPD) { savePD(); flushSyncToSupabase('mt_pd3', pdData); }
     }
   } else if (horasCambiaron) {
@@ -6202,6 +6222,8 @@ function buildColumna2(col, idx, f) {
 
 
 async function toggleFinalizarColumna(idx) {
+  // FIX M1 (2026-05-30): no concluir/reabrir grupos en un día cerrado.
+  if (isDiaCerrado()) { alert('🔒 Día cerrado: desbloquéalo para concluir o reabrir grupos.'); return; }
   const f = getPDFecha();
   const day = getDayData(f);
   const col = day.columnas[idx];
@@ -6407,9 +6429,11 @@ function updateSlot2(f, idx, hora, campo, valor) {
     const codigo = col.slots[h]?.reservaCodigo;
     if (codigo && contadosGlobal.has(codigo)) return ss;
     if (codigo) contadosGlobal.add(codigo);
-    let c = parseFloat(col.slots[h]?.costo)||0;
+    // FIX A1 (2026-05-30): costo de la celda O el de la reserva, NO sumados (duplicaba).
+    const cSlot = parseFloat(col.slots[h]?.costo)||0;
     const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-    if (resA) c += parseFloat(resA.costo)||0;
+    const cRes = resA ? (parseFloat(resA.costo)||0) : 0;
+    const c = cSlot > 0 ? cSlot : cRes;
     return ss+c;
   },0),0);
   const tv = document.getElementById('piz-total-val'); if(tv) tv.textContent='$'+totalServicios.toFixed(2);
@@ -6478,9 +6502,10 @@ function renderStats2(f) {
     const contadosS2 = new Set();
     HORARIOS.forEach(h=>{
     const codigo = col.slots[h]?.reservaCodigo;
-    let c=parseFloat(col.slots[h]?.costo)||0;
+    const cSlot=parseFloat(col.slots[h]?.costo)||0;
     const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-    if (resA && !contadosS2.has(codigo)) c += parseFloat(resA.costo)||0;
+    const cRes = (resA && !contadosS2.has(codigo)) ? (parseFloat(resA.costo)||0) : 0;
+    let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
     if (codigo) contadosS2.add(codigo);
     const m=col.slots[h]?.metodo||'EFECTIVO';
     if(m==='CANCELADO') return;
@@ -6603,6 +6628,8 @@ function updatePropina(f, colIdx, propIdx, val) {
 }
 
 function guardarColumna() {
+  // FIX M1 (2026-05-30): no permitir crear/editar equipos en un día cerrado.
+  if (isDiaCerrado()) { alert('🔒 Día cerrado: no se pueden modificar los equipos. Desbloquéalo primero.'); return; }
   const camion = document.getElementById('col-camion').value;
   if (!camion) { alert('Por favor selecciona un camión.'); return; }
   // Auto-generate name from truck
@@ -6653,11 +6680,14 @@ function guardarColumna() {
   else day.columnas.push(col);
 
   savePD();
+  recalcCerramos();  // FIX M4 (2026-05-30): los miembros/pagos del equipo afectan el cierre de caja.
   cerrarModalColumna();
   renderPD();
 }
 
 function elimColumna(idx) {
+  // FIX M1 (2026-05-30): no permitir borrar equipos en un día cerrado.
+  if (isDiaCerrado()) { alert('🔒 Día cerrado: no se pueden borrar equipos. Desbloquéalo primero.'); return; }
   const f = getPDFecha();
   const day = getDayData(f);
   const nombre = day.columnas[idx]?.nombre || 'este equipo';
@@ -6719,9 +6749,10 @@ function renderCuaderno() {
       const contadosIng = new Set();
       HORARIOS.forEach(h=>{
       const codigo = col.slots[h]?.reservaCodigo;
-      let c=parseFloat(col.slots[h]?.costo)||0;
+      const cSlot=parseFloat(col.slots[h]?.costo)||0;
       const resAsig = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-      if (resAsig && !contadosIng.has(codigo)) c += parseFloat(resAsig.costo)||0;
+      const cRes = (resAsig && !contadosIng.has(codigo)) ? (parseFloat(resAsig.costo)||0) : 0;
+      let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosIng.add(codigo);
       const m=col.slots[h]?.metodo||'EFECTIVO';
       if(ing[m]!==undefined) ing[m]+=c;
@@ -6800,9 +6831,10 @@ function renderCuaderno() {
       const m = col.slots[h]?.metodo||'EFECTIVO';
       if (m === 'CANCELADO') return;
       const codigo = col.slots[h]?.reservaCodigo;
-      let c = parseFloat(col.slots[h]?.costo)||0;
+      const cSlot = parseFloat(col.slots[h]?.costo)||0;
       const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-      if (resA && !contadosTI.has(codigo)) c += parseFloat(resA.costo)||0;
+      const cRes = (resA && !contadosTI.has(codigo)) ? (parseFloat(resA.costo)||0) : 0;
+      let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosTI.add(codigo);
       totalIngresos += c;
     });
@@ -6831,17 +6863,21 @@ function renderCuentas(f) {
   const day = getDayData(f);
 
   // Auto-poblar "abrimos" con los valores de "cerramos" del día anterior (si abrimos está vacío)
+  // FIX M5 (2026-05-30): NO escribir durante un sync ni en un día cerrado, y guardar UNA sola vez
+  // (antes llamaba savePD() dentro de un forEach, en cada render → escrituras y syncs en cadena).
   const fAyer = getFechaAnterior(f);
   const ayer = pdData[fAyer];
-  if (ayer && ayer.cuentas && ayer.cuentas.cerramos) {
+  if (ayer && ayer.cuentas && ayer.cuentas.cerramos && !day.cuentas.diaCerrado && !(typeof _syncInProgress !== 'undefined' && _syncInProgress)) {
+    let cambioAb = false;
     CUENTAS.forEach(c => {
       const valCerr = ayer.cuentas.cerramos[c];
       // Solo auto-llenar si abrimos está vacío y cerramos del día anterior tiene valor
       if (valCerr && !day.cuentas.abrimos[c]) {
         day.cuentas.abrimos[c] = valCerr;
-        savePD();
+        cambioAb = true;
       }
     });
+    if (cambioAb) savePD();
   }
 
   // ABRIMOS: editable
@@ -6962,6 +6998,8 @@ function renderCuentas(f) {
 
 function updateArqueo(f, cuenta, val) {
   const day = getDayData(f);
+  // FIX M1 (2026-05-30): defensa extra — no editar arqueo de un día ya cerrado.
+  if (day.cuentas?.diaCerrado) return;
   if (!day.cuentas.arqueo) day.cuentas.arqueo = {};
   day.cuentas.arqueo[cuenta] = val;
   savePD();
@@ -7365,9 +7403,12 @@ function calcIngresosServiciosPorCuenta(day) {
     const contados = new Set();
     HORARIOS.forEach(h => {
       const codigo = col.slots[h]?.reservaCodigo;
-      let c = parseFloat(col.slots[h]?.costo)||0;
+      // FIX A1 (2026-05-30): NO sumar slot.costo + reserva.costo (duplicaba el ingreso).
+      // Criterio unificado: usar el costo de la celda si tiene; si no, el de la reserva.
+      const cSlot = parseFloat(col.slots[h]?.costo)||0;
       const res = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-      if (res && !contados.has(codigo)) c += parseFloat(res.costo)||0;
+      const cRes = (res && !contados.has(codigo)) ? (parseFloat(res.costo)||0) : 0;
+      let c = cSlot > 0 ? cSlot : cRes;
       if (codigo) contados.add(codigo);
       const m = col.slots[h]?.metodo||'EFECTIVO';
       if (m==='CANCELADO' || m==='PENDIENTE') return;
@@ -7489,9 +7530,10 @@ function descargarResumenMensual() {
         const codigo = col.slots[h]?.reservaCodigo;
         if (codigo && contados.has(codigo)) return;
         if (codigo) contados.add(codigo);
-        let c = parseFloat(col.slots[h]?.costo)||0;
+        const cSlot = parseFloat(col.slots[h]?.costo)||0;
         const res = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-        if (res) c += parseFloat(res.costo)||0;
+        const cRes = res ? (parseFloat(res.costo)||0) : 0;
+        let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
         if (m==='LINK') c *= 0.95;
         if (m!=='PENDIENTE') ingDia += c;
       });
@@ -7849,9 +7891,10 @@ function renderConciliacion() {
       const slot = col.slots?.[h];
       if (!slot) return;
       const codigo = slot.reservaCodigo;
-      let c = parseFloat(slot.costo) || 0;
+      const cSlot = parseFloat(slot.costo) || 0;
       const resSlot = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-      if (resSlot && !contadosConc.has(codigo)) c += parseFloat(resSlot.costo)||0;
+      const cRes = (resSlot && !contadosConc.has(codigo)) ? (parseFloat(resSlot.costo)||0) : 0;
+      let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosConc.add(codigo);
       if (!c) return;
       const descLabel = resSlot ? `${col.nombre} — ${h} (${resSlot.nombre} ${resSlot.apellido})` : `${col.nombre} — ${h}`;
@@ -8718,74 +8761,4 @@ function alertaPendientesUrgentes() {
     <!-- Personal eventual -->
     <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
       <div class="sec-div" style="margin:0;flex:1;">Personal eventual</div>
-      <button onclick="addExtraPersonal()" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">+ Agregar eventual</button>
-    </div>
-    <p style="font-size:11px;color:var(--gris2);margin:6px 0 10px;">Ayudantes eventuales que no están en la planilla fija.</p>
-    <div id="col-extras"></div>
-  </div>
-  <div class="mf">
-    <button class="btn btn-gh" onclick="cerrarModalColumna()">Cancelar</button>
-    <button class="btn btn-g" onclick="guardarColumna()">💾 Guardar equipo</button>
-  </div>
-</div>
-</div>
-
-<!-- MODAL CAMBIO DE HORA (drag entre filas) -->
-<div class="mo" id="mo-hora-cambio" onclick="if(event.target===this)cancelarHoraCambio()">
-<div class="modal" style="width:440px;">
-  <div class="mh" style="background:#1a3a6b;">
-    <h2>⏰ Cambiar horario del servicio</h2>
-    <button class="mc" onclick="cancelarHoraCambio()">✕</button>
-  </div>
-  <div class="mb">
-    <div id="hc-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
-    <div class="fg">
-      <label>Selecciona el nuevo horario *</label>
-      <select id="hc-hora-sel" onchange="document.getElementById('hc-hora-custom').style.display=this.value==='Otra hora'?'block':'none'">
-        <option value="8:00 AM">8:00 AM</option>
-        <option value="11:00 AM">11:00 AM</option>
-        <option value="2:30 PM">2:30 PM</option>
-        <option value="Otra hora">Otra hora (escribir manualmente)</option>
-      </select>
-      <input type="text" id="hc-hora-custom" placeholder="Ej: 6:00 AM, 1:00 PM, 10:00 PM..."
-        style="display:none;margin-top:8px;border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
-    </div>
-  </div>
-  <div class="mf">
-    <button class="btn btn-gh" onclick="cancelarHoraCambio()">Cancelar</button>
-    <button class="btn btn-p" onclick="confirmarHoraCambio()">✅ Confirmar y mover</button>
-  </div>
-</div>
-</div>
-
-<div class="mo" id="mo-cobro" onclick="if(event.target===this)cerrarModalCobro()">
-<div class="modal" style="width:420px;">
-  <div class="mh" style="background:#16a34a;">
-    <h2>💰 Registrar cobro</h2>
-    <button class="mc" onclick="cerrarModalCobro()">✕</button>
-  </div>
-  <div class="mb">
-    <div id="cob-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
-    <div class="fg">
-      <label>¿Cómo se recibió el pago? *</label>
-      <select id="cob-metodo">
-        <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
-        <option value="CUSCA">CUSCA → Cuscatlán</option>
-        <option value="LINK">LINK → Cuscatlán mañana (95%)</option>
-      </select>
-    </div>
-    <div class="fg" style="margin-top:12px;">
-      <label>Fecha de cobro *</label>
-      <input type="date" id="cob-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
-    </div>
-  </div>
-  <div class="mf">
-    <button class="btn btn-gh" onclick="enviarRecordatorioCobroWA()" style="margin-right:auto;">📱 Recordar por WA</button>
-    <button class="btn btn-gh" onclick="cerrarModalCobro()">Cancelar</button>
-    <button class="btn btn-p" style="background:#16a34a;" onclick="confirmarCobroModal()">✅ Registrar cobro</button>
-  </div>
-</div>
-</div>
-
-</body>
-</html>
+      <button onclick="addExtraPersonal()" style="background:#d9
