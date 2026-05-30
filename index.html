@@ -8761,4 +8761,74 @@ function alertaPendientesUrgentes() {
     <!-- Personal eventual -->
     <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
       <div class="sec-div" style="margin:0;flex:1;">Personal eventual</div>
-      <button onclick="addExtraPersonal()" style="background:#d9
+      <button onclick="addExtraPersonal()" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">+ Agregar eventual</button>
+    </div>
+    <p style="font-size:11px;color:var(--gris2);margin:6px 0 10px;">Ayudantes eventuales que no están en la planilla fija.</p>
+    <div id="col-extras"></div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="cerrarModalColumna()">Cancelar</button>
+    <button class="btn btn-g" onclick="guardarColumna()">💾 Guardar equipo</button>
+  </div>
+</div>
+</div>
+
+<!-- MODAL CAMBIO DE HORA (drag entre filas) -->
+<div class="mo" id="mo-hora-cambio" onclick="if(event.target===this)cancelarHoraCambio()">
+<div class="modal" style="width:440px;">
+  <div class="mh" style="background:#1a3a6b;">
+    <h2>⏰ Cambiar horario del servicio</h2>
+    <button class="mc" onclick="cancelarHoraCambio()">✕</button>
+  </div>
+  <div class="mb">
+    <div id="hc-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
+    <div class="fg">
+      <label>Selecciona el nuevo horario *</label>
+      <select id="hc-hora-sel" onchange="document.getElementById('hc-hora-custom').style.display=this.value==='Otra hora'?'block':'none'">
+        <option value="8:00 AM">8:00 AM</option>
+        <option value="11:00 AM">11:00 AM</option>
+        <option value="2:30 PM">2:30 PM</option>
+        <option value="Otra hora">Otra hora (escribir manualmente)</option>
+      </select>
+      <input type="text" id="hc-hora-custom" placeholder="Ej: 6:00 AM, 1:00 PM, 10:00 PM..."
+        style="display:none;margin-top:8px;border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="cancelarHoraCambio()">Cancelar</button>
+    <button class="btn btn-p" onclick="confirmarHoraCambio()">✅ Confirmar y mover</button>
+  </div>
+</div>
+</div>
+
+<div class="mo" id="mo-cobro" onclick="if(event.target===this)cerrarModalCobro()">
+<div class="modal" style="width:420px;">
+  <div class="mh" style="background:#16a34a;">
+    <h2>💰 Registrar cobro</h2>
+    <button class="mc" onclick="cerrarModalCobro()">✕</button>
+  </div>
+  <div class="mb">
+    <div id="cob-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
+    <div class="fg">
+      <label>¿Cómo se recibió el pago? *</label>
+      <select id="cob-metodo">
+        <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
+        <option value="CUSCA">CUSCA → Cuscatlán</option>
+        <option value="LINK">LINK → Cuscatlán mañana (95%)</option>
+      </select>
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Fecha de cobro *</label>
+      <input type="date" id="cob-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="enviarRecordatorioCobroWA()" style="margin-right:auto;">📱 Recordar por WA</button>
+    <button class="btn btn-gh" onclick="cerrarModalCobro()">Cancelar</button>
+    <button class="btn btn-p" style="background:#16a34a;" onclick="confirmarCobroModal()">✅ Registrar cobro</button>
+  </div>
+</div>
+</div>
+
+</body>
+</html>
