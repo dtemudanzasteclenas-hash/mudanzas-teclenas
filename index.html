@@ -1330,6 +1330,9 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <button class="btn btn-p" onclick="cambiarEst('completado')">🏁 Completado</button>
         <button class="btn btn-r" onclick="cambiarEst('cancelado')">❌ Cancelado</button>
       </div>
+      <div class="sec-div" style="margin-top:20px;">📋 Historial de esta reservación</div>
+      <p style="font-size:11px;color:var(--gris2);margin:4px 0 8px;">Quién la agendó, canceló o le cambió fecha/precio, y cuándo. Para seguimiento interno.</p>
+      <div id="p-historial"></div>
     </div>
   </div>
 </div>
@@ -1522,6 +1525,14 @@ async function syncAllFromSupabase(silent, hardReplace=false) {
       safeSetLS('mt_conc', JSON.stringify(concData));
     }
 
+    // Bitacora de auditoria: SIEMPRE merge (nunca hard replace) para no perder eventos que
+    // este dispositivo grabo y aun no subio, ni los que grabaron otros.
+    const aud = await loadFromSupabase('mt_audit');
+    if (aud) {
+      auditData = _mergeAudit(auditData || {}, aud);
+      safeSetLS('mt_audit', JSON.stringify(auditData));
+    }
+
     if (!silent) console.log('✅ Datos sincronizados desde Supabase' + (hardReplace ? ' (hard replace)' : ''));
     updateSyncIndicator();
     return true;
@@ -1675,6 +1686,7 @@ const _SAVE_LABELS = {
   'mt_aggrid': 'Agenda semanal',
   'mt_pd3': 'Pizarra / Programación',
   'mt_conc': 'Conciliación CUSCA',
+  'mt_audit': 'Registro de cambios',
   'reserva': 'Reservación'
 };
 function _nomSave(key) { return _SAVE_LABELS[key] || key; }
@@ -1949,11 +1961,12 @@ async function forceSync() {
 async function hardReloadDatos() {
   if (!confirm('⚠️ Se borrará el caché local y se volverá a descargar TODO desde la nube.\n\nEsto NO borra datos — solo fuerza un refresco. ¿Continuar?')) return;
   try {
-    ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc'].forEach(k => localStorage.removeItem(k));
+    ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc', 'mt_audit'].forEach(k => localStorage.removeItem(k));
     reservas = [];
     agGrid = {};
     pdData = {};
     concData = {};
+    auditData = {};
     if (!supabaseOK) {
       const ok = await checkSupabase();
       if (!ok) { alert('❌ No hay conexión con la nube. Revisa tu internet e intenta de nuevo.'); return; }
@@ -2333,7 +2346,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-05-30-v78';
+const APP_VERSION = '2026-06-09-v79';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3055,6 +3068,70 @@ function imprimirAgendaDia() {
 // ==================== AGENDA GRID ====================
 // agGrid[fecha] = { numCols: 6, cells: { "col-row": codigoreserva } }
 let agGrid; try { agGrid = JSON.parse(localStorage.getItem('mt_aggrid') || '{}'); } catch(e) { agGrid = {}; }
+
+// ==================== AUDITORIA / REGISTRO DE CAMBIOS ====================
+// Bitacora por codigo de reservacion: quien la agendo, cancelo, reactivo o le cambio
+// fecha/precio, y CUANDO. Se guarda en app_data id='mt_audit'. NO toca la tabla
+// reservaciones, asi que es IMPOSIBLE que rompa el guardado de una reserva. Sobrevive al
+// borrado de cache por cambio de version (no esta en la lista que limpia checkAppVersion).
+let auditData; try { auditData = JSON.parse(localStorage.getItem('mt_audit') || '{}'); } catch(e) { auditData = {}; }
+
+function _esAdmin() { return !!(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.rol === 'admin'); }
+function _quienSoy() { return (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) ? usuarioActual.nombre : '—'; }
+
+// Compara una fecha 'YYYY-MM-DD' contra HOY (hora local). true si ya paso (anterior a hoy).
+function _fechaEsPasada(fechaStr) {
+  if (!fechaStr) return false;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const f = new Date(fechaStr + 'T12:00:00');
+  if (isNaN(f.getTime())) return false;
+  f.setHours(0,0,0,0);
+  return f < hoy;
+}
+
+// Registra un evento en la bitacora de una reserva y lo sube a la nube (debounced).
+function _logAudit(codigo, tipo, detalle) {
+  if (!codigo) return;
+  try {
+    if (!auditData[codigo]) auditData[codigo] = [];
+    auditData[codigo].push({ tipo: tipo, por: _quienSoy(), en: new Date().toISOString(), detalle: detalle || '' });
+    if (typeof safeSetLS === 'function') safeSetLS('mt_audit', JSON.stringify(auditData));
+    if (typeof syncToSupabase === 'function') syncToSupabase('mt_audit', auditData);
+  } catch(e) { console.warn('logAudit error:', e); }
+}
+
+// Une dos bitacoras SIN perder eventos (cada dispositivo pudo grabar eventos distintos).
+function _mergeAudit(local, nube) {
+  const res = {};
+  const codigos = new Set([...Object.keys(local||{}), ...Object.keys(nube||{})]);
+  codigos.forEach(c => {
+    const seen = new Set(); const out = [];
+    [...(((nube||{})[c])||[]), ...(((local||{})[c])||[])].forEach(ev => {
+      const k = (ev.tipo||'')+'|'+(ev.por||'')+'|'+(ev.en||'');
+      if (!seen.has(k)) { seen.add(k); out.push(ev); }
+    });
+    out.sort((a,b) => (a.en||'').localeCompare(b.en||''));
+    res[c] = out;
+  });
+  return res;
+}
+
+const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', reactivada:'♻️ Reactivada', cambio_fecha:'📅 Cambio de fecha', cambio_precio:'💲 Cambio de precio', completada:'🏁 Completada' };
+function _fmtAuditFechaHora(iso) {
+  try { return new Date(iso).toLocaleString('es-SV', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(e) { return iso || ''; }
+}
+function _renderHistorial(codigo) {
+  const evs = (auditData && auditData[codigo]) ? auditData[codigo].slice() : [];
+  if (!evs.length) return '<div style="font-size:12px;color:var(--gris2);padding:8px 0;">Sin registro. (Las reservaciones viejas no tienen historial; de aqui en adelante se registra todo.)</div>';
+  evs.sort((a,b)=>(a.en||'').localeCompare(b.en||''));
+  return evs.map(ev => {
+    const lbl = _AUDIT_LABELS[ev.tipo] || ev.tipo;
+    const det = ev.detalle ? ` <span style="color:var(--gris2);">— ${ev.detalle}</span>` : '';
+    return `<div style="padding:7px 0;border-bottom:1px solid var(--gris1);font-size:12.5px;line-height:1.4;"><strong>${lbl}</strong> por <strong style="color:var(--azul2);">${ev.por||'—'}</strong> · ${_fmtAuditFechaHora(ev.en)}${det}</div>`;
+  }).join('');
+}
+
 const AG_ROWS = ['8:00 AM', '11:00 AM', '2:30 PM', 'Nocturno'];
 let agDragSource = null; // { fecha, col, row }
 
@@ -4160,6 +4237,7 @@ function removeFromGrid(f, key) {
     _limpiarPDDataYCobrosPorCancelacion(r);
     savePD();
     saveSingle(r);
+    _logAudit(r.codigo, 'cancelada', 'desde la agenda');
     try { renderPD(); } catch(e) {}
   }
   renderAll();
@@ -4748,6 +4826,14 @@ function guardar() {
     return;
   }
 
+  // Bloqueo de fecha pasada: los vendedores NO pueden agendar en dias que ya pasaron
+  // (evita backdating para inflar comisiones). El admin (Pedro) SI puede, por si hay que
+  // registrar un servicio real que se ingreso tarde.
+  if (_fechaEsPasada(fecha) && !_esAdmin()) {
+    alert('⚠️ No podés agendar en una fecha que ya pasó.\n\nLa fecha elegida (' + fmtFecha(fecha) + ') es anterior a hoy.\nElegí hoy o una fecha futura.\n\nSi de verdad hay que registrar un servicio viejo, pedíselo a Pedro.');
+    return;
+  }
+
   // Normalize cost format
   let costo = document.getElementById('f-costo').value.trim();
   if (costo && !isNaN(parseFloat(costo))) {
@@ -4792,6 +4878,7 @@ function guardar() {
   };
   reservas.unshift(r);
   saveSingle(r);
+  _logAudit(r.codigo, 'creada', `${fmtFecha(r.fecha)} ${r.hora} · $${r.costo || '0.00'}`);
   registrarClienteEnSupabase(r).catch(e => console.warn('Error registrando cliente:', e));
   closeNueva();
   renderAll();
@@ -4815,6 +4902,9 @@ function verRes(idx) {
   // Vendedor info
   const pVend = document.getElementById('p-vendedor');
   if (pVend) pVend.textContent = r.vendedor || '—';
+  // Historial / bitacora de auditoria (pestaña Estado)
+  const pHist = document.getElementById('p-historial');
+  if (pHist) pHist.innerHTML = _renderHistorial(r.codigo);
   const unidadFull = r.unidad === 'grande' ? `Camión Grande – Furgón 7m / 10 ton${r.rampa ? ', '+r.rampa : ''}` :
                      r.unidad === 'mediano' ? 'Camión Mediano – Furgón 5m / 5 ton' : 'Camión Pequeño – Furgón 3m / 2 ton';
   document.getElementById('p-cod').textContent = r.codigo;
@@ -5067,11 +5157,19 @@ function guardarEdicion() {
     return;
   }
   // Capturar valores OLD antes de mutar — necesario para saber si hay que limpiar agGrid
+  // y para registrar en la bitacora quien cambio la fecha o el precio.
   const oldFecha = r.fecha;
+  const oldCosto = r.costo;
   const oldHoras = (r.horasOcupadas || [r.hora] || []).slice();
   const newFecha = document.getElementById('e-fecha').value;
   const horasCambiaron = (oldHoras.length !== horasEdit.length) || oldHoras.some((h,i) => h !== horasEdit[i]);
   const fechaCambio = oldFecha !== newFecha;
+
+  // Bloqueo de fecha pasada al reagendar: solo vendedores (el admin SI puede).
+  if (fechaCambio && _fechaEsPasada(newFecha) && !_esAdmin()) {
+    alert('⚠️ No podés mover este servicio a una fecha que ya pasó (' + fmtFecha(newFecha) + ').\nElegí hoy o una fecha futura.');
+    return;
+  }
 
   r.nombre = nombre;
   r.apellido = document.getElementById('e-apellido').value.trim();
@@ -5156,6 +5254,9 @@ function guardarEdicion() {
     }
   }
   saveSingle(r);
+  // Registrar en la bitacora los cambios sensibles (fecha y precio).
+  if (fechaCambio) _logAudit(r.codigo, 'cambio_fecha', `${fmtFecha(oldFecha)} → ${fmtFecha(newFecha)}`);
+  if (String(oldCosto || '') !== String(r.costo || '')) _logAudit(r.codigo, 'cambio_precio', `$${oldCosto || '0.00'} → $${r.costo || '0.00'}`);
   renderAll();
   renderAgenda();
   alert('✅ Reservación actualizada.');
@@ -5347,6 +5448,7 @@ function cambiarEst(est) {
   // la equivocada. Por eso buscamos por código (verCodigo).
   const r = _resolveVerR();
   if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
+  const _estadoAntes = r.estado;
   const nombre = `${r.nombre} ${r.apellido||''}`.trim();
   // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
   if (est === 'cancelado') {
@@ -5370,6 +5472,9 @@ function cambiarEst(est) {
   }
   r.estado = est;
   saveSingle(r);
+  if (est === 'cancelado') _logAudit(r.codigo, 'cancelada', '');
+  else if (_estadoAntes === 'cancelado') _logAudit(r.codigo, 'reactivada', `→ ${est}`);
+  else if (est === 'completado') _logAudit(r.codigo, 'completada', '');
   renderAll();
   try { renderAgenda(); } catch(e) {}
   try { renderPD(); } catch(e) {}
@@ -5485,6 +5590,7 @@ function eliminar(idxOCodigo) {
   _limpiarPDDataYCobrosPorCancelacion(r);
   savePD();
   saveSingle(r);
+  _logAudit(r.codigo, 'cancelada', '');
   renderAll();
   renderAgenda();
   try { renderPD(); } catch(e) {}
@@ -8619,9 +8725,13 @@ function cambiarEstRapido(idxOCodigo, est) {
     r = reservas[idxOCodigo];
   }
   if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  const _estadoAntes = r.estado;
   if (est !== 'cancelado') _quitarNotaCancelacion(r);
   r.estado = est;
   saveSingle(r);
+  if (est === 'cancelado') _logAudit(r.codigo, 'cancelada', '');
+  else if (_estadoAntes === 'cancelado') _logAudit(r.codigo, 'reactivada', `→ ${est}`);
+  else if (est === 'completado') _logAudit(r.codigo, 'completada', '');
   renderAll();
   renderNotificaciones();
 }
