@@ -990,6 +990,15 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <input type="month" id="com-mes" onchange="renderComisiones()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:7px 11px;font-size:13px;font-family:'Barlow',sans-serif;">
     <span style="font-size:12px;color:var(--gris2);">Comisión: <strong>$1.00</strong> por servicio agendado</span>
   </div>
+
+  <!-- PAGO DE COMISIONES $1 (por mes de INGRESO al programa, sin canceladas, sin duplicados) -->
+  <div class="card" style="margin-bottom:22px;border:2px solid #16a34a;">
+    <div class="card-head"><h3>💵 Pago de comisiones — $1 por reservación ingresada</h3></div>
+    <p style="font-size:12px;color:var(--gris2);margin:2px 0 14px;">Cuenta las reservaciones que cada quien <strong>ingresó al programa</strong> en el mes elegido. No cuenta las <strong>canceladas</strong>. Si dos tienen la misma información, solo cuenta para <strong>quien la ingresó primero</strong>.</p>
+    <div id="com-pago1" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;"></div>
+  </div>
+
+  <div class="sec-div" style="margin:6px 0 14px;">Volumen por vendedor (según fecha del servicio)</div>
   <div id="com-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:22px;"></div>
   <div class="card">
     <div class="card-head"><h3>Detalle de servicios agendados</h3></div>
@@ -2034,6 +2043,7 @@ async function loadReservasFromSupabase() {
       embalaje: r.embalaje || null,
       empaque: r.empaque || null,
       vendedor: r.vendedor || '',
+      _creadoEn: r.created_at || null,   // fecha/hora de INGRESO al programa (la fija Supabase al insertar)
       _supabase_id: r.id
     }));
   } catch(e) {
@@ -2346,7 +2356,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-06-09-v79';
+const APP_VERSION = '2026-06-09-v81';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -3405,6 +3415,7 @@ function renderAgenda() {
             resDrag.estado = 'confirmado';
             _quitarNotaCancelacion(resDrag);
             saveSingle(resDrag);
+            _logAudit(resDrag.codigo, 'reactivada', 'desde la agenda');
           }
 
           if (!agGrid[f]) agGrid[f] = { numCols: (getAgDay(f).numCols), cells: {}, hidden: [] };
@@ -3633,7 +3644,7 @@ function renderSinUbicar(f) {
       : '';
     return `<div draggable="true"
         data-codigo="${r.codigo}"
-        onclick="verRes(${reservas.indexOf(r)})"
+        onclick="verRes('${r.codigo}')"
         ondragstart="agSinUbicarDragStart(event,'${r.codigo}')"
         style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:grab;margin:3px;${opacity}"
         title="${esCancelada ? 'Cancelada. Arrastrá a una celda para reactivarla.' : 'Arrastrá a una celda vacía.'}">
@@ -4209,6 +4220,8 @@ function removeFromGrid(f, key) {
   if (!agGrid[f]?.cells) return;
   const codigo = agGrid[f].cells[key];
   const r = codigo ? reservas.find(rv => rv.codigo === codigo) : null;
+  // GUARD día cerrado: no cancelar reservas de un día ya cuadrado.
+  if (r && isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const nombre = r ? `${r.nombre} ${r.apellido||''}`.trim() : 'esta reservación';
   // Pedro pidió: el botón X debe CANCELAR la reservación (no solo quitar del grid)
   // para que no aparezca en "Sin asignar" de pizarra ni cuente en totales.
@@ -4891,10 +4904,19 @@ function guardar() {
 }
 
 // ==================== VER RESERVACIÓN ====================
-function verRes(idx) {
+function verRes(idxOCodigo) {
+  // Acepta CÓDIGO (string) o índice posicional (compat). Resolver por código blinda contra
+  // el reordenamiento de reservas[] por sync entre el render y el clic (bug v44).
+  let idx, r;
+  if (typeof idxOCodigo === 'string') {
+    idx = reservas.findIndex(rv => rv.codigo === idxOCodigo);
+    r = idx >= 0 ? reservas[idx] : null;
+  } else {
+    idx = idxOCodigo;
+    r = reservas[idx];
+  }
   verIdx = idx;
-  const r = reservas[idx];
-  if (!r) { console.warn('verRes: idx fuera de rango', idx); return; }
+  if (!r) { console.warn('verRes: no se encontró la reservación', idxOCodigo); return; }
   // Capturar el código para resolver la reserva por identidad estable, no por índice posicional
   // (defensa contra reordenamiento del array reservas mientras el modal está abierto)
   verCodigo = r.codigo;
@@ -5170,6 +5192,10 @@ function guardarEdicion() {
     alert('⚠️ No podés mover este servicio a una fecha que ya pasó (' + fmtFecha(newFecha) + ').\nElegí hoy o una fecha futura.');
     return;
   }
+
+  // GUARD día cerrado: no editar una reserva cuyo día (viejo o nuevo) ya está cerrado/cuadrado.
+  if (isDiaCerrado(oldFecha)) { alert(`🔒 El día ${fmtFecha(oldFecha)} ya está cerrado.\n\nPara editar esta reservación, primero desbloqueá ese día en Programación.`); return; }
+  if (fechaCambio && isDiaCerrado(newFecha)) { alert(`🔒 No podés mover el servicio al ${fmtFecha(newFecha)} porque ese día ya está cerrado.\n\nDesbloqueá ese día en Programación primero.`); return; }
 
   r.nombre = nombre;
   r.apellido = document.getElementById('e-apellido').value.trim();
@@ -5448,6 +5474,8 @@ function cambiarEst(est) {
   // la equivocada. Por eso buscamos por código (verCodigo).
   const r = _resolveVerR();
   if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
+  // GUARD día cerrado: no tocar reservaciones de un día ya cuadrado/cerrado (corrompe el arqueo).
+  if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cambiar o cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const _estadoAntes = r.estado;
   const nombre = `${r.nombre} ${r.apellido||''}`.trim();
   // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
@@ -5573,6 +5601,8 @@ function eliminar(idxOCodigo) {
     r = reservas[idxOCodigo];
   }
   if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  // GUARD día cerrado: cancelar una reserva de un día cuadrado corrompe el arqueo.
+  if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const nombre = `${r.nombre} ${r.apellido || ''}`.trim();
   if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
   r.estado = 'cancelado';
@@ -6965,10 +6995,24 @@ function getFechaSiguiente(f) {
   return d.toISOString().slice(0,10);
 }
 
+// Valor que un día le HEREDA al siguiente como "abrimos".
+// Si el día quedó CERRADO y tiene CONTEO REAL (arqueo) para esa cuenta, hereda el CONTEO REAL
+// (lo que de verdad hay contado), no el cerramos teórico. Así, al cerrar con descuadre, el día
+// siguiente arranca de la realidad y el descuadre NO se arrastra. Si la cuenta no tiene conteo
+// real, cae al cerramos automático.
+function _valorCierrePropagado(dayObj, c) {
+  const cu = dayObj && dayObj.cuentas;
+  if (!cu) return '';
+  if (cu.diaCerrado && cu.arqueo && cu.arqueo[c] !== undefined && String(cu.arqueo[c]).trim() !== '') {
+    return (parseFloat(cu.arqueo[c]) || 0).toFixed(2);
+  }
+  return (cu.cerramos && cu.cerramos[c] != null) ? String(cu.cerramos[c]) : '';
+}
+
 function renderCuentas(f) {
   const day = getDayData(f);
 
-  // Auto-poblar "abrimos" con los valores de "cerramos" del día anterior (si abrimos está vacío)
+  // Auto-poblar "abrimos" con el cierre del día anterior (si abrimos está vacío)
   // FIX M5 (2026-05-30): NO escribir durante un sync ni en un día cerrado, y guardar UNA sola vez
   // (antes llamaba savePD() dentro de un forEach, en cada render → escrituras y syncs en cadena).
   const fAyer = getFechaAnterior(f);
@@ -6976,8 +7020,9 @@ function renderCuentas(f) {
   if (ayer && ayer.cuentas && ayer.cuentas.cerramos && !day.cuentas.diaCerrado && !(typeof _syncInProgress !== 'undefined' && _syncInProgress)) {
     let cambioAb = false;
     CUENTAS.forEach(c => {
-      const valCerr = ayer.cuentas.cerramos[c];
-      // Solo auto-llenar si abrimos está vacío y cerramos del día anterior tiene valor
+      // Hereda el CONTEO REAL de ayer si quedó cerrado con arqueo; si no, su cerramos automático.
+      const valCerr = _valorCierrePropagado(ayer, c);
+      // Solo auto-llenar si abrimos está vacío y el día anterior tiene un valor
       if (valCerr && !day.cuentas.abrimos[c]) {
         day.cuentas.abrimos[c] = valCerr;
         cambioAb = true;
@@ -7155,17 +7200,28 @@ function cerrarDia() {
     if (pendCobro>0) resumen += `🟡 ${pendCobro} cobro(s) PENDIENTE sin marcar\n`;
     resumen += `\n¿Cerrar el día de todos modos? No podrás editar hasta desbloquear.`;
     if (!confirm(resumen)) return;
+    // Refrescar el cerramos ANTES de congelarlo (por si había un recálculo en cola/debounce),
+    // así el descuadre vs el conteo real se mide contra el valor correcto.
+    try { recalcCerramos(); } catch(e) {}
     day.cuentas.diaCerrado = true;
   }
   savePD();
+  // Propagar al día siguiente: al CERRAR hereda el CONTEO REAL; al DESBLOQUEAR vuelve al cerramos.
+  try { recalcCerramos(); } catch(e) { console.warn('recalcCerramos tras cerrar/desbloquear:', e); }
   renderPD();
   if(pdTabActual==='cuaderno') renderCuaderno();
 }
 
-function isDiaCerrado() {
+function isDiaCerrado(fecha) {
+  // Con `fecha`: consulta ese día SIN crearlo (lee pdData directo, sin efecto secundario).
+  // Sin argumento: comportamiento original (día visible en el cuaderno).
+  if (fecha) {
+    const d = pdData[fecha];
+    return !!(d && d.cuentas && d.cuentas.diaCerrado);
+  }
   const f = getPDFecha();
   const day = getDayData(f);
-  return !!day.cuentas.diaCerrado;
+  return !!(day.cuentas && day.cuentas.diaCerrado);
 }
 
 function updateCuenta(f, tipo, cuenta, val) {
@@ -7530,6 +7586,9 @@ function recalcCerramos() {
   const f = getPDFecha();
   const day = getDayData(f);
 
+  // Si el día está CERRADO, su "cerramos" es el cuadre auditado y queda CONGELADO: no se
+  // recalcula (evita pisarlo). Igual se propaga al día siguiente y se renderiza abajo.
+  if (!day.cuentas.diaCerrado) {
   // Ingresos de servicios por cuenta (LINK queda en _LINK_PENDIENTE, no se suma hoy)
   const ingServ = calcIngresosServiciosPorCuenta(day);
 
@@ -7592,18 +7651,20 @@ function recalcCerramos() {
   // Guardar el LINK pendiente del día para referencia (servicios + cobros de pendientes por LINK)
   day.cuentas._linkPendiente = (ingServ['_LINK_PENDIENTE'] || 0) + (ingCobros['_LINK_PENDIENTE'] || 0);
   savePD();
+  } // fin del recálculo (solo cuando el día NO está cerrado)
 
-  // Propagar cerramos al día siguiente — PERO solo si el día siguiente NO está cerrado.
+  // Propagar al día siguiente — PERO solo si el día siguiente NO está cerrado.
   // Si recalculamos un día pasado (después de desbloquearlo), sobreescribir el abrimos
-  // congelado del día siguiente rompe la cadena financiera histórica de todos los días
-  // posteriores que ya cerraron con valores específicos.
+  // congelado del día siguiente rompe la cadena financiera histórica de los días posteriores.
+  // CLAVE (pedido de Pedro): si el día quedó CERRADO con CONTEO REAL (arqueo), el día siguiente
+  // hereda el CONTEO REAL (lo que de verdad hay), no el cerramos teórico → el descuadre no se arrastra.
   const fManana = getFechaSiguiente(f);
   const manana = getDayData(fManana);
   if (!manana.cuentas?.diaCerrado) {
-    CUENTAS.forEach(c => { manana.cuentas.abrimos[c] = day.cuentas.cerramos[c]; });
+    CUENTAS.forEach(c => { manana.cuentas.abrimos[c] = _valorCierrePropagado(day, c); });
     savePD();
   } else {
-    console.log('ℹ️ Día siguiente ' + fManana + ' está cerrado — no se propaga el cerramos para no descuadrar el historial.');
+    console.log('ℹ️ Día siguiente ' + fManana + ' está cerrado — no se propaga para no descuadrar el historial.');
   }
 
   // Actualizar UI
@@ -8483,6 +8544,47 @@ function toggleNotificaciones() {
 }
 
 // ==================== COMISIONES ====================
+// Tiempo de INGRESO al programa de una reserva (para pago de $1 por mes de ingreso y para
+// decidir "quien la agendo primero"). Prioriza created_at de Supabase (existe para todas),
+// luego el evento 'creada' de la bitacora, luego un valor alto (queda al final / no cuenta).
+function _entryTime(r) {
+  if (r && r._creadoEn) { const t = Date.parse(r._creadoEn); if (!isNaN(t)) return t; }
+  const evs = (r && auditData) ? auditData[r.codigo] : null;
+  if (evs) { const c = evs.find(e => e.tipo === 'creada'); if (c) { const t = Date.parse(c.en); if (!isNaN(t)) return t; } }
+  return Number.MAX_SAFE_INTEGER;
+}
+function _entryMonthMatches(r, mes, anio) {
+  const t = _entryTime(r);
+  if (t === Number.MAX_SAFE_INTEGER) return false;
+  const d = new Date(t);
+  return d.getMonth() === (mes - 1) && d.getFullYear() === anio;
+}
+// Para CADA grupo de info igual (clave de duplicado), el GANADOR de la comision es la copia
+// NO cancelada que se ingreso PRIMERO. Las copias que ingreso despues otro vendedor (posible
+// robo) NO cuentan. Si todas las copias estan canceladas, el grupo no cuenta.
+function _comisionGanadores() {
+  const grupos = {};
+  (reservas || []).forEach(r => { const k = _claveDuplicado(r); (grupos[k] = grupos[k] || []).push(r); });
+  const ganadores = [];
+  Object.values(grupos).forEach(g => {
+    const activas = g.filter(r => r.estado !== 'cancelado');
+    if (!activas.length) return;
+    activas.sort((a, b) => _entryTime(a) - _entryTime(b));
+    ganadores.push(activas[0]);
+  });
+  return ganadores;
+}
+// Conteo de $1 por reserva del mes de INGRESO, por vendedor (ya sin canceladas ni duplicados).
+function _comisionUnoPorReserva(mes, anio) {
+  const ganadores = _comisionGanadores().filter(r => _entryMonthMatches(r, mes, anio));
+  const conteo = {}; const detalle = {};
+  ganadores.forEach(r => {
+    const v = r.vendedor || '(sin vendedor)';
+    conteo[v] = (conteo[v] || 0) + 1;
+    (detalle[v] = detalle[v] || []).push(r);
+  });
+  return { conteo, detalle };
+}
 function renderComisiones() {
   const mesInput = document.getElementById('com-mes');
   if (!mesInput.value) {
@@ -8491,7 +8593,33 @@ function renderComisiones() {
   }
   const [anio, mes] = mesInput.value.split('-').map(Number);
   const vendedores = USUARIOS.map(u => u.nombre);
-  
+
+  // ---- Pago de comisiones $1 (por mes de INGRESO, sin canceladas, sin duplicados) ----
+  const pago = _comisionUnoPorReserva(mes, anio);
+  const ordenPago = ['Luis', 'Roberto', 'Fabio', 'Pedro'];
+  Object.keys(pago.conteo).forEach(v => { if (!ordenPago.includes(v)) ordenPago.push(v); });
+  const coloresPago = { Pedro: '#1e4fa0', Fabio: '#16a34a', Roberto: '#d97706', Luis: '#7c3aed' };
+  const pagoEl = document.getElementById('com-pago1');
+  if (pagoEl) {
+    let totalPago = 0;
+    let html = ordenPago.map(v => {
+      const n = pago.conteo[v] || 0;
+      totalPago += n;
+      const color = coloresPago[v] || '#1a3a6b';
+      return `<div style="background:#fff;border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow);border-left:4px solid ${color};">
+        <div style="font-size:11px;font-weight:700;color:var(--gris2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">👤 ${v}</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:800;color:${color};">$${n.toFixed(2)}</div>
+        <div style="font-size:12px;color:var(--gris2);margin-top:2px;">${n} reservación(es) × $1</div>
+      </div>`;
+    }).join('');
+    html += `<div style="background:#16a34a;border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow);color:#fff;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;opacity:.9;">💵 TOTAL A PAGAR</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:800;">$${totalPago.toFixed(2)}</div>
+      <div style="font-size:12px;margin-top:2px;opacity:.9;">${totalPago} reservación(es) ingresada(s)</div>
+    </div>`;
+    pagoEl.innerHTML = html;
+  }
+
   // Filter reservations for the selected month that have a vendedor
   const resMes = reservas.filter(r => {
     if (!r.fecha) return false;
@@ -8668,7 +8796,7 @@ function renderNotificaciones() {
         <div style="text-align:right;">
           <div style="font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:900;color:#d42b2b;">$${p.r.costo}</div>
           <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end;">
-            <button onclick="verRes(${idx});toggleNotificaciones()" class="btn btn-gh btn-sm">👁 Ver</button>
+            <button onclick="verRes('${p.r.codigo}');toggleNotificaciones()" class="btn btn-gh btn-sm">👁 Ver</button>
             <button onclick="cobrarPendiente('${p.r.codigo}','${p.fecha}')" class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;border-radius:5px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">💰 Cobrar</button>
           </div>
         </div>
@@ -8705,7 +8833,7 @@ function renderNotificaciones() {
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
             <button onclick="cambiarEstRapido('${r.codigo}','confirmado')" class="btn btn-g btn-sm">✅ Confirmar</button>
-            <button onclick="verRes(${idx});toggleNotificaciones()" class="btn btn-gh btn-sm">👁 Ver</button>
+            <button onclick="verRes('${r.codigo}');toggleNotificaciones()" class="btn btn-gh btn-sm">👁 Ver</button>
           </div>
         </div>
       </div>`;
@@ -8725,6 +8853,8 @@ function cambiarEstRapido(idxOCodigo, est) {
     r = reservas[idxOCodigo];
   }
   if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  // GUARD día cerrado: no cambiar estado de reservas de un día ya cuadrado.
+  if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado. Desbloqueá ese día en Programación para cambiarla.`); return; }
   const _estadoAntes = r.estado;
   if (est !== 'cancelado') _quitarNotaCancelacion(r);
   r.estado = est;
