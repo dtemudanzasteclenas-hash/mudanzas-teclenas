@@ -2356,7 +2356,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-06-13-v83';
+const APP_VERSION = '2026-06-13-v84';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -7946,9 +7946,9 @@ function descargarReporteDia() {
     ${linkPend>0?`<div style="margin-top:2mm;font-size:8pt;color:#6d28d9;font-weight:700;">⏳ LINK pendiente hoy: $${linkPend.toFixed(2)} — cae mañana en CUSCATLAN.</div>`:''}
     ${!hayReal?`<div style="margin-top:2mm;font-size:8pt;color:#d97706;font-style:italic;">No se ha ingresado el CONTEO REAL de este día.</div>`:''}`;
 
-  // ===== Armado del documento =====
-  const html = `
-  <div style="font-family:'Barlow',sans-serif;padding:14mm 12mm;width:216mm;background:#fff;color:#111;">
+  // ===== Armado del documento (ventana de impresión → Guardar como PDF) =====
+  const cuerpo = `
+  <div style="font-family:'Barlow',sans-serif;color:#111;">
     <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5pt solid #1a3a6b;padding-bottom:2mm;margin-bottom:4mm;">
       <div><div style="font-family:'Barlow Condensed',sans-serif;font-size:22pt;font-weight:900;color:#1a3a6b;line-height:1;">MUDANZAS TECLEÑAS</div><div style="font-size:8.5pt;color:#555;margin-top:1mm;">☎ 2229-8822 &nbsp;|&nbsp; 📱 6198-4772</div></div>
       <div style="text-align:right;"><div style="font-family:'Barlow Condensed',sans-serif;font-size:14pt;font-weight:800;color:#d42b2b;text-transform:uppercase;">Reporte del Día</div><div style="font-size:9pt;font-weight:700;text-transform:capitalize;">${esc(fechaLegible)}</div></div>
@@ -7970,21 +7970,23 @@ function descargarReporteDia() {
     ${cuentasHtml}
   </div>`;
 
-  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Esperá unos segundos e intentá de nuevo.'); return; }
-  const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
-  container.innerHTML = html;
-  document.body.appendChild(container);
-  setTimeout(() => {
-    html2pdf().set({
-      margin: 0,
-      filename: 'Reporte_' + f + '.pdf',
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['avoid-all','css'] }
-    }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error al generar el PDF: '+e.message); });
-  }, 300);
+  // Método CONFIABLE (igual que la tarjeta de reservación y la impresión diaria): ventana de
+  // impresión del navegador. El usuario elige "Guardar como PDF". html2pdf/html2canvas salía en
+  // blanco con contenido posicionado fuera de pantalla.
+  const w = window.open('', '_blank');
+  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo. En la ventana que abre, elegí "Guardar como PDF".'); return; }
+  w.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">'
+    + '<title>Reporte del Dia ' + f + '</title>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">'
+    + '<style>*{box-sizing:border-box;margin:0;padding:0;}'
+    + 'body{font-family:\'Barlow\',sans-serif;color:#111;background:#fff;padding:10mm;}'
+    + 'table{border-collapse:collapse;}'
+    + '@media print{@page{size:letter portrait;margin:8mm 10mm;}body{padding:0;}}</style>'
+    + '</head><body>'
+    + cuerpo
+    + '<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},800);<\/script>'
+    + '</body></html>');
+  w.document.close();
 }
 
 // ==================== IMPRIMIR PD ====================
