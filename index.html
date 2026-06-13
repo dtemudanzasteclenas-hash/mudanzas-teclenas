@@ -2356,7 +2356,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-06-09-v81';
+const APP_VERSION = '2026-06-13-v82';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -2730,7 +2730,7 @@ function renderTable(id, data, withTel) {
           <td>${srvBadges(r)}</td>
           <td><span class="est ${r.estado}">${r.estado}</span></td>
           <td>${r.vendedor ? `<span class="vendedor-tag">👤 ${r.vendedor}</span>` : ''}</td>
-          <td><div class="flex gap2"><button class="btn btn-gh btn-sm" onclick="verRes(${idx})">👁 Ver</button><button class="btn btn-r btn-sm" onclick="eliminar('${r.codigo}')">🗑</button></div></td>
+          <td><div class="flex gap2"><button class="btn btn-gh btn-sm" onclick="verRes('${r.codigo}')">👁 Ver</button><button class="btn btn-r btn-sm" onclick="eliminar('${r.codigo}')">🗑</button></div></td>
         </tr>`;
       }).join('');
 }
@@ -3406,6 +3406,9 @@ function renderAgenda() {
           const resDrag = reservas.find(rv => rv.codigo === codigoDrag);
           if (!resDrag) { agDragSource = null; return; }
 
+          // GUARD día cerrado: no reubicar/reactivar en un día ya cuadrado (descuadra el arqueo).
+          if (isDiaCerrado(f)) { alert(`🔒 El día ${fmtFecha(f)} ya está cerrado.\n\nDesbloqueálo en Programación para mover o reactivar reservaciones.`); agDragSource = null; return; }
+
           // Si la reservación está cancelada, confirmar reactivación antes de ubicarla
           if (resDrag.estado === 'cancelado') {
             const nombre = `${resDrag.nombre} ${resDrag.apellido||''}`.trim();
@@ -3545,7 +3548,7 @@ function renderAgenda() {
           else if (r.unidad === 'mediano') { badgeLetra = 'M'; badgeTitle = 'Mediano'; }
           else { badgeLetra = 'P'; badgeTitle = 'Pequeño'; }
           cell.innerHTML = `
-            <div class="tv-cell" onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;">
+            <div class="tv-cell" onclick="verRes('${r.codigo}')" style="cursor:pointer;">
               <div class="tv-badge tv-badge-${r.camionEspecifico ? 'esp' : r.unidad}" title="${badgeTitle}">${badgeLetra}</div>
               <div class="tv-carga">📦 ${cFullTV}</div>
               <div class="tv-descarga">🏠 ${dFullTV}</div>
@@ -3567,7 +3570,7 @@ function renderAgenda() {
           cell.innerHTML = `
             ${estBadge}
             <div style="padding:7px 9px;height:100%;display:flex;flex-direction:column;color:#fff;cursor:grab;box-sizing:border-box;gap:3px;">
-              <div onclick="verRes(${reservas.indexOf(r)})" style="cursor:pointer;flex:1;min-height:0;">
+              <div onclick="verRes('${r.codigo}')" style="cursor:pointer;flex:1;min-height:0;">
                 ${horaCustom}
                 <div style="font-size:10.5px;font-weight:700;line-height:1.35;margin-bottom:3px;">📦 ${cS}</div>
                 <div style="font-size:10.5px;font-weight:700;line-height:1.35;">🏠 ${dS}</div>
@@ -4408,7 +4411,7 @@ function renderCli(qNombre='', qTel='') {
           <span class="est ${r.estado}" style="font-size:10px;">${r.estado}</span>
         </td>
         <td style="padding:10px 14px;text-align:center;">
-          <button onclick="verRes(${reservas.indexOf(r)})" class="btn btn-gh btn-sm">👁 Ver</button>
+          <button onclick="verRes('${r.codigo}')" class="btn btn-gh btn-sm">👁 Ver</button>
         </td>
       </tr>`).join('');
 
@@ -5908,7 +5911,7 @@ function renderPDSinAsignar(f) {
                   : '#27ae60';
     const nombre = `${r.nombre} ${r.apellido||''}`.trim();
     const horaTxt = r.horasOcupadas && r.horasOcupadas.length > 1 ? r.horasOcupadas.join('+') : r.hora;
-    return `<div onclick="verRes(${reservas.indexOf(r)})"
+    return `<div onclick="verRes('${r.codigo}')"
         style="display:inline-flex;align-items:center;gap:6px;background:${colorBg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;margin:3px;"
         title="Clic para ver detalles. Asignalo a un equipo en la pizarra abajo.">
         <span>📦 ${esc(nombre)}</span>
@@ -6194,7 +6197,7 @@ function buildColumna2(col, idx, f) {
             style="border:1px solid #d4d4d4;border-radius:5px;background:#fff;font-size:11px;font-weight:800;color:${mc};font-family:'Barlow',sans-serif;outline:none;cursor:pointer;padding:3px 6px;">
             ${METODOS_PAGO.map(mp=>`<option value="${mp}" ${slot.metodo===mp?'selected':''}>${mp}</option>`).join('')}
           </select>` : ''}
-          ${resIdx >= 0 ? `<button onclick="verRes(${resIdx})" style="background:var(--gris0);border:1px solid var(--gris1);border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;color:var(--azul2);cursor:pointer;">✏️ Editar</button>` : ''}
+          ${resIdx >= 0 ? `<button onclick="verRes('${asignadaR.codigo}')" style="background:var(--gris0);border:1px solid var(--gris1);border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;color:var(--azul2);cursor:pointer;">✏️ Editar</button>` : ''}
         </div>
       </div>` : '';
 
@@ -6307,7 +6310,7 @@ function buildColumna2(col, idx, f) {
       <div style="font-size:10px;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">⭐ Servicios extra (fuera de cuota)</div>
       ${extrasAsignados.map(r => `
         <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:6px 9px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
-          <div style="min-width:0;cursor:pointer;" onclick="verRes(${reservas.indexOf(r)})">
+          <div style="min-width:0;cursor:pointer;" onclick="verRes('${r.codigo}')">
             <div style="font-size:11px;font-weight:700;color:#92400e;">${r.nombre} ${r.apellido||''} · ${r.hora}</div>
             <div style="font-size:10px;color:#6b7280;">📞 ${r.tel} · $${r.costo||'0'} · ${r.codigo}</div>
           </div>
