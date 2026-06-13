@@ -888,7 +888,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 
     <!-- Resumen mensual -->
     <div style="margin-top:18px;text-align:center;">
-      <button onclick="descargarResumenMensual()" style="background:#1e4fa0;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;letter-spacing:.03em;">📊 Descargar Resumen Mensual (PDF)</button>
+      <button onclick="descargarReporteDia()" style="background:#1e4fa0;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;letter-spacing:.03em;">📋 Descargar Reporte del Día (PDF)</button>
     </div>
 
     <!-- Total global cuaderno -->
@@ -2356,7 +2356,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-06-13-v82';
+const APP_VERSION = '2026-06-13-v83';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -7821,6 +7821,169 @@ function descargarResumenMensual() {
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['avoid-all','css'] }
     }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error: '+e.message); });
+  }, 300);
+}
+
+// ==================== REPORTE COMPLETO DEL DÍA (PDF) ====================
+// PDF con TODA la info del día: servicios por equipo (quién + pago), gastos, movimientos
+// entre cuentas, otros ingresos, cobros, y al final abrimos/cerramos con el CONTEO REAL.
+function descargarReporteDia() {
+  const f = getPDFecha();
+  // Refrescar el cerramos para que el reporte muestre números al día (no toca un día cerrado).
+  try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+  const day = getDayData(f);
+  const fechaLegible = new Date(f + 'T12:00:00').toLocaleDateString('es-SV', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  const esc = _pdfEsc;
+  const MC = { EFECTIVO:['#dcfce7','#15803d'], CUSCA:['#dbeafe','#1d4ed8'], LINK:['#ede9fe','#6d28d9'], PENDIENTE:['#fef9c3','#a16207'], CANCELADO:['#fee2e2','#b91c1c'] };
+  const metBadge = (m) => { const c = MC[m]||['#e5e7eb','#111']; return `<span style="font-size:7pt;font-weight:700;padding:0.3mm 1.5mm;border-radius:3px;background:${c[0]};color:${c[1]};">${esc(m||'EFECTIVO')}</span>`; };
+
+  // ===== Sección 1: SERVICIOS POR EQUIPO (quién los hizo + pago) =====
+  let totalServ = 0, totalPers = 0, totalProp = 0;
+  const equiposHtml = (day.columnas||[]).map((col, ci) => {
+    const tipo = (typeof getTipoFromCamion==='function') ? getTipoFromCamion(col.camion) : '';
+    const unidadLabel = tipo==='grande' ? 'GRANDE' : tipo==='mediano' ? 'MEDIANO' : tipo==='pequeño' ? 'PEQUEÑO' : '';
+    const camionNombre = col.camion ? esc(col.camion.split('·')[0].trim()) : '—';
+    const miembros = [...(col.miembros||[])].sort((a,b)=> (MOTORISTAS.has(a.nombre)?0:1) - (MOTORISTAS.has(b.nombre)?0:1));
+    let pagoEq = 0;
+    const crewHtml = miembros.map(m => {
+      const esM = MOTORISTAS.has(m.nombre); const pago = parseFloat(m.pago)||0; pagoEq += pago;
+      return `<div style="display:flex;justify-content:space-between;font-size:8.5pt;line-height:1.5;${esM?'font-weight:700;':''}"><span>${esM?'<span style="color:#1a3a6b;font-weight:800;">(M) </span>':''}${esc(m.nombre)}${m.eventual?' <span style="font-size:7pt;color:#a16207;font-weight:700;">EVENTUAL</span>':''}</span><span style="font-weight:700;color:${pago>0?'#d97706':'#999'};">$${pago.toFixed(2)}</span></div>`;
+    }).join('') || '<div style="font-size:8pt;color:#888;font-style:italic;">Sin personal asignado</div>';
+    const props = (col.propinas||[]).map(p=>parseFloat(p)||0).filter(p=>p>0);
+    const propEq = props.reduce((s,p)=>s+p,0);
+    const propHtml = propEq>0 ? `<div style="font-size:8pt;margin-top:1mm;color:#a16207;font-weight:700;">Propinas: ${props.map(p=>'$'+p.toFixed(2)).join(' + ')} = $${propEq.toFixed(2)}</div>` : '';
+    let servEq = 0, pos = 0; const vistos = new Set();
+    const slotsHtml = [...HORARIOS,'otra'].map(h => {
+      const slot = col.slots ? col.slots[h] : null; const codigo = slot && slot.reservaCodigo;
+      if (!codigo || vistos.has(codigo)) return ''; vistos.add(codigo);
+      const r = reservas.find(rv=>rv.codigo===codigo); if (!r) return '';
+      pos++; const cSlot = parseFloat(slot.costo)||0; const costo = cSlot>0 ? cSlot : (parseFloat(r.costo)||0); servEq += costo;
+      const horaLabel = (h==='otra') ? (r.hora||'—') : h;
+      return `<div style="border-bottom:0.4pt dotted #aaa;padding:1.2mm 0;">
+        <div style="display:flex;align-items:center;gap:1.5mm;margin-bottom:0.5mm;"><span style="background:#1a3a6b;color:#fff;font-size:7.5pt;font-weight:800;padding:0 1.5mm;border-radius:2px;">#${pos}</span><span style="font-weight:800;font-size:9pt;">${esc(horaLabel)}</span><span style="margin-left:auto;font-weight:800;font-size:9pt;">$${costo.toFixed(2)}</span></div>
+        <div style="font-size:8.5pt;font-weight:700;line-height:1.4;"><span style="color:#16a34a;">▲</span> ${esc(r.carga)}</div>
+        <div style="font-size:8.5pt;font-weight:700;line-height:1.4;"><span style="color:#d42b2b;">▼</span> ${esc(r.descarga)}</div>
+        <div style="font-size:7.5pt;color:#444;margin-top:0.5mm;">${esc(r.nombre)} ${esc(r.apellido)} &nbsp;|&nbsp; ${esc(r.tel)}</div>
+        <div style="margin-top:0.5mm;display:flex;gap:1.5mm;align-items:center;">${metBadge(slot.metodo)}<span style="font-size:7pt;color:#666;text-transform:uppercase;">${esc(r.estado||'')}</span></div>
+        ${r.obs?`<div style="font-size:7.5pt;font-style:italic;border-left:2px solid #1a3a6b;padding-left:1.5mm;margin-top:0.5mm;">${esc(r.obs)}</div>`:''}
+      </div>`;
+    }).join('') || '<div style="font-size:8pt;color:#888;font-style:italic;padding:1mm 0;">Sin servicios asignados</div>';
+    totalServ += servEq; totalPers += pagoEq; totalProp += propEq;
+    return `<div style="border:1.2pt solid #1a3a6b;border-radius:5px;page-break-inside:avoid;overflow:hidden;margin-bottom:4mm;">
+      <div style="background:#1a3a6b;color:#fff;padding:1.5mm 3mm;display:flex;align-items:center;gap:2mm;"><span style="font-family:'Barlow Condensed',sans-serif;font-size:13pt;font-weight:900;flex:1;text-transform:uppercase;">${esc(col.nombre||('Equipo '+(ci+1)))}</span><span style="font-size:7pt;opacity:.85;">${unidadLabel}${camionNombre!=='—'?' · '+camionNombre:''}</span></div>
+      <div style="background:#f0f4fa;padding:1.5mm 3mm;border-bottom:1pt solid #1a3a6b;">${crewHtml}${propHtml}</div>
+      <div style="padding:1.5mm 3mm;">${slotsHtml}</div>
+      <div style="display:flex;justify-content:space-between;padding:1.5mm 3mm;background:#f8fafc;border-top:1pt solid #1a3a6b;font-size:8.5pt;font-weight:800;"><span>Servicios: <span style="color:#16a34a;">$${servEq.toFixed(2)}</span></span><span>Pago personal: <span style="color:#d97706;">$${pagoEq.toFixed(2)}</span></span></div>
+    </div>`;
+  }).join('') || '<div style="font-size:8.5pt;color:#888;font-style:italic;">No hay equipos creados para este día.</div>';
+
+  // ===== Sección 2: GASTOS =====
+  const totalGastos = (day.gastos||[]).reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
+  const gastosRows = (day.gastos||[]).map(g=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#d42b2b;width:22mm;">$${(parseFloat(g.monto)||0).toFixed(2)}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(g.titulo||'')}${g.desc?' — '+esc(g.desc):''}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(g.fondo||'')}</td></tr>`).join('');
+  const persRow = totalPers>0 ? `<tr style="background:#fffbeb;"><td style="padding:1.2mm 3mm;text-align:right;font-weight:700;color:#d97706;">$${totalPers.toFixed(2)}</td><td style="padding:1.2mm 3mm;">Pago a personal</td><td style="padding:1.2mm 3mm;font-size:7.5pt;color:#555;">CAJA CHICA</td></tr>` : '';
+  const propRow = totalProp>0 ? `<tr style="background:#fffbeb;"><td style="padding:1.2mm 3mm;text-align:right;font-weight:700;color:#d97706;">$${totalProp.toFixed(2)}</td><td style="padding:1.2mm 3mm;">Propinas</td><td style="padding:1.2mm 3mm;font-size:7.5pt;color:#555;">CAJA CHICA</td></tr>` : '';
+  const totalGastosFull = totalGastos + totalPers + totalProp;
+  const gastosHtml = (day.gastos||[]).length || totalPers>0 || totalProp>0 ? `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#d42b2b;border-bottom:2px solid #d42b2b;padding-bottom:1mm;margin:5mm 0 2mm;">GASTOS DEL DÍA</div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
+      <thead><tr style="background:#fef2f2;"><th style="padding:1.5mm 3mm;text-align:right;">Monto</th><th style="padding:1.5mm 3mm;text-align:left;">Descripción</th><th style="padding:1.5mm 3mm;text-align:left;">Fondo</th></tr></thead>
+      <tbody>${gastosRows}${persRow}${propRow}</tbody>
+      <tfoot><tr style="background:#1a3a6b;color:#fff;"><td style="padding:1.5mm 3mm;text-align:right;font-weight:900;">$${totalGastosFull.toFixed(2)}</td><td style="padding:1.5mm 3mm;font-weight:800;" colspan="2">TOTAL GASTOS (incluye personal y propinas)</td></tr></tfoot>
+    </table>` : '';
+
+  // ===== Sección 3: MOVIMIENTOS ENTRE CUENTAS / OTROS INGRESOS / COBROS =====
+  const movs = day.movimientos||[];
+  const movHtml = movs.length ? `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#1a3a6b;border-bottom:2px solid #1a3a6b;padding-bottom:1mm;margin:5mm 0 2mm;">MOVIMIENTOS ENTRE CUENTAS</div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
+      <thead><tr style="background:#f0f4fa;"><th style="padding:1.5mm 3mm;text-align:left;">De</th><th style="padding:1.5mm 3mm;text-align:left;">A</th><th style="padding:1.5mm 3mm;text-align:left;">Detalle</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th></tr></thead>
+      <tbody>${movs.map(m=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(m.origen||'—')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(m.destino||'—')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(m.desc||m.titulo||'')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;">$${(parseFloat(m.monto)||0).toFixed(2)}</td></tr>`).join('')}</tbody>
+    </table>` : '';
+  const otros = day.otrosIngresos||[];
+  const totalOtros = otros.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
+  const otrosHtml = otros.length ? `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#16a34a;border-bottom:2px solid #16a34a;padding-bottom:1mm;margin:5mm 0 2mm;">OTROS INGRESOS</div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
+      <thead><tr style="background:#f0fdf4;"><th style="padding:1.5mm 3mm;text-align:left;">Concepto</th><th style="padding:1.5mm 3mm;text-align:left;">Cuenta</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th></tr></thead>
+      <tbody>${otros.map(g=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(g.titulo||'')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(g.destino||'')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#16a34a;">$${(parseFloat(g.monto)||0).toFixed(2)}</td></tr>`).join('')}<tr style="background:#f0fdf4;"><td style="padding:1.2mm 3mm;font-weight:800;" colspan="2">TOTAL OTROS INGRESOS</td><td style="padding:1.2mm 3mm;text-align:right;font-weight:900;color:#16a34a;">$${totalOtros.toFixed(2)}</td></tr></tbody>
+    </table>` : '';
+  const cobros = day.cobrosPendientes||[];
+  const totalCobros = cobros.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
+  const cobrosHtml = cobros.length ? `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#16a34a;border-bottom:2px solid #16a34a;padding-bottom:1mm;margin:5mm 0 2mm;">COBROS RECIBIDOS HOY (pagos pendientes)</div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
+      <thead><tr style="background:#f0fdf4;"><th style="padding:1.5mm 3mm;text-align:left;">Cliente / Código</th><th style="padding:1.5mm 3mm;text-align:left;">Método</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th></tr></thead>
+      <tbody>${cobros.map(c=>{const r=reservas.find(rv=>rv.codigo===c.codigo);const cli=r?`${esc(r.nombre)} ${esc(r.apellido||'')}`:esc(c.codigo||'—');return `<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${cli}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(c.metodo||'')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#16a34a;">$${(parseFloat(c.monto)||0).toFixed(2)}</td></tr>`;}).join('')}<tr style="background:#f0fdf4;"><td style="padding:1.2mm 3mm;font-weight:800;" colspan="2">TOTAL COBRADO</td><td style="padding:1.2mm 3mm;text-align:right;font-weight:900;color:#16a34a;">$${totalCobros.toFixed(2)}</td></tr></tbody>
+    </table>` : '';
+
+  // ===== Sección 4 (AL FINAL): CUENTAS — abrimos / cerramos / CONTEO REAL / descuadre =====
+  const cu = day.cuentas||{abrimos:{},cerramos:{},arqueo:{}};
+  const ab=cu.abrimos||{}, ce=cu.cerramos||{}, ar=cu.arqueo||{};
+  let tAb=0,tCe=0,tReal=0,tDesc=0, hayReal=false;
+  const cuentasRows = CUENTAS.map(c=>{
+    const vAb=parseFloat(ab[c])||0, vCe=parseFloat(ce[c])||0;
+    const tieneReal = ar[c]!==undefined && String(ar[c]).trim()!=='';
+    const vReal = tieneReal ? (parseFloat(ar[c])||0) : null;
+    if (tieneReal) hayReal=true;
+    const desc = tieneReal ? (vReal - vCe) : null;
+    tAb+=vAb; tCe+=vCe; if(tieneReal){tReal+=vReal; tDesc+=desc;}
+    return `<tr>
+      <td style="padding:1.5mm 3mm;border-bottom:1px solid #e0e0e0;font-weight:700;">${esc(c)}</td>
+      <td style="padding:1.5mm 3mm;border-bottom:1px solid #e0e0e0;text-align:right;">$${vAb.toFixed(2)}</td>
+      <td style="padding:1.5mm 3mm;border-bottom:1px solid #e0e0e0;text-align:right;">$${vCe.toFixed(2)}</td>
+      <td style="padding:1.5mm 3mm;border-bottom:1px solid #e0e0e0;text-align:right;font-weight:800;color:#1a3a6b;">${tieneReal?'$'+vReal.toFixed(2):'—'}</td>
+      <td style="padding:1.5mm 3mm;border-bottom:1px solid #e0e0e0;text-align:right;font-weight:700;color:${desc===null?'#999':(Math.abs(desc)<0.01?'#16a34a':'#d42b2b')};">${desc===null?'—':((desc>0?'+':'')+'$'+desc.toFixed(2))}</td>
+    </tr>`;
+  }).join('');
+  const linkPend = parseFloat(cu._linkPendiente)||0;
+  const cuentasHtml = `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:12pt;font-weight:900;color:#1a3a6b;border-bottom:2.5px solid #1a3a6b;padding-bottom:1mm;margin:6mm 0 2mm;">CIERRE DE CUENTAS — ${esc(fechaLegible)} ${cu.diaCerrado?'<span style="font-size:8pt;color:#16a34a;">(DÍA CERRADO)</span>':'<span style="font-size:8pt;color:#d97706;">(día abierto)</span>'}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:9pt;">
+      <thead><tr style="background:#1a3a6b;color:#fff;"><th style="padding:2mm 3mm;text-align:left;">Cuenta</th><th style="padding:2mm 3mm;text-align:right;">Abrimos</th><th style="padding:2mm 3mm;text-align:right;">Cerramos (auto)</th><th style="padding:2mm 3mm;text-align:right;">Conteo real</th><th style="padding:2mm 3mm;text-align:right;">Descuadre</th></tr></thead>
+      <tbody>${cuentasRows}</tbody>
+      <tfoot><tr style="background:#f0f4fa;font-weight:900;"><td style="padding:2mm 3mm;">TOTAL</td><td style="padding:2mm 3mm;text-align:right;">$${tAb.toFixed(2)}</td><td style="padding:2mm 3mm;text-align:right;">$${tCe.toFixed(2)}</td><td style="padding:2mm 3mm;text-align:right;color:#1a3a6b;">${hayReal?'$'+tReal.toFixed(2):'—'}</td><td style="padding:2mm 3mm;text-align:right;color:${!hayReal?'#999':(Math.abs(tDesc)<0.01?'#16a34a':'#d42b2b')};">${hayReal?((tDesc>0?'+':'')+'$'+tDesc.toFixed(2)):'—'}</td></tr></tfoot>
+    </table>
+    ${linkPend>0?`<div style="margin-top:2mm;font-size:8pt;color:#6d28d9;font-weight:700;">⏳ LINK pendiente hoy: $${linkPend.toFixed(2)} — cae mañana en CUSCATLAN.</div>`:''}
+    ${!hayReal?`<div style="margin-top:2mm;font-size:8pt;color:#d97706;font-style:italic;">No se ha ingresado el CONTEO REAL de este día.</div>`:''}`;
+
+  // ===== Armado del documento =====
+  const html = `
+  <div style="font-family:'Barlow',sans-serif;padding:14mm 12mm;width:216mm;background:#fff;color:#111;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5pt solid #1a3a6b;padding-bottom:2mm;margin-bottom:4mm;">
+      <div><div style="font-family:'Barlow Condensed',sans-serif;font-size:22pt;font-weight:900;color:#1a3a6b;line-height:1;">MUDANZAS TECLEÑAS</div><div style="font-size:8.5pt;color:#555;margin-top:1mm;">☎ 2229-8822 &nbsp;|&nbsp; 📱 6198-4772</div></div>
+      <div style="text-align:right;"><div style="font-family:'Barlow Condensed',sans-serif;font-size:14pt;font-weight:800;color:#d42b2b;text-transform:uppercase;">Reporte del Día</div><div style="font-size:9pt;font-weight:700;text-transform:capitalize;">${esc(fechaLegible)}</div></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;margin-bottom:4mm;">
+      <tr style="background:#f0f4fa;font-weight:800;text-align:center;">
+        <td style="padding:2mm;border:1px solid #d0d8e8;">Servicios<br><span style="font-size:11pt;color:#16a34a;">$${totalServ.toFixed(2)}</span></td>
+        <td style="padding:2mm;border:1px solid #d0d8e8;">Personal<br><span style="font-size:11pt;color:#d97706;">$${totalPers.toFixed(2)}</span></td>
+        <td style="padding:2mm;border:1px solid #d0d8e8;">Propinas<br><span style="font-size:11pt;color:#d97706;">$${totalProp.toFixed(2)}</span></td>
+        <td style="padding:2mm;border:1px solid #d0d8e8;">Gastos<br><span style="font-size:11pt;color:#d42b2b;">$${totalGastos.toFixed(2)}</span></td>
+      </tr>
+    </table>
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:12pt;font-weight:900;color:#1a3a6b;border-bottom:2.5px solid #1a3a6b;padding-bottom:1mm;margin-bottom:3mm;">SERVICIOS Y EQUIPOS DEL DÍA</div>
+    ${equiposHtml}
+    ${gastosHtml}
+    ${movHtml}
+    ${otrosHtml}
+    ${cobrosHtml}
+    ${cuentasHtml}
+  </div>`;
+
+  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado. Esperá unos segundos e intentá de nuevo.'); return; }
+  const container = document.createElement('div');
+  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
+  container.innerHTML = html;
+  document.body.appendChild(container);
+  setTimeout(() => {
+    html2pdf().set({
+      margin: 0,
+      filename: 'Reporte_' + f + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['avoid-all','css'] }
+    }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error al generar el PDF: '+e.message); });
   }, 300);
 }
 
