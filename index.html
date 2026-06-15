@@ -352,6 +352,14 @@ body.tv-mode .tv-pz-ext{background:#422006;border-left-color:#f59e0b;}
 body.tv-mode .tv-pz-ext-lbl{font-size:11px;font-weight:800;color:#fbbf24;}
 body.tv-mode .tv-pz-hora{font-size:11px;font-weight:900;color:#94a3b8;letter-spacing:.8px;text-transform:uppercase;}
 body.tv-mode .tv-pz-cont{color:#fcd34d;font-size:9px;}
+/* Etiqueta de tamaño del servicio (grande/mediano/pequeño) */
+body.tv-mode .tv-pz-unidad{
+  display:inline-block;font-size:10px;font-weight:900;line-height:1;
+  padding:2px 7px;border-radius:5px;letter-spacing:.5px;color:#fff;margin-left:6px;vertical-align:middle;
+}
+body.tv-mode .tv-pz-unidad.u-grande{background:#dc2626;}
+body.tv-mode .tv-pz-unidad.u-mediano{background:#f97316;}
+body.tv-mode .tv-pz-unidad.u-pequeno{background:#16a34a;}
 body.tv-mode .tv-pz-carga,
 body.tv-mode .tv-pz-descarga{
   font-size:12px;font-weight:700;line-height:1.2;color:#fff;
@@ -2356,7 +2364,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-06-13-v84';
+const APP_VERSION = '2026-06-15-v85';
 (function checkAppVersion() {
   try {
     const stored = localStorage.getItem('mt_app_version');
@@ -6003,8 +6011,10 @@ function buildColumnaTV(col, idx, f) {
     const isSecondary = r.horasOcupadas && r.horasOcupadas.length > 1 && r.horasOcupadas[0] !== h;
     const costoVal = parseFloat(r.costo) || 0;
     const customHora = r.hora && !HORARIOS.includes(r.hora) && mapHoraToRow(r.hora) === h ? r.hora : null;
+    const uLbl = r.unidad === 'mediano' ? 'MEDIANO' : r.unidad === 'grande' ? 'GRANDE' : 'PEQUEÑO';
+    const uCls = r.unidad === 'mediano' ? 'u-mediano' : r.unidad === 'grande' ? 'u-grande' : 'u-pequeno';
     return `<div class="tv-pz-slot">
-      <div class="tv-pz-hora">${customHora ? esc(customHora) : h}${isSecondary ? ' <span class="tv-pz-cont">⏰ CONT.</span>' : ''}</div>
+      <div class="tv-pz-hora">${customHora ? esc(customHora) : h}${isSecondary ? ' <span class="tv-pz-cont">⏰ CONT.</span>' : ''}<span class="tv-pz-unidad ${uCls}">${uLbl}</span></div>
       <div class="tv-pz-carga">📦 ${esc(r.carga)}</div>
       <div class="tv-pz-descarga">🏠 ${esc(r.descarga)}</div>
       <div class="tv-pz-meta">
@@ -6170,6 +6180,10 @@ function buildColumna2(col, idx, f) {
     const isSecondaryHora = asignadaR && _preciosMostradosEnCol.has(asignadaR.codigo);
     if (asignadaR && !isSecondaryHora) _preciosMostradosEnCol.add(asignadaR.codigo);
     const resIdx = asignadaR ? reservas.indexOf(asignadaR) : -1;
+    // Etiqueta de tamaño del servicio (grande/mediano/pequeño)
+    const uLbl = asignadaR ? (asignadaR.unidad === 'mediano' ? 'MEDIANO' : asignadaR.unidad === 'grande' ? 'GRANDE' : 'PEQUEÑO') : '';
+    const uBg = asignadaR ? (asignadaR.unidad === 'mediano' ? '#f97316' : asignadaR.unidad === 'grande' ? '#dc2626' : '#16a34a') : '';
+    const uTag = asignadaR ? `<span style="display:inline-block;background:${uBg};color:#fff;font-size:9px;font-weight:900;border-radius:5px;padding:2px 7px;letter-spacing:.4px;">${uLbl}</span>` : '';
     // Show custom hora label for non-standard times
     const customHoraLabel = asignadaR && !HORARIOS.includes(asignadaR.hora) ? asignadaR.hora : '';
 
@@ -6185,6 +6199,7 @@ function buildColumna2(col, idx, f) {
         </div>
         <div style="font-size:10px;font-weight:800;color:${isSecondaryHora ? '#1e4fa0' : '#16a34a'};">${isSecondaryHora ? '⏰ CONTINÚA' : '✅ ASIGNADO'} · ${asignadaR.codigo}${asignadaR.vendedor ? ` <span style="color:#1e4fa0;font-weight:600;">· 👤 ${asignadaR.vendedor}</span>` : ''}</div>
         <div style="font-size:12px;font-weight:700;color:#1a2236;margin-top:2px;">${asignadaR.nombre} ${asignadaR.apellido} <span style="font-size:11px;font-weight:600;color:#6b7280;">· 📞 ${asignadaR.tel}</span></div>
+        <div style="margin-top:4px;">${uTag}</div>
         <div style="font-size:11px;color:#6b7280;margin-top:3px;">📦 ${asignadaR.carga}</div>
         <div style="font-size:11px;color:#6b7280;">🏠 ${asignadaR.descarga}</div>
         ${!isSecondaryHora ? `<div style="font-size:12px;font-weight:800;color:#16a34a;margin-top:4px;">$${asignadaR.costo}</div>` : `<div style="font-size:10px;color:#1e4fa0;font-weight:600;margin-top:4px;">Precio en horario principal</div>`}
@@ -6249,6 +6264,7 @@ function buildColumna2(col, idx, f) {
           </div>
           ${asignadaR ? `
           <div style="margin-top:5px;">
+            <div style="margin-bottom:3px;">${uTag}</div>
             <div style="font-size:12px;font-weight:700;color:#1a2236;line-height:1.25;word-break:break-word;">${asignadaR.nombre} ${asignadaR.apellido||''}</div>
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:900;color:#1e4fa0;letter-spacing:.03em;line-height:1.2;margin-top:2px;word-break:break-word;">📞 ${asignadaR.tel}</div>
             <div style="font-size:11px;color:#6b7280;margin-top:3px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;">📦 ${asignadaR.carga}</div>
