@@ -1451,6 +1451,26 @@ function safeSetLS(key, value) {
 // Se usa para (a) reintentar si falla la subida y (b) FLUSH al cerrar la pestaña
 // (keepalive) para que un gasto/edición recién hecho NO se pierda al cerrar.
 const _pendingAppData = new Set();
+// FIX S4 (2026-07-02): PERSISTIR qué keys tienen cambios sin subir. Los DATOS ya viven en
+// localStorage (mt_pd3, etc.); lo que se perdía al cerrar/recargar era el "recordatorio" de
+// que faltaba subirlos. Con esto, al reabrir o volver el internet se reintenta la subida.
+function _persistPendingKeys() {
+  try { safeSetLS('mt_pending_appdata', JSON.stringify([..._pendingAppData])); } catch(e) {}
+}
+function _hayAppDataPendiente() {
+  try { const p = JSON.parse(localStorage.getItem('mt_pending_appdata')||'[]'); return Array.isArray(p) && p.length > 0; } catch(e) { return false; }
+}
+// Re-subir lo pendiente. Se llama DESPUÉS de un merge desde la nube (el merge protector ya
+// conservó los ítems locales no subidos) y al recuperar la conexión.
+function _reintentarAppDataPendiente(origen) {
+  try {
+    const keys = JSON.parse(localStorage.getItem('mt_pending_appdata')||'[]');
+    if (!Array.isArray(keys) || !keys.length || !sb) return;
+    console.log('🔁 Re-subiendo app_data pendiente (' + origen + '):', keys.join(', '));
+    keys.forEach(k => { const d = _appDataActual(k); if (d != null) syncToSupabase(k, d); });
+  } catch(e) {}
+}
+window.addEventListener('online', () => setTimeout(() => _reintentarAppDataPendiente('online'), 3000));
 // Mapa key → objeto en memoria con el estado más reciente (para el flush de salida).
 function _appDataActual(key) {
   if (key === 'mt_pd3')   return typeof pdData   !== 'undefined' ? pdData   : null;
@@ -1463,6 +1483,7 @@ function _appDataActual(key) {
 function syncToSupabase(key, data, _intento) {
   if (!sb) return;
   _pendingAppData.add(key);
+  _persistPendingKeys(); // FIX S4 (2026-07-02): sobrevive a cierre/recarga
   clearTimeout(_syncTimers[key]);
   // Debounce reducido de 1500ms a 400ms para propagar cambios casi inmediatamente
   // Razón: 1.5s dejaba ventana donde el usuario podía cerrar la pestaña y perder el save
@@ -1480,6 +1501,7 @@ function syncToSupabase(key, data, _intento) {
       } else {
         _lastSyncTimestamps[key] = now;
         _pendingAppData.delete(key);
+        _persistPendingKeys(); // FIX S4
         if (typeof notifySave === 'function') notifySave(key, true);
       }
     } catch(e) {
@@ -1526,9 +1548,19 @@ async function flushSyncToSupabase(key, data) {
   const now = new Date().toISOString();
   try {
     const { error } = await sb.from('app_data').upsert({ id: key, data: data, updated_at: now });
-    if (error) console.warn('Flush sync error ('+key+'):', error.message);
-    else { _lastSyncTimestamps[key] = now; _pendingAppData.delete(key); }
-  } catch(e) { console.warn('Flush sync exception:', e.message); }
+    // FIX S4 (2026-07-02): antes un flush fallido solo hacía console.warn — la operación
+    // crítica (cancelar, cambio de fecha, cobro) quedaba sin subir, sin aviso y sin reintento.
+    if (error) {
+      console.warn('Flush sync error ('+key+'):', error.message);
+      _pendingAppData.add(key); _persistPendingKeys();
+      if (typeof notifySave === 'function') notifySave(key, false, error.message);
+    }
+    else { _lastSyncTimestamps[key] = now; _pendingAppData.delete(key); _persistPendingKeys(); }
+  } catch(e) {
+    console.warn('Flush sync exception:', e.message);
+    _pendingAppData.add(key); _persistPendingKeys();
+    if (typeof notifySave === 'function') notifySave(key, false, e.message);
+  }
 }
 
 async function loadFromSupabase(key) {
@@ -1549,7 +1581,11 @@ function _contarItemsFinancieros(day) {
   const g  = (day.gastos||[]).filter(x => (x.titulo||'').trim() || parseFloat(x.monto)>0).length;
   const oi = (day.otrosIngresos||[]).filter(x => (x.titulo||'').trim() || parseFloat(x.monto)>0).length;
   const mv = (day.movimientos||[]).filter(x => parseFloat(x.monto)>0).length;
-  return g + oi + mv;
+  // FIX F3 (2026-07-02): contar también los COBROS registrados. Antes un día local viejo con un
+  // gasto sin subir podía pisar en la nube un cobro registrado desde otra computadora — el cobro
+  // desaparecía de notificaciones y ese dinero no entraba a ninguna cuenta (pérdida silenciosa).
+  const cb = (day.cobrosPendientes||[]).filter(x => parseFloat(x.monto)>0).length;
+  return g + oi + mv + cb;
 }
 // Merge que NUNCA pierde datos del cuaderno: base = nube, pero si una fecha LOCAL tiene más
 // items financieros que la nube (gastos no subidos aún), conserva el local. También conserva
@@ -1622,6 +1658,13 @@ async function syncAllFromSupabase(silent, hardReplace=false) {
 
     if (!silent) console.log('✅ Datos sincronizados desde Supabase' + (hardReplace ? ' (hard replace)' : ''));
     updateSyncIndicator();
+    // FIX S4 (2026-07-02): si quedaron cambios sin subir de una sesión anterior (cierre con
+    // el internet caído, etc.), re-subirlos AHORA — después del merge, que ya conservó los
+    // ítems locales no subidos. Una sola vez por sesión.
+    if (!window._pendReuploadHecho && _hayAppDataPendiente()) {
+      window._pendReuploadHecho = true;
+      setTimeout(() => _reintentarAppDataPendiente('post-merge'), 1500);
+    }
     return true;
   } catch(e) { console.warn('syncAllFromSupabase error:', e.message); return false; }
   finally { _syncInProgress = false; }
@@ -1999,6 +2042,11 @@ function startRealtimeSync() {
     // Canal: app_data (agGrid / pizarra / conciliación)
     const ch1 = sb.channel('app_data_changes_' + Date.now())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, (payload) => {
+        // FIX Q1 (2026-07-02): ignorar registros de mantenimiento (el polling YA los ignora).
+        // Sin esto, cada respaldo diario (mt_backup, ~0.5MB × 4 compus) y cada publicación de
+        // versión disparaban un full-sync + re-render total en TODAS las computadoras.
+        const rtId = payload.new?.id || payload.old?.id;
+        if (rtId === 'mt_backup' || rtId === 'mt_app_version') { console.log('📡 app_data (mantenimiento, ignorado):', rtId); return; }
         console.log('📡 Cambio detectado en app_data:', payload.new?.id);
         scheduleFullSyncAndRender(500);
       })
@@ -2439,7 +2487,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-06-29-v91';
+const APP_VERSION = '2026-07-02-v92';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -2448,9 +2496,18 @@ function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/<
   try {
     const stored = localStorage.getItem('mt_app_version');
     if (stored !== APP_VERSION) {
-      console.log('🔄 Versión nueva detectada. Limpiando caché local de datos...');
-      // Limpiar solo datos de sync (no PIN, no comentarios)
-      ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc'].forEach(k => localStorage.removeItem(k));
+      // FIX S4 (2026-07-02): si hay cambios locales SIN SUBIR (cierre con internet caído +
+      // deploy nuevo), NO borrar el caché — eso los perdía para siempre. Se conservan y el
+      // arranque los re-sube (_reintentarAppDataPendiente) tras el merge.
+      let hayPend = false;
+      try { const p = JSON.parse(localStorage.getItem('mt_pending_appdata')||'[]'); hayPend = Array.isArray(p) && p.length > 0; } catch(e) {}
+      if (hayPend) {
+        console.warn('🔄 Versión nueva, pero hay cambios locales sin subir — NO se limpia el caché.');
+      } else {
+        console.log('🔄 Versión nueva detectada. Limpiando caché local de datos...');
+        // Limpiar solo datos de sync (no PIN, no comentarios)
+        ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc'].forEach(k => localStorage.removeItem(k));
+      }
       localStorage.setItem('mt_app_version', APP_VERSION);
     }
   } catch(e) {}
@@ -2892,39 +2949,7 @@ function renderStats() {
 }
 
 // ==================== AGENDA ====================
-function expandAgCard(id) {
-  const card = document.getElementById(id);
-  const btn  = document.getElementById('btn-'+id);
-  if (!card) return;
-  const isExpanded = card.dataset.expanded === '1';
-  if (isExpanded) {
-    card.style.height = '110px';
-    card.dataset.expanded = '0';
-    if (btn) btn.textContent = 'Ver más ▼';
-    // Show short, hide full
-    card.querySelectorAll('[class*="ag-carga-"]').forEach(el => {
-      if (el.className.includes('full')) el.style.display='none';
-      else el.style.display='block';
-    });
-    card.querySelectorAll('[class*="ag-desc-"]').forEach(el => {
-      if (el.className.includes('full')) el.style.display='none';
-      else el.style.display='block';
-    });
-  } else {
-    card.style.height = 'auto';
-    card.dataset.expanded = '1';
-    if (btn) btn.textContent = 'Ver menos ▲';
-    // Show full, hide short
-    card.querySelectorAll('[class*="ag-carga-"]').forEach(el => {
-      if (el.className.includes('full')) el.style.display='block';
-      else el.style.display='none';
-    });
-    card.querySelectorAll('[class*="ag-desc-"]').forEach(el => {
-      if (el.className.includes('full')) el.style.display='block';
-      else el.style.display='none';
-    });
-  }
-}
+// CODIGO MUERTO ELIMINADO (2026-07-02): funcion sin ningun caller (expandAgCard).
 
 function agHoy() { document.getElementById('ag-fecha').valueAsDate = new Date(); renderAgenda(); }
 
@@ -3248,6 +3273,9 @@ function _logAudit(codigo, tipo, detalle) {
   try {
     if (!auditData[codigo]) auditData[codigo] = [];
     auditData[codigo].push({ tipo: tipo, por: _quienSoy(), en: new Date().toISOString(), detalle: detalle || '' });
+    // FIX Q6 (2026-07-02): tope de 50 eventos por código (se conservan los más recientes).
+    // Sin tope, la bitácora crecía para siempre y viajaba COMPLETA a la nube en cada evento.
+    if (auditData[codigo].length > 50) auditData[codigo] = auditData[codigo].slice(-50);
     if (typeof safeSetLS === 'function') safeSetLS('mt_audit', JSON.stringify(auditData));
     if (typeof syncToSupabase === 'function') syncToSupabase('mt_audit', auditData);
   } catch(e) { console.warn('logAudit error:', e); }
@@ -3264,7 +3292,8 @@ function _mergeAudit(local, nube) {
       if (!seen.has(k)) { seen.add(k); out.push(ev); }
     });
     out.sort((a,b) => (a.en||'').localeCompare(b.en||''));
-    res[c] = out;
+    // FIX Q6 (2026-07-02): mismo tope de 50 eventos por código también al mergear.
+    res[c] = out.length > 50 ? out.slice(-50) : out;
   });
   return res;
 }
@@ -3823,18 +3852,7 @@ function agSinUbicarDragStart(e, codigo) {
 
 // Handler táctil para móviles: como drag HTML5 no funciona bien en touch,
 // permitimos al usuario tocar un chip y luego tocar una celda vacía (simulado long-press)
-function agSinUbicarTouchStart(codigo) {
-  const r = reservas.find(rv => rv.codigo === codigo);
-  if (!r) return;
-  const nombre = (r.nombre + ' ' + (r.apellido||'')).trim();
-  agDragSource = { fromSinUbicar: true, codigo };
-  // Feedback visual: pedir al usuario que toque la celda destino
-  try {
-    if (typeof showSaveToast === 'function') {
-      showSaveToast('📱 Ahora tocá una celda vacía para ubicar "' + nombre + '"', 'warn');
-    }
-  } catch(e) {}
-}
+// CODIGO MUERTO ELIMINADO (2026-07-02): funcion sin ningun caller (agSinUbicarTouchStart).
 
 // ==================== EXPORTAR / IMPORTAR RESERVACIONES ====================
 // ==================== HERRAMIENTAS DE RECUPERACIÓN POST-MIGRACIÓN (v58+) ====================
@@ -4810,10 +4828,11 @@ function _buscarClienteReal() {
     const srvCount = reservas.filter(r => r.tel && r.tel.replace(/[-\s]/g, '') === found.tel.replace(/[-\s]/g, '')).length;
     const coms = getClienteComentarios(found.tel);
     const alerta = tieneAlerta(found.tel);
-    let html = `✅ Cliente existente: ${found.nombre} ${found.apellido} — ${found.tel} (${srvCount} servicio(s))`;
+    // FIX X3 (2026-07-02): escapar datos de cliente antes de innerHTML (único sink sin escHtml — XSS almacenado).
+    let html = `✅ Cliente existente: ${escHtml(found.nombre)} ${escHtml(found.apellido)} — ${escHtml(found.tel)} (${srvCount} servicio(s))`;
     if (alerta) {
       const alertComs = coms.filter(c => c.tag === '⚠️ Precaución' || c.tag === '🚫 No volver');
-      html += `<br><span style="color:#991b1b;font-weight:800;">🚨 ALERTA: ${alertComs.map(c=>c.tag+' — '+c.texto).join(' | ')}</span>`;
+      html += `<br><span style="color:#991b1b;font-weight:800;">🚨 ALERTA: ${alertComs.map(c=>escHtml(c.tag)+' — '+escHtml(c.texto)).join(' | ')}</span>`;
       match.style.background = '#fee2e2';
       match.style.color = '#991b1b';
     } else {
@@ -4838,7 +4857,8 @@ function _buscarClienteReal() {
         match.style.display = 'block';
         match.style.background = '#eff6ff';
         match.style.color = '#1e40af';
-        let html = `📋 Cliente en base de datos: ${c.nombre} ${c.apellido} — ${c.tel || 'sin teléfono'}`;
+        // FIX X3 (2026-07-02): escapar también la rama Supabase.
+        let html = `📋 Cliente en base de datos: ${escHtml(c.nombre)} ${escHtml(c.apellido)} — ${escHtml(c.tel || 'sin teléfono')}`;
         if (results.length > 1) html += ` <span style="opacity:.7;">(+${results.length-1} más)</span>`;
         match.innerHTML = html;
         // Auto-llenar nombre y apellido
@@ -5999,7 +6019,9 @@ function renderPD() {
       if (codigo) contadosCol.add(codigo);
       // Manual cost
       const manC = parseFloat(col.slots[h]?.costo)||0;
-      const c = resC + manC;
+      // FIX A1-residual (2026-07-02): criterio unificado "celda O reserva", NUNCA la suma de ambos.
+      // Antes: const c = resC + manC; → doble conteo en las tarjetas de stats si el slot tenía costo manual Y la reserva costo.
+      const c = manC > 0 ? manC : resC;
       // Skip CANCELADO from totals
       const m = col.slots[h]?.metodo || 'EFECTIVO';
       if (m === 'CANCELADO') return;
@@ -6012,7 +6034,9 @@ function renderPD() {
     // Otra hora reservations
     const otraAsig = col.slots['otra']?.reservaCodigo ? reservas.find(rv=>rv.codigo===col.slots['otra'].reservaCodigo) : null;
     if (otraAsig && !contadosCol.has(otraAsig.codigo)) {
-      const c = parseFloat(otraAsig.costo)||0;
+      // FIX A1-residual (2026-07-02): también en 'otra' respetar "celda O reserva".
+      const cOtraSlot = parseFloat(col.slots['otra']?.costo)||0;
+      const c = cOtraSlot > 0 ? cOtraSlot : (parseFloat(otraAsig.costo)||0);
       const m = col.slots['otra']?.metodo || 'EFECTIVO';
       if (m !== 'CANCELADO') {
         totalServicios += c;
@@ -6634,7 +6658,7 @@ async function toggleFinalizarColumna(idx) {
 // cuota). FIX (2026-06-29): ahora SÍ entra al cuadre clasificado por método de pago (default
 // EFECTIVO; se cambia con el selector de cada extra). Por eso recalcula cerramos al cambiar.
 function addServicioExtra(f, colIdx, codigo) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar.'); return;
   }
   const day = getDayData(f);
@@ -6653,7 +6677,7 @@ function addServicioExtra(f, colIdx, codigo) {
 
 // Cambia cómo se recibió el dinero de un servicio extra (EFECTIVO/CUSCA/LINK/PENDIENTE).
 function updateServicioExtraMetodo(f, colIdx, codigo, metodo) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar.'); return;
   }
   const day = getDayData(f);
@@ -6673,7 +6697,7 @@ function updateServicioExtraMetodo(f, colIdx, codigo, metodo) {
 }
 
 function delServicioExtra(f, colIdx, codigo) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar.'); return;
   }
   const day = getDayData(f);
@@ -6700,7 +6724,7 @@ function toggleSlot(id) {
 }
 
 function assignSlot(f, colIdx, hora, codigo) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para asignar servicios.');
     return;
   }
@@ -6733,7 +6757,7 @@ function assignSlot(f, colIdx, hora, codigo) {
 }
 
 function deassignSlot(f, colIdx, hora) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para desasignar servicios.');
     return;
   }
@@ -6767,7 +6791,7 @@ function deassignSlot(f, colIdx, hora) {
 }
 
 function extenderHorario(f, colIdx, horaOrigen, hiOrigen) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para extender horarios.');
     return;
   }
@@ -6789,7 +6813,7 @@ function extenderHorario(f, colIdx, horaOrigen, hiOrigen) {
 }
 
 function quitarExtension(f, colIdx, hora) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para quitar extensiones.');
     return;
   }
@@ -6801,7 +6825,7 @@ function quitarExtension(f, colIdx, hora) {
 }
 
 function updateSlot2(f, idx, hora, campo, valor) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar.');
     return;
   }
@@ -6830,6 +6854,13 @@ function updateSlot2(f, idx, hora, campo, valor) {
 }
 
 function updatePago(f, colIdx, mIdx, val) {
+  // FIX F5 (2026-07-02): faltaba el guard de día cerrado (quedó fuera del fix M1 de v78).
+  // Permitía editar el pago de personal de un día ya cuadrado → descuadre histórico silencioso.
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para editar.');
+    if (typeof renderPD === 'function') renderPD();
+    return;
+  }
   const day = getDayData(f);
   if (day.columnas[colIdx] && day.columnas[colIdx].miembros[mIdx]) {
     day.columnas[colIdx].miembros[mIdx].pago = val;
@@ -6993,7 +7024,7 @@ function autoNombreEquipo() {
 }
 
 function updatePropina(f, colIdx, propIdx, val) {
-  if (typeof isDiaCerrado === 'function' && getPDFecha() === f && isDiaCerrado()) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar propinas.');
     return;
   }
@@ -7138,9 +7169,11 @@ function renderCuaderno() {
   const cuadIng = document.getElementById('cuad-ingresos');
   if (cuadIng) {
     const ing = {EFECTIVO:0,CUSCA:0,LINK:0,PENDIENTE:0,CANCELADO:0};
+    // FIX F7 (2026-07-02): incluir 'otra' hora y servicios extra — el cuadre (recalcCerramos)
+    // YA los cuenta desde v87/v88; el cuaderno mostraba menos que el cerramos. Dedupe global.
+    const contadosIng = new Set();
     day.columnas.forEach(col=>{
-      const contadosIng = new Set();
-      HORARIOS.forEach(h=>{
+      [...HORARIOS,'otra'].forEach(h=>{
       const codigo = col.slots[h]?.reservaCodigo;
       const cSlot=parseFloat(col.slots[h]?.costo)||0;
       const resAsig = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
@@ -7150,6 +7183,17 @@ function renderCuaderno() {
       const m=col.slots[h]?.metodo||'EFECTIVO';
       if(ing[m]!==undefined) ing[m]+=c;
     });});
+    day.columnas.forEach(col=>{
+      (col.serviciosExtra||[]).forEach(item=>{
+        const codigo = (typeof item==='string') ? item : (item&&item.codigo);
+        const m = (typeof item==='string') ? 'EFECTIVO' : ((item&&item.metodo)||'EFECTIVO');
+        if (!codigo || contadosIng.has(codigo)) return;
+        contadosIng.add(codigo);
+        const r = reservas.find(rv=>rv.codigo===codigo);
+        if (!r || r.estado==='cancelado') return;
+        if (ing[m]!==undefined) ing[m]+=(parseFloat(r.costo)||0);
+      });
+    });
     const linkNeto = ing.LINK*0.95;
     cuadIng.innerHTML = `
       <div style="display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;">
@@ -7159,7 +7203,7 @@ function renderCuaderno() {
         <span style="font-size:13px;font-weight:600;">PENDIENTE</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#d97706;">$${ing.PENDIENTE.toFixed(2)}</span>
         ${ing.CANCELADO>0?`<span style="font-size:13px;font-weight:600;color:#991b1b;">CANCELADO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#991b1b;text-decoration:line-through;">$${ing.CANCELADO.toFixed(2)}</span>`:''}
         <div style="grid-column:1/-1;border-top:2px solid #1a2236;padding-top:6px;display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-weight:800;">TOTAL COBRADO:</span>
+          <span style="font-weight:800;">TOTAL DEL DÍA <span style="font-size:10px;font-weight:600;color:#6b7280;">(incluye pendiente)</span>:</span>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:#16a34a;">$${(ing.EFECTIVO+ing.CUSCA+linkNeto+ing.PENDIENTE).toFixed(2)}</span>
         </div>
       </div>`;
@@ -7217,10 +7261,11 @@ function renderCuaderno() {
   renderCuentas(f);
 
   // Totales globales
+  // FIX F7 (2026-07-02): incluir 'otra' hora y servicios extra (igual que el cuadre) + dedupe global.
   let totalIngresos = 0;
+  const contadosTI = new Set();
   day.columnas.forEach(col => {
-    const contadosTI = new Set();
-    HORARIOS.forEach(h => {
+    [...HORARIOS,'otra'].forEach(h => {
       const m = col.slots[h]?.metodo||'EFECTIVO';
       if (m === 'CANCELADO') return;
       const codigo = col.slots[h]?.reservaCodigo;
@@ -7230,6 +7275,17 @@ function renderCuaderno() {
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosTI.add(codigo);
       totalIngresos += c;
+    });
+  });
+  day.columnas.forEach(col => {
+    (col.serviciosExtra||[]).forEach(item => {
+      const codigo = (typeof item==='string') ? item : (item&&item.codigo);
+      const m = (typeof item==='string') ? 'EFECTIVO' : ((item&&item.metodo)||'EFECTIVO');
+      if (!codigo || contadosTI.has(codigo) || m==='CANCELADO') return;
+      contadosTI.add(codigo);
+      const r = reservas.find(rv=>rv.codigo===codigo);
+      if (!r || r.estado==='cancelado') return;
+      totalIngresos += (parseFloat(r.costo)||0);
     });
   });
   const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
@@ -7591,9 +7647,9 @@ function renderOtrosIngresos() {
       <div style="display:grid;grid-template-columns:80px 1fr 1fr 90px 28px;gap:6px;align-items:center;margin-bottom:6px;">
         <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateOtroIngreso(${i},'monto',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:#16a34a;">
-        <input type="text" value="${g.titulo}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso(${i},'titulo',this.value)" ${dis}
+        <input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso(${i},'titulo',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <input type="text" value="${g.desc}" placeholder="Descripción" oninput="updateOtroIngreso(${i},'desc',this.value)" ${dis}
+        <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateOtroIngreso(${i},'desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
         <select onchange="updateOtroIngreso(${i},'destino',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
@@ -7660,7 +7716,7 @@ function renderMovimientos() {
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
           ${CUENTAS.map(c=>`<option value="${c}" ${m.destino===c?'selected':''}>${c}</option>`).join('')}
         </select>
-        <input type="text" value="${m.desc||''}" placeholder="Ej: Cheque #123" oninput="updateMovimiento(${i},'desc',this.value)" ${dis}
+        <input type="text" value="${escHtml(m.desc||'')}" placeholder="Ej: Cheque #123" oninput="updateMovimiento(${i},'desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
         <button onclick="delMovimiento(${i})" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
       </div>`).join('');
@@ -7722,6 +7778,14 @@ function enviarRecordatorioCobroWA() {
 function confirmarCobroModal() {
   if (!_cobroCtx) return;
   const { codigo, fechaOriginal } = _cobroCtx;
+  // FIX F2 (2026-07-02): guard anti-doble-cobro. Si otro dispositivo (o un clic repetido) ya
+  // registró el cobro de este código, NO registrar un segundo ingreso en cobrosPendientes[].
+  if (_yaCobrado(codigo)) {
+    alert('⚠️ Este pago YA fue registrado como cobrado (posiblemente desde otra computadora). Revisá el cuaderno del día de cobro.');
+    cerrarModalCobro();
+    renderNotificaciones();
+    return;
+  }
   const metodoFinal = document.getElementById('cob-metodo').value;
   const fechaCobro = document.getElementById('cob-fecha').value;
   if (!fechaCobro || !/^\d{4}-\d{2}-\d{2}$/.test(fechaCobro)) { alert('Fecha inválida.'); return; }
@@ -7752,6 +7816,8 @@ function confirmarCobroModal() {
   });
   if (!slotMarcado) {
     const res = reservas.find(r => r.codigo === codigo);
+    // FIX F2 (2026-07-02): el fallback tampoco debe re-cobrar una reserva ya marcada.
+    if (res && res._cobrado) { alert('⚠️ Este pago ya estaba registrado como cobrado.'); cerrarModalCobro(); return; }
     if (res) {
       res._cobrado = true;
       res._fechaCobro = fechaCobro;
@@ -7786,12 +7852,19 @@ function delCobroPendiente(i) {
   const day = getDayData(f);
   const cobro = day.cobrosPendientes[i];
   if (cobro) {
+    // FIX F13 (2026-07-02): no tocar el día ORIGINAL si está cerrado (antes solo se chequeaba el día actual).
+    const dayOrigCheck = getDayData(cobro.fechaOriginal);
+    if (cobro.fechaOriginal !== f && dayOrigCheck?.cuentas?.diaCerrado) {
+      alert('⚠️ El día original del servicio (' + cobro.fechaOriginal + ') está cerrado. Desbloqueá ese día para revertir este cobro.');
+      return;
+    }
     // Revertir el slot original o la reserva
     const dayOrig = getDayData(cobro.fechaOriginal);
     dayOrig.columnas.forEach(col => {
       [...HORARIOS, 'otra'].forEach(h => {
         const slot = col.slots?.[h];
-        if (slot && slot.reservaCodigo === cobro.codigo && slot.cobrado) {
+        // FIX F13 (2026-07-02): revertir solo los slots de ESTE cobro (misma fechaCobro), no todos los del código.
+        if (slot && slot.reservaCodigo === cobro.codigo && slot.cobrado && (!slot.fechaCobro || slot.fechaCobro === cobro.fecha)) {
           delete slot.cobrado;
           delete slot.fechaCobro;
           delete slot.metodoCobro;
@@ -7835,7 +7908,6 @@ function calcIngresosServiciosPorCuenta(day) {
   const ing = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, '_LINK_PENDIENTE':0};
   const slotCodigos = new Set(); // todo lo ya contado en slots (para no duplicar con extras)
   day.columnas.forEach(col => {
-    const contados = new Set();
     // FIX (2026-06-29): incluir el slot 'otra' (hora especial). Antes solo se iteraba
     // HORARIOS (8/11/2:30) y el ingreso de la fila "otra hora" NO entraba al cuadre,
     // aunque la pizarra SÍ lo contaba (renderStats2) → faltante artificial en el cierre.
@@ -7845,9 +7917,12 @@ function calcIngresosServiciosPorCuenta(day) {
       // Criterio unificado: usar el costo de la celda si tiene; si no, el de la reserva.
       const cSlot = parseFloat(col.slots[h]?.costo)||0;
       const res = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-      const cRes = (res && !contados.has(codigo)) ? (parseFloat(res.costo)||0) : 0;
+      // FIX F8 (2026-07-02): dedupe GLOBAL del día (antes era por columna). Si el mismo código
+      // quedaba asignado por error en DOS equipos, el costo de la reserva entraba dos veces al
+      // cierre. Ahora se usa el mismo criterio que la pizarra (updateSlot2: una vez por día).
+      const cRes = (res && !slotCodigos.has(codigo)) ? (parseFloat(res.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;
-      if (codigo) { contados.add(codigo); slotCodigos.add(codigo); }
+      if (codigo) { slotCodigos.add(codigo); }
       const m = col.slots[h]?.metodo||'EFECTIVO';
       if (m==='CANCELADO' || m==='PENDIENTE') return;
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
@@ -7966,174 +8041,7 @@ function recalcCerramos() {
   renderCuentas(f);
 }
 
-// ==================== RESUMEN MENSUAL PDF ====================
-function descargarResumenMensual() {
-  const f = getPDFecha();
-  const mesActual = f.slice(0,7); // "2026-04"
-  const [anio,mes] = mesActual.split('-');
-  const nombreMes = new Date(parseInt(anio), parseInt(mes)-1, 15).toLocaleDateString('es-SV',{month:'long',year:'numeric'});
-
-  // Recopilar data de todos los días del mes
-  let totalIngServ=0, totalGastos=0, totalPersonal=0, totalPropinas=0, totalOtrosIng=0;
-  const gastosPorTitulo = {};
-  const ingresosPorTitulo = {};
-  const diasConDatos = [];
-
-  Object.keys(pdData).filter(d => d.startsWith(mesActual)).sort().forEach(dia => {
-    const day = getDayData(dia);
-    let ingDia=0, gastoDia=0, persDia=0, propDia=0, otrosDia=0;
-
-    // Ingresos de servicios
-    const _daySlotCods = new Set();
-    day.columnas.forEach(col => {
-      const contados = new Set();
-      // FIX (2026-06-29): incluir 'otra' (igual que el cuadre diario y la pizarra).
-      [...HORARIOS, 'otra'].forEach(h => {
-        const m = col.slots[h]?.metodo||'EFECTIVO';
-        if (m==='CANCELADO') return;
-        const codigo = col.slots[h]?.reservaCodigo;
-        if (codigo && contados.has(codigo)) return;
-        if (codigo) { contados.add(codigo); _daySlotCods.add(codigo); }
-        const cSlot = parseFloat(col.slots[h]?.costo)||0;
-        const res = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-        const cRes = res ? (parseFloat(res.costo)||0) : 0;
-        let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
-        if (m==='LINK') c *= 0.95;
-        if (m!=='PENDIENTE') ingDia += c;
-      });
-      persDia += col.miembros.reduce((s,m2)=>s+(parseFloat(m2.pago)||0),0);
-      propDia += (col.propinas||[]).reduce((s,p)=>s+(parseFloat(p)||0),0);
-    });
-    // FIX (2026-06-29): incluir servicios extra (fuera de cuota) en el ingreso del mes,
-    // clasificados por método; dedupe vs slots y entre sí.
-    const _dayExtraCods = new Set();
-    day.columnas.forEach(col => {
-      (col.serviciosExtra||[]).forEach(item => {
-        const codigo = (typeof item === 'string') ? item : (item && item.codigo);
-        const m = (typeof item === 'string') ? 'EFECTIVO' : ((item && item.metodo) || 'EFECTIVO');
-        if (!codigo || _daySlotCods.has(codigo) || _dayExtraCods.has(codigo)) return;
-        if (m==='PENDIENTE' || m==='CANCELADO') return;
-        _dayExtraCods.add(codigo);
-        const r = reservas.find(rv => rv.codigo === codigo);
-        if (!r || r.estado === 'cancelado') return;
-        let c = parseFloat(r.costo)||0;
-        if (m==='LINK') c *= 0.95;
-        ingDia += c;
-      });
-    });
-
-    // Gastos
-    (day.gastos||[]).forEach(g => {
-      const monto = parseFloat(g.monto)||0;
-      gastoDia += monto;
-      const tit = g.titulo || 'Sin título';
-      gastosPorTitulo[tit] = (gastosPorTitulo[tit]||0) + monto;
-    });
-
-    // Otros ingresos
-    (day.otrosIngresos||[]).forEach(g => {
-      const monto = parseFloat(g.monto)||0;
-      otrosDia += monto;
-      const tit = g.titulo || 'Sin título';
-      ingresosPorTitulo[tit] = (ingresosPorTitulo[tit]||0) + monto;
-    });
-
-    // Cobros de pendientes recibidos este día
-    (day.cobrosPendientes||[]).forEach(cb => {
-      let monto = parseFloat(cb.monto)||0;
-      if (cb.metodo === 'LINK') monto *= 0.95;
-      ingDia += monto;
-    });
-
-    totalIngServ += ingDia; totalGastos += gastoDia; totalPersonal += persDia; totalPropinas += propDia; totalOtrosIng += otrosDia;
-    if (ingDia>0 || gastoDia>0 || persDia>0 || otrosDia>0)
-      diasConDatos.push({dia, ingDia, gastoDia, persDia, propDia, otrosDia, neto: ingDia+otrosDia-gastoDia-persDia-propDia});
-  });
-
-  const neto = totalIngServ + totalOtrosIng - totalGastos - totalPersonal - totalPropinas;
-
-  // Generar tabla de gastos por categoría
-  const gastosOrdenados = Object.entries(gastosPorTitulo).sort((a,b)=>b[1]-a[1]);
-  const ingresosOrdenados = Object.entries(ingresosPorTitulo).sort((a,b)=>b[1]-a[1]);
-
-  const html = `
-  <div style="font-family:'Barlow',sans-serif;padding:20mm 15mm;width:216mm;background:#fff;">
-    <div style="text-align:center;margin-bottom:8mm;">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:22pt;font-weight:900;color:#1a3a6b;">MUDANZAS TECLEÑAS</div>
-      <div style="font-size:9pt;color:#555;">☎ 2229-8822 | 📱 6198-4772</div>
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:14pt;font-weight:800;color:#d42b2b;margin-top:3mm;text-transform:uppercase;">Resumen Mensual — ${nombreMes}</div>
-    </div>
-
-    <!-- Resumen general -->
-    <table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:6mm;">
-      <tr style="background:#1a3a6b;color:#fff;">
-        <td style="padding:3mm;font-weight:800;">Concepto</td>
-        <td style="padding:3mm;font-weight:800;text-align:right;">Total</td>
-      </tr>
-      <tr><td style="padding:2mm 3mm;border-bottom:1px solid #e0e0e0;">Ingresos por servicios</td><td style="padding:2mm 3mm;text-align:right;font-weight:700;color:#16a34a;">$${totalIngServ.toFixed(2)}</td></tr>
-      <tr><td style="padding:2mm 3mm;border-bottom:1px solid #e0e0e0;">Otros ingresos</td><td style="padding:2mm 3mm;text-align:right;font-weight:700;color:#16a34a;">$${totalOtrosIng.toFixed(2)}</td></tr>
-      <tr><td style="padding:2mm 3mm;border-bottom:1px solid #e0e0e0;">Gastos operativos</td><td style="padding:2mm 3mm;text-align:right;font-weight:700;color:#d42b2b;">-$${totalGastos.toFixed(2)}</td></tr>
-      <tr><td style="padding:2mm 3mm;border-bottom:1px solid #e0e0e0;">Personal</td><td style="padding:2mm 3mm;text-align:right;font-weight:700;color:#d97706;">-$${totalPersonal.toFixed(2)}</td></tr>
-      <tr><td style="padding:2mm 3mm;border-bottom:1px solid #e0e0e0;">Propinas</td><td style="padding:2mm 3mm;text-align:right;font-weight:700;color:#d97706;">-$${totalPropinas.toFixed(2)}</td></tr>
-      <tr style="background:#f0f4fa;"><td style="padding:3mm;font-weight:900;font-size:10pt;">NETO</td><td style="padding:3mm;text-align:right;font-weight:900;font-size:12pt;color:${neto>=0?'#16a34a':'#d42b2b'};">$${neto.toFixed(2)}</td></tr>
-    </table>
-
-    <!-- Desglose de gastos por categoría -->
-    ${gastosOrdenados.length>0 ? `
-    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#d42b2b;border-bottom:2px solid #d42b2b;padding-bottom:1mm;margin-bottom:3mm;">GASTOS POR CATEGORÍA</div>
-    <table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:6mm;">
-      ${gastosOrdenados.map(([t,m])=>`<tr><td style="padding:1.5mm 3mm;border-bottom:1px solid #f0f0f0;">${t}</td><td style="padding:1.5mm 3mm;text-align:right;font-weight:700;color:#d42b2b;">$${m.toFixed(2)}</td></tr>`).join('')}
-      <tr style="background:#fef2f2;"><td style="padding:2mm 3mm;font-weight:800;">TOTAL GASTOS</td><td style="padding:2mm 3mm;text-align:right;font-weight:900;color:#d42b2b;">$${totalGastos.toFixed(2)}</td></tr>
-    </table>` : ''}
-
-    <!-- Desglose de otros ingresos por categoría -->
-    ${ingresosOrdenados.length>0 ? `
-    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#16a34a;border-bottom:2px solid #16a34a;padding-bottom:1mm;margin-bottom:3mm;">OTROS INGRESOS POR CATEGORÍA</div>
-    <table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:6mm;">
-      ${ingresosOrdenados.map(([t,m])=>`<tr><td style="padding:1.5mm 3mm;border-bottom:1px solid #f0f0f0;">${t}</td><td style="padding:1.5mm 3mm;text-align:right;font-weight:700;color:#16a34a;">$${m.toFixed(2)}</td></tr>`).join('')}
-      <tr style="background:#f0fdf4;"><td style="padding:2mm 3mm;font-weight:800;">TOTAL OTROS INGRESOS</td><td style="padding:2mm 3mm;text-align:right;font-weight:900;color:#16a34a;">$${totalOtrosIng.toFixed(2)}</td></tr>
-    </table>` : ''}
-
-    <!-- Resumen diario -->
-    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#1a3a6b;border-bottom:2px solid #1a3a6b;padding-bottom:1mm;margin-bottom:3mm;">RESUMEN DIARIO</div>
-    <table style="width:100%;border-collapse:collapse;font-size:8pt;">
-      <tr style="background:#1a3a6b;color:#fff;">
-        <td style="padding:2mm;">Fecha</td>
-        <td style="padding:2mm;text-align:right;">Ingresos</td>
-        <td style="padding:2mm;text-align:right;">Otros Ing.</td>
-        <td style="padding:2mm;text-align:right;">Gastos</td>
-        <td style="padding:2mm;text-align:right;">Personal</td>
-        <td style="padding:2mm;text-align:right;">Propinas</td>
-        <td style="padding:2mm;text-align:right;font-weight:800;">Neto</td>
-      </tr>
-      ${diasConDatos.map(d=>`<tr style="border-bottom:1px solid #f0f0f0;">
-        <td style="padding:1.5mm 2mm;">${new Date(d.dia+'T12:00:00').toLocaleDateString('es-SV',{day:'numeric',month:'short'})}</td>
-        <td style="padding:1.5mm 2mm;text-align:right;color:#16a34a;">$${d.ingDia.toFixed(2)}</td>
-        <td style="padding:1.5mm 2mm;text-align:right;color:#16a34a;">$${d.otrosDia.toFixed(2)}</td>
-        <td style="padding:1.5mm 2mm;text-align:right;color:#d42b2b;">$${d.gastoDia.toFixed(2)}</td>
-        <td style="padding:1.5mm 2mm;text-align:right;color:#d97706;">$${d.persDia.toFixed(2)}</td>
-        <td style="padding:1.5mm 2mm;text-align:right;color:#d97706;">$${d.propDia.toFixed(2)}</td>
-        <td style="padding:1.5mm 2mm;text-align:right;font-weight:700;color:${d.neto>=0?'#16a34a':'#d42b2b'};">$${d.neto.toFixed(2)}</td>
-      </tr>`).join('')}
-    </table>
-  </div>`;
-
-  if (typeof html2pdf === 'undefined') { alert('La librería PDF aún no ha cargado.'); return; }
-  const container = document.createElement('div');
-  container.style.cssText = 'position:fixed;left:-99999px;top:0;width:216mm;background:#fff;';
-  container.innerHTML = html;
-  document.body.appendChild(container);
-  setTimeout(() => {
-    html2pdf().set({
-      margin: 0,
-      filename: 'Resumen_' + nombreMes.replace(/\s+/g,'_') + '.pdf',
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
-      pagebreak: { mode: ['avoid-all','css'] }
-    }).from(container).save().then(() => container.remove()).catch(e => { container.remove(); alert('Error: '+e.message); });
-  }, 300);
-}
+// CODIGO MUERTO ELIMINADO (2026-07-02): funcion sin ningun caller (descargarResumenMensual, sin boton desde v83).
 
 // ==================== REPORTE COMPLETO DEL DÍA (PDF) ====================
 // PDF con TODA la info del día: servicios por equipo (quién + pago), gastos, movimientos
@@ -8524,9 +8432,12 @@ function renderConciliacion() {
   // Ingresos CUSCA desde servicios
   const ingresosCusca = [];
   const ingresosLink  = [];
+  // FIX F6 (2026-07-02): la conciliación quedó desalineada del cuadre tras v87/v88.
+  // Ahora incluye: slot 'otra', servicios extra, cobros de pendientes por CUSCA/LINK,
+  // otros ingresos con destino CUSCATLAN y movimientos entre cuentas que tocan CUSCATLAN.
+  const contadosConc = new Set(); // dedupe GLOBAL del día (mismo criterio que el cuadre)
   (pdDay.columnas || []).forEach(col => {
-    const contadosConc = new Set();
-    HORARIOS.forEach(h => {
+    [...HORARIOS, 'otra'].forEach(h => {
       const slot = col.slots?.[h];
       if (!slot) return;
       const codigo = slot.reservaCodigo;
@@ -8541,10 +8452,47 @@ function renderConciliacion() {
       if (slot.metodo === 'LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c * 0.95, comision: c * 0.05 });
     });
   });
+  // Servicios extra (fuera de cuota) por CUSCA/LINK
+  (pdDay.columnas || []).forEach(col => {
+    (col.serviciosExtra||[]).forEach(item => {
+      const codigo = (typeof item==='string') ? item : (item&&item.codigo);
+      const m = (typeof item==='string') ? 'EFECTIVO' : ((item&&item.metodo)||'EFECTIVO');
+      if (!codigo || contadosConc.has(codigo)) return;
+      contadosConc.add(codigo);
+      const r = reservas.find(rv=>rv.codigo===codigo);
+      if (!r || r.estado==='cancelado') return;
+      const c = parseFloat(r.costo)||0;
+      if (!c) return;
+      const descLabel = `${col.nombre} — Extra (${r.nombre} ${r.apellido||''})`;
+      if (m==='CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
+      if (m==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c*0.95, comision: c*0.05 });
+    });
+  });
+  // Cobros de pendientes registrados ESTE día por CUSCA/LINK
+  (pdDay.cobrosPendientes || []).forEach(cb => {
+    const c = parseFloat(cb.monto)||0;
+    if (!c) return;
+    const r = reservas.find(rv=>rv.codigo===cb.codigo);
+    const descLabel = `Cobro pendiente ${r ? (r.nombre+' '+(r.apellido||'')) : cb.codigo} (servicio ${cb.fechaOriginal||''})`;
+    if (cb.metodo==='CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
+    if (cb.metodo==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c*0.95, comision: c*0.05 });
+  });
+  // Otros ingresos con destino CUSCATLAN
+  (pdDay.otrosIngresos || []).forEach(g => {
+    const c = parseFloat(g.monto)||0;
+    if (c > 0 && (g.destino||'CAJA CHICA') === 'CUSCATLAN') ingresosCusca.push({ desc: `Otro ingreso: ${g.titulo||''}${g.desc?' — '+g.desc:''}`, monto: c });
+  });
 
   // Gastos desde CUSCATLAN
   const gastosCusca = (pdDay.gastos || []).filter(g => g.fondo === 'CUSCATLAN' && parseFloat(g.monto) > 0)
     .map(g => ({ desc: `${g.titulo}${g.desc ? ' — '+g.desc : ''}`, monto: parseFloat(g.monto) }));
+  // Movimientos entre cuentas que tocan CUSCATLAN
+  (pdDay.movimientos || []).forEach(mv => {
+    const c = parseFloat(mv.monto)||0;
+    if (!c) return;
+    if (mv.destino === 'CUSCATLAN') ingresosCusca.push({ desc: `Movimiento desde ${mv.origen||''}${mv.desc?' — '+mv.desc:''}`, monto: c });
+    if (mv.origen === 'CUSCATLAN')  gastosCusca.push({ desc: `Movimiento hacia ${mv.destino||''}${mv.desc?' — '+mv.desc:''}`, monto: c });
+  });
 
   const totalCusca  = ingresosCusca.reduce((s,i) => s+i.monto, 0);
   const totalLink   = ingresosLink.reduce((s,i) => s+i.neto, 0);
@@ -8561,7 +8509,7 @@ function renderConciliacion() {
     } else {
       elIC.innerHTML = ingresosCusca.map(i => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--gris1);">
-          <span style="font-size:12px;color:var(--texto);">${i.desc}</span>
+          <span style="font-size:12px;color:var(--texto);">${escHtml(i.desc)}</span>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:#1e4fa0;">+$${i.monto.toFixed(2)}</span>
         </div>`).join('');
     }
@@ -8576,7 +8524,7 @@ function renderConciliacion() {
       elIL.innerHTML = ingresosLink.map(i => `
         <div style="padding:6px 0;border-bottom:1px solid var(--gris1);">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-size:12px;color:var(--texto);">${i.desc}</span>
+            <span style="font-size:12px;color:var(--texto);">${escHtml(i.desc)}</span>
             <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:#7c3aed;">+$${i.neto.toFixed(2)}</span>
           </div>
           <div style="font-size:10px;color:var(--gris2);">Bruto: $${i.bruto.toFixed(2)} — Comisión banco 5%: -$${i.comision.toFixed(2)}</div>
@@ -8592,7 +8540,7 @@ function renderConciliacion() {
     } else {
       elGC.innerHTML = gastosCusca.map(g => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--gris1);">
-          <span style="font-size:12px;color:var(--texto);">${g.desc}</span>
+          <span style="font-size:12px;color:var(--texto);">${escHtml(g.desc)}</span>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:#d42b2b;">-$${g.monto.toFixed(2)}</span>
         </div>`).join('');
     }
@@ -9361,186 +9309,4 @@ function alertaPendientesUrgentes() {
 
 </script>
 <!-- MODAL LECTOR WHATSAPP -->
-<div class="mo" id="mo-wa-reader" onclick="if(event.target===this)closeWAReader()">
-<div class="modal" style="width:700px;">
-  <div class="mh" style="background:linear-gradient(135deg,#075e54,#128c7e);">
-    <h2>💬 Lector de WhatsApp</h2>
-    <button class="mc" onclick="closeWAReader()">✕</button>
-  </div>
-  <div class="mb">
-
-    <!-- PASO 1: Pegar texto -->
-    <div id="wa-paso1">
-      <p style="font-size:13px;color:var(--gris2);margin-bottom:12px;">
-        Copia y pega aquí la respuesta del cliente con sus datos de mudanza. El sistema extrae la información automáticamente.
-      </p>
-      <div class="fg">
-        <label>Texto del chat de WhatsApp</label>
-        <textarea id="wa-input" rows="8" placeholder="Ejemplo:&#10;-Nombre: María González&#10;-Número de Contacto: 7890-1234&#10;-Dirección Exacta de Carga: Col. Escalón, 75 Av. Norte casa #12, frente al parque&#10;-Dirección Exacta de Descarga: Res. Santa Elena, calle los pinos #8, portón azul"></textarea>
-      </div>
-      <div class="flex gap2 mt3" style="justify-content:flex-end;">
-        <button class="btn btn-gh" onclick="closeWAReader()">Cancelar</button>
-        <button class="btn" style="background:#128c7e;color:#fff;" onclick="analizarWA()">🔍 Analizar mensaje</button>
-      </div>
-    </div>
-
-    <!-- PASO 2: Confirmación de datos extraídos -->
-    <div id="wa-paso2" style="display:none;">
-      <div style="background:#d1fae5;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#065f46;font-weight:600;">
-        ✅ Datos extraídos. Al tocar "Pasar al formulario" se abre la reservación con todo precargado — revisás fecha/horario y guardás normal.
-      </div>
-
-      <div class="sec-div">Datos del cliente</div>
-      <div class="grid2">
-        <div class="fg"><label>Nombre *</label><input type="text" id="wa-nombre" placeholder="Nombre del cliente"></div>
-        <div class="fg"><label>Teléfono *</label><input type="text" id="wa-tel" placeholder="0000-0000"></div>
-      </div>
-      <div class="grid2">
-        <div class="fg"><label>Dirección de carga *</label><input type="text" id="wa-carga" placeholder="Dirección de carga"></div>
-        <div class="fg"><label>Dirección de descarga *</label><input type="text" id="wa-descarga" placeholder="Dirección de descarga"></div>
-      </div>
-
-      <div class="sec-div" style="margin-top:14px;">Completar reservación</div>
-      <div class="grid2">
-        <div class="fg"><label>Fecha del servicio *</label><input type="date" id="wa-fecha"></div>
-        <div class="fg"><label>Hora</label>
-          <select id="wa-hora" onchange="toggleHoraPersonalizada('wa-hora','wa-hora-custom')">
-            <option value="8:00 AM">8:00 AM</option>
-            <option value="11:00 AM">11:00 AM</option>
-            <option value="2:30 PM">2:30 PM</option>
-            <option value="Otra hora">Otra hora...</option>
-          </select>
-          <input type="text" id="wa-hora-custom" placeholder="Ej: 1:00 PM, 6:00 AM..." style="display:none;margin-top:6px;border:1.5px solid #128c7e;border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;" oninput="actualizarPreviewWA()">
-        </div>
-        <div class="fg"><label>Unidad</label>
-          <select id="wa-unidad">
-            <option value="pequeño">Camión Pequeño – 3m / 2 ton</option>
-            <option value="mediano">Camión Mediano – 5m / 5 ton</option>
-            <option value="grande">Camión Grande – 7m / 10 ton</option>
-          </select>
-        </div>
-        <div class="fg"><label>Costo</label><input type="text" id="wa-costo" placeholder="$0.00"></div>
-      </div>
-      <div class="fg"><label>Observaciones</label><textarea id="wa-obs" rows="2" placeholder="Notas adicionales..."></textarea></div>
-
-      <!-- Preview mensaje de confirmación -->
-      <div class="sec-div" style="margin-top:14px;">Vista previa — Mensaje de confirmación WhatsApp</div>
-      <div style="background:#e5ddd5;border-radius:10px;padding:12px;">
-        <div id="wa-preview-msg" style="background:#fff;border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;font-family:'Barlow','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Segoe UI Symbol',sans-serif;"></div>
-      </div>
-
-      <div class="flex gap2 mt3" style="justify-content:space-between;align-items:center;">
-        <button class="btn btn-gh" onclick="volverPaso1()">← Volver</button>
-        <div class="flex gap2">
-          <button class="btn" style="background:#128c7e;color:#fff;" onclick="agendarDesdeWA()">📝 Pasar al formulario</button>
-          <button class="btn btn-w" onclick="enviarConfirmacionWA()">📱 Enviar confirmación por WhatsApp</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- PASO 3: Éxito -->
-    <div id="wa-paso3" style="display:none;text-align:center;padding:20px 0;">
-      <div style="font-size:48px;margin-bottom:12px;">✅</div>
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;color:var(--azul);margin-bottom:6px;" id="wa-exito-cod"></div>
-      <div style="font-size:14px;color:var(--gris2);margin-bottom:20px;">La reservación fue creada exitosamente.</div>
-      <div class="flex gap2" style="justify-content:center;">
-        <button class="btn btn-p" onclick="closeWAReader()">Ver reservaciones</button>
-        <button class="btn btn-gh" onclick="nuevoLector()">+ Procesar otro mensaje</button>
-      </div>
-    </div>
-
-  </div>
-</div>
-</div>
-<!-- MODAL AGREGAR/EDITAR EQUIPO -->
-<div class="mo" id="mo-columna" onclick="if(event.target===this)cerrarModalColumna()">
-<div class="modal" style="width:560px;">
-  <div class="mh"><h2 id="mo-col-titulo">🚛 Agregar Equipo</h2><button class="mc" onclick="cerrarModalColumna()">✕</button></div>
-  <div class="mb">
-    <div class="fg"><label>Camión asignado *</label>
-      <select id="col-camion" onchange="autoNombreEquipo()">
-        <option value="">— Seleccionar camión —</option>
-        <optgroup label="Pequeños"><option value="P697518 · Isuzu NKR · Pequeño">P697518 · Isuzu NKR 2016</option><option value="P969227 · Isuzu QKR · Pequeño">P969227 · Isuzu QKR 2021</option></optgroup>
-        <optgroup label="Medianos"><option value="C62028 · Hyundai · Mediano">C62028 · Hyundai 2005</option><option value="C115415 · Mitsubishi Fuso · Mediano">C115415 · Mitsubishi Fuso 2018</option></optgroup>
-        <optgroup label="Grandes"><option value="C121722 · Isuzu FTR · Grande">C121722 · Isuzu FTR 2022</option><option value="C100910 · Freightliner · Grande">C100910 · Freightliner 2005</option><option value="C75034 · Freightliner M2 · Grande · Rampa">C75034 · Freightliner M2 ✅ Rampa</option><option value="C71136 · Ford Louisville · Grande · Rampa">C71136 · Ford Louisville ✅ Rampa</option></optgroup>
-      </select>
-      <input type="hidden" id="col-nombre">
-    </div>
-    <div class="sec-div" style="margin-top:12px;">Personal del equipo</div>
-    <p style="font-size:12px;color:var(--gris2);margin-bottom:10px;">El primero de la lista aparecerá en rojo (líder), el resto en azul — igual que la pizarra.</p>
-    <div id="col-empleados" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:230px;overflow-y:auto;"></div>
-    
-    <!-- Personal eventual -->
-    <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
-      <div class="sec-div" style="margin:0;flex:1;">Personal eventual</div>
-      <button onclick="addExtraPersonal()" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">+ Agregar eventual</button>
-    </div>
-    <p style="font-size:11px;color:var(--gris2);margin:6px 0 10px;">Ayudantes eventuales que no están en la planilla fija.</p>
-    <div id="col-extras"></div>
-  </div>
-  <div class="mf">
-    <button class="btn btn-gh" onclick="cerrarModalColumna()">Cancelar</button>
-    <button class="btn btn-g" onclick="guardarColumna()">💾 Guardar equipo</button>
-  </div>
-</div>
-</div>
-
-<!-- MODAL CAMBIO DE HORA (drag entre filas) -->
-<div class="mo" id="mo-hora-cambio" onclick="if(event.target===this)cancelarHoraCambio()">
-<div class="modal" style="width:440px;">
-  <div class="mh" style="background:#1a3a6b;">
-    <h2>⏰ Cambiar horario del servicio</h2>
-    <button class="mc" onclick="cancelarHoraCambio()">✕</button>
-  </div>
-  <div class="mb">
-    <div id="hc-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
-    <div class="fg">
-      <label>Selecciona el nuevo horario *</label>
-      <select id="hc-hora-sel" onchange="document.getElementById('hc-hora-custom').style.display=this.value==='Otra hora'?'block':'none'">
-        <option value="8:00 AM">8:00 AM</option>
-        <option value="11:00 AM">11:00 AM</option>
-        <option value="2:30 PM">2:30 PM</option>
-        <option value="Otra hora">Otra hora (escribir manualmente)</option>
-      </select>
-      <input type="text" id="hc-hora-custom" placeholder="Ej: 6:00 AM, 1:00 PM, 10:00 PM..."
-        style="display:none;margin-top:8px;border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
-    </div>
-  </div>
-  <div class="mf">
-    <button class="btn btn-gh" onclick="cancelarHoraCambio()">Cancelar</button>
-    <button class="btn btn-p" onclick="confirmarHoraCambio()">✅ Confirmar y mover</button>
-  </div>
-</div>
-</div>
-
-<div class="mo" id="mo-cobro" onclick="if(event.target===this)cerrarModalCobro()">
-<div class="modal" style="width:420px;">
-  <div class="mh" style="background:#16a34a;">
-    <h2>💰 Registrar cobro</h2>
-    <button class="mc" onclick="cerrarModalCobro()">✕</button>
-  </div>
-  <div class="mb">
-    <div id="cob-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
-    <div class="fg">
-      <label>¿Cómo se recibió el pago? *</label>
-      <select id="cob-metodo">
-        <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
-        <option value="CUSCA">CUSCA → Cuscatlán</option>
-        <option value="LINK">LINK → Cuscatlán mañana (95%)</option>
-      </select>
-    </div>
-    <div class="fg" style="margin-top:12px;">
-      <label>Fecha de cobro *</label>
-      <input type="date" id="cob-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
-    </div>
-  </div>
-  <div class="mf">
-    <button class="btn btn-gh" onclick="enviarRecordatorioCobroWA()" style="margin-right:auto;">📱 Recordar por WA</button>
-    <button class="btn btn-gh" onclick="cerrarModalCobro()">Cancelar</button>
-    <button class="btn btn-p" style="background:#16a34a;" onclick="confirmarCobroModal()">✅ Registrar cobro</button>
-  </div>
-</div>
-</div>
-
-</body>
-</html>
+<div class="mo" id="mo-wa-reader" onclick="if(
