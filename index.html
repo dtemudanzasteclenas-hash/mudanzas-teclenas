@@ -2487,7 +2487,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-02-v92';
+const APP_VERSION = '2026-07-03-v93';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -9309,4 +9309,186 @@ function alertaPendientesUrgentes() {
 
 </script>
 <!-- MODAL LECTOR WHATSAPP -->
-<div class="mo" id="mo-wa-reader" onclick="if(
+<div class="mo" id="mo-wa-reader" onclick="if(event.target===this)closeWAReader()">
+<div class="modal" style="width:700px;">
+  <div class="mh" style="background:linear-gradient(135deg,#075e54,#128c7e);">
+    <h2>💬 Lector de WhatsApp</h2>
+    <button class="mc" onclick="closeWAReader()">✕</button>
+  </div>
+  <div class="mb">
+
+    <!-- PASO 1: Pegar texto -->
+    <div id="wa-paso1">
+      <p style="font-size:13px;color:var(--gris2);margin-bottom:12px;">
+        Copia y pega aquí la respuesta del cliente con sus datos de mudanza. El sistema extrae la información automáticamente.
+      </p>
+      <div class="fg">
+        <label>Texto del chat de WhatsApp</label>
+        <textarea id="wa-input" rows="8" placeholder="Ejemplo:&#10;-Nombre: María González&#10;-Número de Contacto: 7890-1234&#10;-Dirección Exacta de Carga: Col. Escalón, 75 Av. Norte casa #12, frente al parque&#10;-Dirección Exacta de Descarga: Res. Santa Elena, calle los pinos #8, portón azul"></textarea>
+      </div>
+      <div class="flex gap2 mt3" style="justify-content:flex-end;">
+        <button class="btn btn-gh" onclick="closeWAReader()">Cancelar</button>
+        <button class="btn" style="background:#128c7e;color:#fff;" onclick="analizarWA()">🔍 Analizar mensaje</button>
+      </div>
+    </div>
+
+    <!-- PASO 2: Confirmación de datos extraídos -->
+    <div id="wa-paso2" style="display:none;">
+      <div style="background:#d1fae5;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#065f46;font-weight:600;">
+        ✅ Datos extraídos. Al tocar "Pasar al formulario" se abre la reservación con todo precargado — revisás fecha/horario y guardás normal.
+      </div>
+
+      <div class="sec-div">Datos del cliente</div>
+      <div class="grid2">
+        <div class="fg"><label>Nombre *</label><input type="text" id="wa-nombre" placeholder="Nombre del cliente"></div>
+        <div class="fg"><label>Teléfono *</label><input type="text" id="wa-tel" placeholder="0000-0000"></div>
+      </div>
+      <div class="grid2">
+        <div class="fg"><label>Dirección de carga *</label><input type="text" id="wa-carga" placeholder="Dirección de carga"></div>
+        <div class="fg"><label>Dirección de descarga *</label><input type="text" id="wa-descarga" placeholder="Dirección de descarga"></div>
+      </div>
+
+      <div class="sec-div" style="margin-top:14px;">Completar reservación</div>
+      <div class="grid2">
+        <div class="fg"><label>Fecha del servicio *</label><input type="date" id="wa-fecha"></div>
+        <div class="fg"><label>Hora</label>
+          <select id="wa-hora" onchange="toggleHoraPersonalizada('wa-hora','wa-hora-custom')">
+            <option value="8:00 AM">8:00 AM</option>
+            <option value="11:00 AM">11:00 AM</option>
+            <option value="2:30 PM">2:30 PM</option>
+            <option value="Otra hora">Otra hora...</option>
+          </select>
+          <input type="text" id="wa-hora-custom" placeholder="Ej: 1:00 PM, 6:00 AM..." style="display:none;margin-top:6px;border:1.5px solid #128c7e;border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;" oninput="actualizarPreviewWA()">
+        </div>
+        <div class="fg"><label>Unidad</label>
+          <select id="wa-unidad">
+            <option value="pequeño">Camión Pequeño – 3m / 2 ton</option>
+            <option value="mediano">Camión Mediano – 5m / 5 ton</option>
+            <option value="grande">Camión Grande – 7m / 10 ton</option>
+          </select>
+        </div>
+        <div class="fg"><label>Costo</label><input type="text" id="wa-costo" placeholder="$0.00"></div>
+      </div>
+      <div class="fg"><label>Observaciones</label><textarea id="wa-obs" rows="2" placeholder="Notas adicionales..."></textarea></div>
+
+      <!-- Preview mensaje de confirmación -->
+      <div class="sec-div" style="margin-top:14px;">Vista previa — Mensaje de confirmación WhatsApp</div>
+      <div style="background:#e5ddd5;border-radius:10px;padding:12px;">
+        <div id="wa-preview-msg" style="background:#fff;border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;font-family:'Barlow','Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Segoe UI Symbol',sans-serif;"></div>
+      </div>
+
+      <div class="flex gap2 mt3" style="justify-content:space-between;align-items:center;">
+        <button class="btn btn-gh" onclick="volverPaso1()">← Volver</button>
+        <div class="flex gap2">
+          <button class="btn" style="background:#128c7e;color:#fff;" onclick="agendarDesdeWA()">📝 Pasar al formulario</button>
+          <button class="btn btn-w" onclick="enviarConfirmacionWA()">📱 Enviar confirmación por WhatsApp</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PASO 3: Éxito -->
+    <div id="wa-paso3" style="display:none;text-align:center;padding:20px 0;">
+      <div style="font-size:48px;margin-bottom:12px;">✅</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:800;color:var(--azul);margin-bottom:6px;" id="wa-exito-cod"></div>
+      <div style="font-size:14px;color:var(--gris2);margin-bottom:20px;">La reservación fue creada exitosamente.</div>
+      <div class="flex gap2" style="justify-content:center;">
+        <button class="btn btn-p" onclick="closeWAReader()">Ver reservaciones</button>
+        <button class="btn btn-gh" onclick="nuevoLector()">+ Procesar otro mensaje</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+</div>
+<!-- MODAL AGREGAR/EDITAR EQUIPO -->
+<div class="mo" id="mo-columna" onclick="if(event.target===this)cerrarModalColumna()">
+<div class="modal" style="width:560px;">
+  <div class="mh"><h2 id="mo-col-titulo">🚛 Agregar Equipo</h2><button class="mc" onclick="cerrarModalColumna()">✕</button></div>
+  <div class="mb">
+    <div class="fg"><label>Camión asignado *</label>
+      <select id="col-camion" onchange="autoNombreEquipo()">
+        <option value="">— Seleccionar camión —</option>
+        <optgroup label="Pequeños"><option value="P697518 · Isuzu NKR · Pequeño">P697518 · Isuzu NKR 2016</option><option value="P969227 · Isuzu QKR · Pequeño">P969227 · Isuzu QKR 2021</option></optgroup>
+        <optgroup label="Medianos"><option value="C62028 · Hyundai · Mediano">C62028 · Hyundai 2005</option><option value="C115415 · Mitsubishi Fuso · Mediano">C115415 · Mitsubishi Fuso 2018</option></optgroup>
+        <optgroup label="Grandes"><option value="C121722 · Isuzu FTR · Grande">C121722 · Isuzu FTR 2022</option><option value="C100910 · Freightliner · Grande">C100910 · Freightliner 2005</option><option value="C75034 · Freightliner M2 · Grande · Rampa">C75034 · Freightliner M2 ✅ Rampa</option><option value="C71136 · Ford Louisville · Grande · Rampa">C71136 · Ford Louisville ✅ Rampa</option></optgroup>
+      </select>
+      <input type="hidden" id="col-nombre">
+    </div>
+    <div class="sec-div" style="margin-top:12px;">Personal del equipo</div>
+    <p style="font-size:12px;color:var(--gris2);margin-bottom:10px;">El primero de la lista aparecerá en rojo (líder), el resto en azul — igual que la pizarra.</p>
+    <div id="col-empleados" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:230px;overflow-y:auto;"></div>
+    
+    <!-- Personal eventual -->
+    <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+      <div class="sec-div" style="margin:0;flex:1;">Personal eventual</div>
+      <button onclick="addExtraPersonal()" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">+ Agregar eventual</button>
+    </div>
+    <p style="font-size:11px;color:var(--gris2);margin:6px 0 10px;">Ayudantes eventuales que no están en la planilla fija.</p>
+    <div id="col-extras"></div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="cerrarModalColumna()">Cancelar</button>
+    <button class="btn btn-g" onclick="guardarColumna()">💾 Guardar equipo</button>
+  </div>
+</div>
+</div>
+
+<!-- MODAL CAMBIO DE HORA (drag entre filas) -->
+<div class="mo" id="mo-hora-cambio" onclick="if(event.target===this)cancelarHoraCambio()">
+<div class="modal" style="width:440px;">
+  <div class="mh" style="background:#1a3a6b;">
+    <h2>⏰ Cambiar horario del servicio</h2>
+    <button class="mc" onclick="cancelarHoraCambio()">✕</button>
+  </div>
+  <div class="mb">
+    <div id="hc-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
+    <div class="fg">
+      <label>Selecciona el nuevo horario *</label>
+      <select id="hc-hora-sel" onchange="document.getElementById('hc-hora-custom').style.display=this.value==='Otra hora'?'block':'none'">
+        <option value="8:00 AM">8:00 AM</option>
+        <option value="11:00 AM">11:00 AM</option>
+        <option value="2:30 PM">2:30 PM</option>
+        <option value="Otra hora">Otra hora (escribir manualmente)</option>
+      </select>
+      <input type="text" id="hc-hora-custom" placeholder="Ej: 6:00 AM, 1:00 PM, 10:00 PM..."
+        style="display:none;margin-top:8px;border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="cancelarHoraCambio()">Cancelar</button>
+    <button class="btn btn-p" onclick="confirmarHoraCambio()">✅ Confirmar y mover</button>
+  </div>
+</div>
+</div>
+
+<div class="mo" id="mo-cobro" onclick="if(event.target===this)cerrarModalCobro()">
+<div class="modal" style="width:420px;">
+  <div class="mh" style="background:#16a34a;">
+    <h2>💰 Registrar cobro</h2>
+    <button class="mc" onclick="cerrarModalCobro()">✕</button>
+  </div>
+  <div class="mb">
+    <div id="cob-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;color:var(--azul);margin-bottom:16px;"></div>
+    <div class="fg">
+      <label>¿Cómo se recibió el pago? *</label>
+      <select id="cob-metodo">
+        <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
+        <option value="CUSCA">CUSCA → Cuscatlán</option>
+        <option value="LINK">LINK → Cuscatlán mañana (95%)</option>
+      </select>
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Fecha de cobro *</label>
+      <input type="date" id="cob-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="enviarRecordatorioCobroWA()" style="margin-right:auto;">📱 Recordar por WA</button>
+    <button class="btn btn-gh" onclick="cerrarModalCobro()">Cancelar</button>
+    <button class="btn btn-p" style="background:#16a34a;" onclick="confirmarCobroModal()">✅ Registrar cobro</button>
+  </div>
+</div>
+</div>
+
+</body>
+</html>
