@@ -2487,7 +2487,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-03-v93';
+const APP_VERSION = '2026-07-04-v95';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3204,15 +3204,27 @@ function pdfAbrirVentanaImpresion(titulo, paginasHTML) {
       });
     <\/script>
   </body></html>`;
-  const w = window.open('', '_blank', 'width=900,height=1100');
+  const w = _abrirVentanaImpresionBlob(fullDocument, 'width=900,height=1100');
   if (!w) {
     alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo.');
     return false;
   }
-  w.document.open();
-  w.document.write(fullDocument);
-  w.document.close();
   return true;
+}
+
+// FIX v95 (2026-07-04): Chrome nuevo descarta document.write() sobre una ventana recién
+// abierta → los reportes salían EN BLANCO. Se abre la ventana con un Blob URL (carga como
+// página normal, los <script> internos y window.print() corren igual). Compartido por
+// pdfAbrirVentanaImpresion, descargarReporteDia e imprimirPD.
+function _abrirVentanaImpresionBlob(fullDocument, features) {
+  let url = '';
+  try { url = URL.createObjectURL(new Blob([fullDocument], { type: 'text/html' })); }
+  catch(e) { console.warn('blob impresion error:', e); return null; }
+  const w = features ? window.open(url, '_blank', features) : window.open(url, '_blank');
+  if (!w) { try { URL.revokeObjectURL(url); } catch(e){} return null; }
+  // Revocar después de que la ventana ya cargó (2 min de margen de sobra)
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch(e){} }, 120000);
+  return w;
 }
 
 function imprimirAgendaDia() {
@@ -5881,6 +5893,8 @@ const MOTORISTAS = new Set([
 ]);
 const HORARIOS = ['8:00 AM','11:00 AM','2:30 PM'];
 const METODOS_PAGO = ['EFECTIVO','CUSCA','LINK','PENDIENTE','CANCELADO'];
+const LINK_NETO = 0.96228;    // FIX (2026-07-04): comision real link Cuscatlan = 3.772% medida en conciliacion de junio (antes se asumia 5%)
+const LINK_COMISION = 1 - LINK_NETO;
 const FONDOS = ['CAJA CHICA','CUSCATLAN'];
 const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN'];
 
@@ -6058,7 +6072,7 @@ function renderPD() {
 
   const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const totalPersonal = day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
-  const linkNeto = totalLink * 0.95;
+  const linkNeto = totalLink * LINK_NETO;
   const neto = totalServicios - totalGastos - totalPersonal;
 
   const statsEl = document.getElementById('pd-stats');
@@ -6870,7 +6884,7 @@ function updatePago(f, colIdx, mIdx, val) {
   }
 }
 
-// Calcula el LINK neto (95%) por día desde TODOS los días registrados, ordenado por fecha.
+// Calcula el LINK neto (96.228%) por día desde TODOS los días registrados, ordenado por fecha.
 // Devuelve { porDia:[{fecha,linkNeto}], total }. Sirve para mostrar el LINK CUSCATLÁN
 // agrupado y acumulado conforme los días — así el usuario ve cuánto le va a depositar el
 // banco en conjunto (los depósitos LINK llegan agrupados días después, en días hábiles).
@@ -6905,7 +6919,7 @@ function _calcLinkPorDia(fHasta, diasAtras) {
         });
       });
       if (linkDia > 0) {
-        const neto = linkDia * 0.95;
+        const neto = linkDia * LINK_NETO;
         porDia.push({ fecha, linkNeto: neto });
         total += neto;
       }
@@ -6934,7 +6948,7 @@ function renderStats2(f) {
   });});
   const totalGastos=day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const totalPersonal=day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
-  const linkNeto=totalLink*0.95; const neto=totalServicios-totalGastos-totalPersonal;
+  const linkNeto=totalLink* LINK_NETO; const neto=totalServicios-totalGastos-totalPersonal;
   const statsEl=document.getElementById('pd-stats');
   try {
     if(statsEl) statsEl.innerHTML=`
@@ -7194,7 +7208,7 @@ function renderCuaderno() {
         if (ing[m]!==undefined) ing[m]+=(parseFloat(r.costo)||0);
       });
     });
-    const linkNeto = ing.LINK*0.95;
+    const linkNeto = ing.LINK* LINK_NETO;
     cuadIng.innerHTML = `
       <div style="display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;">
         <span style="font-size:13px;font-weight:600;">EFECTIVO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#16a34a;">$${ing.EFECTIVO.toFixed(2)}</span>
@@ -7927,11 +7941,11 @@ function calcIngresosServiciosPorCuenta(day) {
       if (m==='CANCELADO' || m==='PENDIENTE') return;
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
       else if (m==='CUSCA') ing['CUSCATLAN'] += c;
-      else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * 0.95; // no se suma hoy
+      else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * LINK_NETO; // no se suma hoy
     });
   });
   // FIX (2026-06-29): los SERVICIOS EXTRA (fuera de cuota) ahora ENTRAN al cuadre, según
-  // cómo se recibió el dinero (EFECTIVO→CAJA CHICA, CUSCA→CUSCATLAN, LINK→95% diferido,
+  // cómo se recibió el dinero (EFECTIVO→CAJA CHICA, CUSCA→CUSCATLAN, LINK→96.228% diferido,
   // PENDIENTE→no suma). Dedupe vs slots y entre sí para no contar dos veces el mismo ingreso.
   const extrasContados = new Set();
   day.columnas.forEach(col => {
@@ -7945,7 +7959,7 @@ function calcIngresosServiciosPorCuenta(day) {
       const c = parseFloat(r.costo)||0;
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
       else if (m==='CUSCA') ing['CUSCATLAN'] += c;
-      else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * 0.95;
+      else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * LINK_NETO;
       // PENDIENTE / CANCELADO: no suma a cuentas (queda por cobrar)
     });
   });
@@ -7969,7 +7983,7 @@ function recalcCerramos() {
   if (dayAyer) {
     linkAyer = calcIngresosServiciosPorCuenta(dayAyer)['_LINK_PENDIENTE'] || 0;
     (dayAyer.cobrosPendientes||[]).forEach(cb => {
-      if (cb.metodo === 'LINK') linkAyer += (parseFloat(cb.monto)||0) * 0.95;
+      if (cb.metodo === 'LINK') linkAyer += (parseFloat(cb.monto)||0) * LINK_NETO;
     });
   }
 
@@ -8006,7 +8020,7 @@ function recalcCerramos() {
     const monto = parseFloat(cb.monto)||0;
     if (cb.metodo === 'EFECTIVO') ingCobros['CAJA CHICA'] += monto;
     else if (cb.metodo === 'CUSCA') ingCobros['CUSCATLAN'] += monto;
-    else if (cb.metodo === 'LINK') ingCobros['_LINK_PENDIENTE'] += monto * 0.95;
+    else if (cb.metodo === 'LINK') ingCobros['_LINK_PENDIENTE'] += monto * LINK_NETO;
   });
 
   // Calcular cerramos
@@ -8192,9 +8206,8 @@ function descargarReporteDia() {
   // Método CONFIABLE (igual que la tarjeta de reservación y la impresión diaria): ventana de
   // impresión del navegador. El usuario elige "Guardar como PDF". html2pdf/html2canvas salía en
   // blanco con contenido posicionado fuera de pantalla.
-  const w = window.open('', '_blank');
-  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo. En la ventana que abre, elegí "Guardar como PDF".'); return; }
-  w.document.write('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">'
+  // FIX v95 (2026-07-04): abrir con Blob URL (document.write dejaba la ventana en blanco en Chrome nuevo).
+  const docReporte = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">'
     + '<title>Reporte del Dia ' + f + '</title>'
     + '<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">'
     + '<style>*{box-sizing:border-box;margin:0;padding:0;}'
@@ -8204,8 +8217,9 @@ function descargarReporteDia() {
     + '</head><body>'
     + cuerpo
     + '<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},800);<\/script>'
-    + '</body></html>');
-  w.document.close();
+    + '</body></html>';
+  const w = _abrirVentanaImpresionBlob(docReporte);
+  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo. En la ventana que abre, elegí "Guardar como PDF".'); return; }
 }
 
 // ==================== IMPRIMIR PD ====================
@@ -8302,9 +8316,8 @@ function imprimirPD() {
       <tfoot><tr><td><b>$${totalGastosFull.toFixed(2)}</b></td><td colspan="2"><b>TOTAL GASTOS</b></td></tr></tfoot>
     </table>` : '';
 
-  const w = window.open('','_blank');
-  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
-  w.document.write(`<!DOCTYPE html><html lang="es"><head>
+  // FIX v95 (2026-07-04): abrir con Blob URL (document.write dejaba la ventana en blanco en Chrome nuevo).
+  const docPD = `<!DOCTYPE html><html lang="es"><head>
   <meta charset="UTF-8">
   <title>Prog. Diaria — ${f}</title>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">
@@ -8407,8 +8420,9 @@ function imprimirPD() {
   </div>
 
   <script>setTimeout(()=>window.print(),700);<\/script>
-  </body></html>`);
-  w.document.close();
+  </body></html>`;
+  const w = _abrirVentanaImpresionBlob(docPD);
+  if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente. Permite las ventanas emergentes e inténtalo de nuevo.'); return; }
 }
 // ==================== CONCILIACIÓN BANCARIA CUSCATLÁN ====================
 let concData; try { concData = JSON.parse(localStorage.getItem('mt_conc') || '{}'); } catch(e) { concData = {}; }
@@ -8449,7 +8463,7 @@ function renderConciliacion() {
       if (!c) return;
       const descLabel = resSlot ? `${col.nombre} — ${h} (${resSlot.nombre} ${resSlot.apellido})` : `${col.nombre} — ${h}`;
       if (slot.metodo === 'CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
-      if (slot.metodo === 'LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c * 0.95, comision: c * 0.05 });
+      if (slot.metodo === 'LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c * LINK_NETO, comision: c * LINK_COMISION });
     });
   });
   // Servicios extra (fuera de cuota) por CUSCA/LINK
@@ -8465,7 +8479,7 @@ function renderConciliacion() {
       if (!c) return;
       const descLabel = `${col.nombre} — Extra (${r.nombre} ${r.apellido||''})`;
       if (m==='CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
-      if (m==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c*0.95, comision: c*0.05 });
+      if (m==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c* LINK_NETO, comision: c* LINK_COMISION });
     });
   });
   // Cobros de pendientes registrados ESTE día por CUSCA/LINK
@@ -8475,7 +8489,7 @@ function renderConciliacion() {
     const r = reservas.find(rv=>rv.codigo===cb.codigo);
     const descLabel = `Cobro pendiente ${r ? (r.nombre+' '+(r.apellido||'')) : cb.codigo} (servicio ${cb.fechaOriginal||''})`;
     if (cb.metodo==='CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
-    if (cb.metodo==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c*0.95, comision: c*0.05 });
+    if (cb.metodo==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c* LINK_NETO, comision: c* LINK_COMISION });
   });
   // Otros ingresos con destino CUSCATLAN
   (pdDay.otrosIngresos || []).forEach(g => {
