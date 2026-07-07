@@ -2487,7 +2487,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-04-v95';
+const APP_VERSION = '2026-07-06-v96';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3310,7 +3310,11 @@ function _mergeAudit(local, nube) {
   return res;
 }
 
-const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', reactivada:'♻️ Reactivada', cambio_fecha:'📅 Cambio de fecha', cambio_precio:'💲 Cambio de precio', completada:'🏁 Completada' };
+const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', reactivada:'♻️ Reactivada', cambio_fecha:'📅 Cambio de fecha', cambio_precio:'💲 Cambio de precio', completada:'🏁 Completada',
+  // AUDITORIA v96 (2026-07-06): tipos nuevos — registro completo de quién cambió qué.
+  cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', cobrada:'💰 Cobro registrado' };
+// Recorta valores largos (direcciones/obs) para que la bitácora no crezca sin control.
+function _auditTrunc(s) { s = String(s == null ? '' : s).trim(); return s ? (s.length > 45 ? s.slice(0, 45) + '…' : s) : '—'; }
 function _fmtAuditFechaHora(iso) {
   try { return new Date(iso).toLocaleString('es-SV', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
   catch(e) { return iso || ''; }
@@ -5397,6 +5401,11 @@ function guardarEdicion() {
   const oldCosto = r.costo;
   const oldTel = r.tel; // FIX (2026-06-29): para migrar comentarios si cambia el teléfono
   const oldHoras = (r.horasOcupadas || [r.hora] || []).slice();
+  // AUDITORIA v96 (2026-07-06): capturar TODO lo sensible para la bitácora (pedido de Pedro:
+  // saber quién cambió qué — fecha, horario, precio, direcciones, teléfono, observaciones).
+  const oldCarga = r.carga || '';
+  const oldDescarga = r.descarga || '';
+  const oldObs = r.obs || '';
   const newFecha = document.getElementById('e-fecha').value;
   const horasCambiaron = (oldHoras.length !== horasEdit.length) || oldHoras.some((h,i) => h !== horasEdit[i]);
   const fechaCambio = oldFecha !== newFecha;
@@ -5506,9 +5515,21 @@ function guardarEdicion() {
     }
   }
   saveSingle(r);
-  // Registrar en la bitacora los cambios sensibles (fecha y precio).
+  // AUDITORIA v96 (2026-07-06): registrar en la bitácora TODOS los cambios sensibles con
+  // valor viejo → nuevo (antes solo fecha y precio). Permite rastrear si alguien baja un
+  // precio o cambia datos de un servicio (control anti "gasto hormiga").
   if (fechaCambio) _logAudit(r.codigo, 'cambio_fecha', `${fmtFecha(oldFecha)} → ${fmtFecha(newFecha)}`);
-  if (String(oldCosto || '') !== String(r.costo || '')) _logAudit(r.codigo, 'cambio_precio', `$${oldCosto || '0.00'} → $${r.costo || '0.00'}`);
+  // v96: comparar el precio como NUMERO. Con comparación de strings, una reserva vieja con
+  // costo '150' (sin decimales) generaba un falso "cambio_precio $150 → $150.00" al guardar
+  // sin tocar el precio (el form re-formatea con toFixed(2)). Detectado por el workflow de tests.
+  const _pViejo = parseFloat(oldCosto), _pNuevo = parseFloat(r.costo);
+  const _precioCambio = (isNaN(_pViejo) || isNaN(_pNuevo)) ? String(oldCosto || '') !== String(r.costo || '') : _pViejo.toFixed(2) !== _pNuevo.toFixed(2);
+  if (_precioCambio) _logAudit(r.codigo, 'cambio_precio', `$${oldCosto || '0.00'} → $${r.costo || '0.00'}`);
+  if (horasCambiaron) _logAudit(r.codigo, 'cambio_hora', `${oldHoras.join(' + ') || '—'} → ${horasEdit.join(' + ')}`);
+  if (oldTel !== r.tel) _logAudit(r.codigo, 'cambio_tel', `${oldTel || '—'} → ${r.tel || '—'}`);
+  if (oldCarga !== (r.carga || '')) _logAudit(r.codigo, 'cambio_carga', `${_auditTrunc(oldCarga)} → ${_auditTrunc(r.carga)}`);
+  if (oldDescarga !== (r.descarga || '')) _logAudit(r.codigo, 'cambio_descarga', `${_auditTrunc(oldDescarga)} → ${_auditTrunc(r.descarga)}`);
+  if (oldObs !== (r.obs || '')) _logAudit(r.codigo, 'cambio_obs', `${_auditTrunc(oldObs)} → ${_auditTrunc(r.obs)}`);
   renderAll();
   renderAgenda();
   alert('✅ Reservación actualizada.');
@@ -6444,7 +6465,7 @@ function buildColumna2(col, idx, f) {
         <!-- Actions row -->
         <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           ${!isSecondaryHora ? `<span style="font-size:10px;font-weight:700;color:#888;">Pago:</span>
-          <select onchange="updateSlot2('${f}',${idx},'${h}','metodo',this.value)"
+          <select ${isDiaCerrado(f)?'disabled title="Día cerrado"':''} onchange="updateSlot2('${f}',${idx},'${h}','metodo',this.value)"
             style="border:1px solid #d4d4d4;border-radius:5px;background:#fff;font-size:11px;font-weight:800;color:${mc};font-family:'Barlow',sans-serif;outline:none;cursor:pointer;padding:3px 6px;">
             ${METODOS_PAGO.map(mp=>`<option value="${mp}" ${slot.metodo===mp?'selected':''}>${mp}</option>`).join('')}
           </select>` : ''}
@@ -6599,7 +6620,7 @@ function buildColumna2(col, idx, f) {
         <div style="display:flex;gap:3px;align-items:center;">
           <!-- Propinas -->
           ${[0,1,2].map(pi=>`<input type="number" value="${propinas[pi]||''}" placeholder="🪙" min="0" step="1"
-            onchange="updatePropina('${f}',${idx},${pi},this.value)"
+            ${isDiaCerrado(f)?'disabled title="Día cerrado"':''} onchange="updatePropina('${f}',${idx},${pi},this.value)"
             style="width:36px;border:none;border-bottom:1.5px solid ${propinas[pi]?'#16a34a':'#e0e4ed'};padding:1px 2px;font-size:10px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:transparent;color:#16a34a;text-align:center;">`).join('')}
           <button onclick="abrirModalColumna(${idx})" style="background:var(--gris0);border:none;border-radius:5px;padding:3px 7px;font-size:11px;cursor:pointer;">✏️</button>
           <button id="elim-btn-${idx}" onclick="elimColumna(${idx})" style="background:#fee2e2;border:none;border-radius:5px;padding:3px 7px;font-size:11px;cursor:pointer;color:#d42b2b;">🗑</button>
@@ -6841,11 +6862,24 @@ function quitarExtension(f, colIdx, hora) {
 function updateSlot2(f, idx, hora, campo, valor) {
   if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar.');
+    // v96 (2026-07-06): re-render para que el select vuelva al valor REAL (antes quedaba
+    // mostrando el cambio rechazado y parecía que sí se podía modificar un día cerrado).
+    if (typeof renderPD === 'function') renderPD();
     return;
   }
   const day = getDayData(f);
   if (!day.columnas[idx]) return;
   if (!day.columnas[idx].slots[hora]) day.columnas[idx].slots[hora] = {carga:'',descarga:'',costo:'',metodo:'EFECTIVO'};
+  // AUDITORIA v96 (2026-07-06): registrar cambios de método de pago y de precio en la pizarra
+  // (con quién y valor viejo → nuevo). Solo si el slot tiene una reservación asignada.
+  const _slotAud = day.columnas[idx].slots[hora];
+  const _codAud = _slotAud.reservaCodigo;
+  if (_codAud && campo === 'metodo' && (_slotAud.metodo || 'EFECTIVO') !== valor) {
+    _logAudit(_codAud, 'cambio_metodo', `${hora}: ${_slotAud.metodo || 'EFECTIVO'} → ${valor}`);
+  }
+  if (_codAud && campo === 'costo' && String(_slotAud.costo || '') !== String(valor || '')) {
+    _logAudit(_codAud, 'cambio_precio', `pizarra ${hora}: $${_slotAud.costo || '0'} → $${valor || '0'}`);
+  }
   day.columnas[idx].slots[hora][campo] = valor;
   savePD();
   const contadosGlobal = new Set();
@@ -7488,8 +7522,15 @@ function cerrarDia() {
   const f = getPDFecha();
   const day = getDayData(f);
   if (day.cuentas.diaCerrado) {
+    // v96 (2026-07-06, pedido de Pedro): reabrir un día cerrado requiere el PIN de ADMINISTRADOR.
+    // Cualquiera puede cerrar; solo el admin puede reabrir. Queda registrado quién y cuándo.
+    const pinIngresado = prompt('🔒 Este día está CERRADO.\n\nPara desbloquearlo ingresá el PIN de ADMINISTRADOR:');
+    if (pinIngresado === null) return;
+    const esAdminPin = USUARIOS.some(u => u.rol === 'admin' && u.pin === String(pinIngresado).trim());
+    if (!esAdminPin) { alert('❌ PIN incorrecto. Solo el administrador puede reabrir un día cerrado.'); return; }
     if (!confirm('¿Desbloquear este día para editar? Los datos podrían alterarse.')) return;
     day.cuentas.diaCerrado = false;
+    day.cuentas._reabiertoPor = { por: _quienSoy(), en: new Date().toISOString() };
   } else {
     const tieneArqueo = CUENTAS.some(c => day.cuentas.arqueo && day.cuentas.arqueo[c]);
     if (!tieneArqueo) { alert('Ingresa el conteo real antes de cerrar el día.'); return; }
@@ -7531,6 +7572,7 @@ function cerrarDia() {
     // así el descuadre vs el conteo real se mide contra el valor correcto.
     try { recalcCerramos(); } catch(e) {}
     day.cuentas.diaCerrado = true;
+    day.cuentas._cerradoPor = { por: _quienSoy(), en: new Date().toISOString() }; // v96: registro de quién cerró
   }
   savePD();
   // Propagar al día siguiente: al CERRAR hereda el CONTEO REAL; al DESBLOQUEAR vuelve al cerramos.
@@ -7760,15 +7802,17 @@ function delMovimiento(i) {
 // ==================== COBRO DE PAGOS PENDIENTES ====================
 var _cobroCtx = null;
 function cobrarPendiente(codigo, fechaOriginal) {
+  // v96 (2026-07-06, pedido de Pedro): YA NO se exige desbloquear el día del servicio.
+  // El dinero entra al cuadre del DÍA DE COBRO (cobrosPendientes); en el día original solo
+  // se marca metadata (cobrado/fechaCobro/metodoCobro) que NO altera su cuadre — los
+  // PENDIENTE nunca suman en el día original (ver calcIngresosServiciosPorCuenta).
   const dayOrigCheck = getDayData(fechaOriginal);
-  if (dayOrigCheck?.cuentas?.diaCerrado) {
-    alert('⚠️ El día ' + fechaOriginal + ' está cerrado. Desbloqueá ese día para marcar el cobro o registrá el pago como un "otro ingreso" en el día actual.');
-    return;
-  }
+  const origCerrado = !!dayOrigCheck?.cuentas?.diaCerrado;
   const r = reservas.find(rv => rv.codigo === codigo);
   _cobroCtx = { codigo, fechaOriginal };
   const info = document.getElementById('cob-info');
-  if (info) info.textContent = r ? `${r.nombre} ${r.apellido||''} · $${r.costo||'0'} · ${fmtFecha(fechaOriginal)}` : codigo;
+  if (info) info.textContent = (r ? `${r.nombre} ${r.apellido||''} · $${r.costo||'0'} · ${fmtFecha(fechaOriginal)}` : codigo)
+    + (origCerrado ? ' · 🔒 día del servicio cerrado: el ingreso entra al día de cobro que elijás (el día cerrado no se toca)' : '');
   const fechaEl = document.getElementById('cob-fecha');
   if (fechaEl) fechaEl.value = getPDFecha();
   document.getElementById('mo-cobro').classList.add('open');
@@ -7844,6 +7888,9 @@ function confirmarCobroModal() {
   const dayCobro = getDayData(fechaCobro);
   if (!dayCobro.cobrosPendientes) dayCobro.cobrosPendientes = [];
   dayCobro.cobrosPendientes.push({ codigo, monto: montoCobrado, metodo: metodoFinal, fechaOriginal, fecha: fechaCobro });
+  // AUDITORIA v96 (2026-07-06): constancia permanente en el historial de la reservación de
+  // quién registró el cobro, cuánto, cómo y cuándo (aunque el día del servicio esté cerrado).
+  _logAudit(codigo, 'cobrada', `$${montoCobrado.toFixed(2)} ${metodoFinal} el ${fmtFecha(fechaCobro)} (servicio del ${fmtFecha(fechaOriginal)})`);
   // CRÍTICO: el cobro toca pdData (slot.cobrado) Y reservaciones (saveSingle dispara Realtime).
   // Sin flush + ventana de gracia, el sync traía pdData viejo y "desmarcaba" el cobro,
   // reapareciendo como pendiente. Subimos inmediato y protegemos con la ventana.
@@ -7866,12 +7913,10 @@ function delCobroPendiente(i) {
   const day = getDayData(f);
   const cobro = day.cobrosPendientes[i];
   if (cobro) {
-    // FIX F13 (2026-07-02): no tocar el día ORIGINAL si está cerrado (antes solo se chequeaba el día actual).
-    const dayOrigCheck = getDayData(cobro.fechaOriginal);
-    if (cobro.fechaOriginal !== f && dayOrigCheck?.cuentas?.diaCerrado) {
-      alert('⚠️ El día original del servicio (' + cobro.fechaOriginal + ') está cerrado. Desbloqueá ese día para revertir este cobro.');
-      return;
-    }
+    // v96 (2026-07-06): se quitó el bloqueo F13 por día original cerrado. Igual que al COBRAR,
+    // revertir solo toca metadata del día original (cobrado/fechaCobro/metodoCobro), que NO
+    // altera su cuadre (los PENDIENTE nunca suman ahí). El dinero se revierte en ESTE día,
+    // que sí debe estar abierto (guard isDiaCerrado() de arriba). Queda constancia en la bitácora.
     // Revertir el slot original o la reserva
     const dayOrig = getDayData(cobro.fechaOriginal);
     dayOrig.columnas.forEach(col => {
