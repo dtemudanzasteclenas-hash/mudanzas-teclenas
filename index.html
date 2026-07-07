@@ -487,6 +487,27 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 
   /* Toast save */
   #save-toast{bottom:14px!important;right:14px!important;font-size:12px!important;max-width:280px!important;padding:8px 14px!important;}
+
+  /* ===== PROG. DIARIA móvil (v97, 2026-07-07): nada se corta =====
+     Los grids del cuaderno tienen anchos fijos inline más anchos que la pantalla del
+     teléfono y .main{overflow-x:hidden} cortaba el sobrante. Solo CSS: se apuntan los
+     estilos inline exactos con [style*=...] y se compactan/apilan. Cero cambios de JS. */
+  /* Resumen de arriba: 5 columnas → 2 */
+  #pd-stats{grid-template-columns:repeat(2,1fr)!important;gap:8px!important;}
+  /* Menos padding en tabs de pizarra y cuaderno */
+  #pd-tab-pizarra{padding:10px!important;}
+  #pd-tab-cuaderno{padding:10px!important;}
+  #pd-tab-cuaderno>div{gap:12px!important;}
+  /* Filas de GASTOS y OTROS INGRESOS: monto|título|desc|fondo|X compactas (encabezado y filas JS usan el mismo inline) */
+  #pd-tab-cuaderno [style*="grid-template-columns:80px 1fr 1fr 90px 28px"]{grid-template-columns:60px 1fr 1fr 64px 22px!important;gap:4px!important;}
+  /* Filas de MOVIMIENTOS: monto|origen|destino|desc|X */
+  #pd-tab-cuaderno [style*="grid-template-columns:80px 110px 110px 1fr 28px"]{grid-template-columns:60px 72px 72px 1fr 22px!important;gap:4px!important;}
+  /* Inputs/selects del cuaderno: que quepan en su celda (min-width:0 permite encoger en grid) */
+  #pd-tab-cuaderno input,#pd-tab-cuaderno select{font-size:13px!important;padding:8px 6px!important;min-width:0!important;width:100%;box-sizing:border-box;}
+  /* CUENTAS: ABRIMOS/CERRAMOS/CONTEO REAL apiladas en vez de 3 columnas */
+  #pd-tab-cuaderno [style*="grid-template-columns:1fr 1fr 1fr"]{grid-template-columns:1fr!important;gap:14px!important;}
+  /* Total global del cuaderno: 4 columnas → 2x2 */
+  #pd-tab-cuaderno [style*="repeat(4,1fr)"]{grid-template-columns:1fr 1fr!important;}
 }
 
 /* Pantalla MUY pequeña (iPhone SE, etc.): simplificar más */
@@ -943,7 +964,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <div id="conc-ingresos-cusca"></div>
 
         <!-- Ingresos LINK -->
-        <div style="font-size:11px;font-weight:800;color:var(--gris2);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">🔗 Ingresos recibidos vía LINK <span style="font-weight:500;font-size:10px;">(neto -5%)</span></div>
+        <div style="font-size:11px;font-weight:800;color:var(--gris2);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">🔗 Ingresos recibidos vía LINK <span style="font-weight:500;font-size:10px;">(neto -3.772%)</span></div>
         <div id="conc-ingresos-link"></div>
 
         <!-- Gastos CUSCATLAN -->
@@ -2487,7 +2508,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-06-v96';
+const APP_VERSION = '2026-07-07-v97';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6103,7 +6124,7 @@ function renderPD() {
       <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -5% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
+      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
       <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
       <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>
     `;
@@ -6989,7 +7010,7 @@ function renderStats2(f) {
       <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -5% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
+      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
       <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
       <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>`;
   } catch(e) { console.warn('render stats2 error:', e); }
@@ -7247,7 +7268,7 @@ function renderCuaderno() {
       <div style="display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;">
         <span style="font-size:13px;font-weight:600;">EFECTIVO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#16a34a;">$${ing.EFECTIVO.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">CUSCA (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#1e4fa0;">$${ing.CUSCA.toFixed(2)}</span>
-        <span style="font-size:13px;font-weight:600;">LINK <span style="font-size:10px;font-weight:500;color:#7c3aed;">(bruto $${ing.LINK.toFixed(2)} − 5% = neto)</span></span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#7c3aed;">$${linkNeto.toFixed(2)}</span>
+        <span style="font-size:13px;font-weight:600;">LINK <span style="font-size:10px;font-weight:500;color:#7c3aed;">(bruto $${ing.LINK.toFixed(2)} − 3.772% = neto)</span></span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#7c3aed;">$${linkNeto.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">PENDIENTE</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#d97706;">$${ing.PENDIENTE.toFixed(2)}</span>
         ${ing.CANCELADO>0?`<span style="font-size:13px;font-weight:600;color:#991b1b;">CANCELADO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#991b1b;text-decoration:line-through;">$${ing.CANCELADO.toFixed(2)}</span>`:''}
         <div style="grid-column:1/-1;border-top:2px solid #1a2236;padding-top:6px;display:flex;justify-content:space-between;align-items:center;">
@@ -8586,7 +8607,7 @@ function renderConciliacion() {
             <span style="font-size:12px;color:var(--texto);">${escHtml(i.desc)}</span>
             <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:#7c3aed;">+$${i.neto.toFixed(2)}</span>
           </div>
-          <div style="font-size:10px;color:var(--gris2);">Bruto: $${i.bruto.toFixed(2)} — Comisión banco 5%: -$${i.comision.toFixed(2)}</div>
+          <div style="font-size:10px;color:var(--gris2);">Bruto: $${i.bruto.toFixed(2)} — Comisión banco 3.772%: -$${i.comision.toFixed(2)}</div>
         </div>`).join('');
     }
   }
@@ -9533,7 +9554,7 @@ function alertaPendientesUrgentes() {
       <select id="cob-metodo">
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
-        <option value="LINK">LINK → Cuscatlán mañana (95%)</option>
+        <option value="LINK">LINK → Cuscatlán mañana (96.228%)</option>
       </select>
     </div>
     <div class="fg" style="margin-top:12px;">
