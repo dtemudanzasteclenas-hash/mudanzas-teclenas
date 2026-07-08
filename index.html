@@ -1393,8 +1393,10 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <button class="btn btn-p" onclick="cambiarEst('completado')">🏁 Completado</button>
         <button class="btn btn-r" onclick="cambiarEst('cancelado')">❌ Cancelado</button>
       </div>
+      <div class="sec-div" style="margin-top:20px;">🪪 Propiedad de la reservación</div>
+      <div id="p-resumen-audit" style="font-size:12.5px;"></div>
       <div class="sec-div" style="margin-top:20px;">📋 Historial de esta reservación</div>
-      <p style="font-size:11px;color:var(--gris2);margin:4px 0 8px;">Quién la agendó, canceló o le cambió fecha/precio, y cuándo. Para seguimiento interno.</p>
+      <p style="font-size:11px;color:var(--gris2);margin:4px 0 8px;">Quién la agendó, canceló o le cambió cualquier dato, y cuándo. Para seguimiento interno.</p>
       <div id="p-historial"></div>
     </div>
   </div>
@@ -2508,7 +2510,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-07-v97';
+const APP_VERSION = '2026-07-08-v100';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3333,7 +3335,10 @@ function _mergeAudit(local, nube) {
 
 const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', reactivada:'♻️ Reactivada', cambio_fecha:'📅 Cambio de fecha', cambio_precio:'💲 Cambio de precio', completada:'🏁 Completada',
   // AUDITORIA v96 (2026-07-06): tipos nuevos — registro completo de quién cambió qué.
-  cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', cobrada:'💰 Cobro registrado' };
+  cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', cobrada:'💰 Cobro registrado',
+  // AUDITORIA v99 (2026-07-08): tipos nuevos — nombre/camión/personal/tipo de cliente,
+  // confirmación, cambio de estado genérico y reasignación de vendedor (solo admin).
+  cambio_nombre:'👤 Cambio de nombre del cliente', cambio_camion:'🚚 Cambio de camión', cambio_personal:'👷 Cambio de personal', cambio_tipocliente:'🧾 Cambio tipo de cliente', confirmada:'✅ Confirmada', cambio_estado:'🔄 Cambio de estado', cambio_vendedor:'🤝 Vendedor reasignado (admin)' };
 // Recorta valores largos (direcciones/obs) para que la bitácora no crezca sin control.
 function _auditTrunc(s) { s = String(s == null ? '' : s).trim(); return s ? (s.length > 45 ? s.slice(0, 45) + '…' : s) : '—'; }
 function _fmtAuditFechaHora(iso) {
@@ -3345,10 +3350,56 @@ function _renderHistorial(codigo) {
   if (!evs.length) return '<div style="font-size:12px;color:var(--gris2);padding:8px 0;">Sin registro. (Las reservaciones viejas no tienen historial; de aqui en adelante se registra todo.)</div>';
   evs.sort((a,b)=>(a.en||'').localeCompare(b.en||''));
   return evs.map(ev => {
-    const lbl = _AUDIT_LABELS[ev.tipo] || ev.tipo;
-    const det = ev.detalle ? ` <span style="color:var(--gris2);">— ${ev.detalle}</span>` : '';
-    return `<div style="padding:7px 0;border-bottom:1px solid var(--gris1);font-size:12.5px;line-height:1.4;"><strong>${lbl}</strong> por <strong style="color:var(--azul2);">${ev.por||'—'}</strong> · ${_fmtAuditFechaHora(ev.en)}${det}</div>`;
+    // v99: escapar tipo/por/detalle — el detalle lleva texto tipeado por el usuario
+    // (teléfonos, direcciones, motivos) y se pinta con innerHTML (mismo criterio del fix X3).
+    const lbl = _AUDIT_LABELS[ev.tipo] || escHtml(ev.tipo);
+    const det = ev.detalle ? ` <span style="color:var(--gris2);">— ${escHtml(ev.detalle)}</span>` : '';
+    return `<div style="padding:7px 0;border-bottom:1px solid var(--gris1);font-size:12.5px;line-height:1.4;"><strong>${lbl}</strong> por <strong style="color:var(--azul2);">${escHtml(ev.por||'—')}</strong> · ${_fmtAuditFechaHora(ev.en)}${det}</div>`;
   }).join('');
+}
+
+// AUDITORIA v99 (2026-07-08): resumen de propiedad y trazabilidad para la pestaña Estado.
+// Creador = r.vendedor (se fija UNA vez al crear y ningún flujo de edición lo toca; solo
+// adminCambiarVendedor puede reasignarlo, con evento en la bitácora). Fecha de creación =
+// created_at de Supabase (_creadoEn) o el evento 'creada'. Última modificación = último
+// evento de la bitácora posterior a la creación.
+function _renderResumenAudit(r) {
+  if (!r) return '';
+  const evs = (auditData && auditData[r.codigo]) ? auditData[r.codigo].slice() : [];
+  evs.sort((a,b)=>(a.en||'').localeCompare(b.en||''));
+  const evCreada = evs.find(e => e.tipo === 'creada');
+  const creadoPor = r.vendedor || (evCreada && evCreada.por) || '—';
+  const creadoEn = r._creadoEn || (evCreada && evCreada.en) || null;
+  const mods = evs.filter(e => e.tipo !== 'creada');
+  const ult = mods.length ? mods[mods.length - 1] : null;
+  const fila = (lbl, val) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--gris1);"><span style="color:var(--gris2);">${lbl}</span><strong style="text-align:right;">${escHtml(val)}</strong></div>`;
+  let html = fila('Creado por (vendedor)', creadoPor)
+    + fila('Fecha de creación', creadoEn ? _fmtAuditFechaHora(creadoEn) : '—')
+    + fila('Última modificación', ult ? _fmtAuditFechaHora(ult.en) : 'Sin modificaciones registradas')
+    + fila('Último usuario que modificó', ult ? (ult.por || '—') : '—');
+  if (_esAdmin()) html += `<button class="btn btn-gh btn-sm" style="margin-top:8px;" onclick="adminCambiarVendedor()">🤝 Reasignar vendedor (solo admin)</button>`;
+  return html;
+}
+
+// AUDITORIA v99: única vía permitida para cambiar el propietario (vendedor) de una reserva.
+// Solo admin. Queda registrado en la bitácora con valor viejo → nuevo.
+function adminCambiarVendedor() {
+  if (!_esAdmin()) { alert('🔒 Solo Pedro (admin) puede reasignar el vendedor de una reservación.'); return; }
+  const r = _resolveVerR();
+  if (!r) { alert('⚠️ No se pudo identificar la reservación.'); return; }
+  const nombres = USUARIOS.map(u => u.nombre);
+  const resp = prompt(`Vendedor actual: ${r.vendedor || '—'}\n\nEscribí el nombre del nuevo vendedor:\n(${nombres.join(', ')})`, r.vendedor || '');
+  if (resp === null) return;
+  const nuevo = resp.trim();
+  const match = nombres.find(n => n.toLowerCase() === nuevo.toLowerCase());
+  if (!match) { alert('⚠️ Nombre no válido. Tiene que ser uno de: ' + nombres.join(', ')); return; }
+  if (match === (r.vendedor || '')) return;
+  const viejo = r.vendedor || '—';
+  r.vendedor = match;
+  saveSingle(r);
+  _logAudit(r.codigo, 'cambio_vendedor', `${viejo} → ${match}`);
+  alert(`✅ Vendedor reasignado: ${viejo} → ${match}\n\nQuedó registrado en el historial.`);
+  verRes(r.codigo);
 }
 
 const AG_ROWS = ['8:00 AM', '11:00 AM', '2:30 PM', 'Nocturno'];
@@ -4027,6 +4078,19 @@ async function limpiarDuplicados() {
     });
     safeSetLS('mt_comentarios', JSON.stringify(comentarios));
   }
+  // AUDITORIA v99 (2026-07-08): mover la bitácora de las copias borradas al código
+  // sobreviviente — el historial completo se conserva, no se pierde con la limpieza.
+  try {
+    let _audCambio = false;
+    Object.keys(reapuntar).forEach(cv => {
+      if (!auditData[cv]) return;
+      const nv = reapuntar[cv];
+      auditData[nv] = _mergeAudit({ [nv]: auditData[nv] || [] }, { [nv]: auditData[cv] })[nv];
+      delete auditData[cv];
+      _audCambio = true;
+    });
+    if (_audCambio) { safeSetLS('mt_audit', JSON.stringify(auditData)); syncToSupabase('mt_audit', auditData); }
+  } catch(e) { console.warn('migrando bitácora en limpieza de duplicados:', e); }
   // Persistir local
   safeSetLS('mt2_reservas', JSON.stringify(reservas));
   safeSetLS('mt_aggrid', JSON.stringify(agGrid));
@@ -4146,6 +4210,24 @@ async function migrarTodosLosCodigosA6Digitos() {
       });
     }
   });
+  // AUDITORIA v99 (2026-07-08): migrar la bitácora mt_audit a los códigos nuevos. Antes el
+  // historial quedaba huérfano bajo el código viejo y la reservación renumerada aparecía
+  // "sin registro" (violaba la regla 8: cambiar codigo = actualizar EN CADENA).
+  try {
+    let _audCambio = false;
+    Object.keys(mapping).forEach(cv => {
+      if (fallidos.has(cv) || !auditData[cv]) return;
+      const nv = mapping[cv];
+      auditData[nv] = _mergeAudit({ [nv]: auditData[nv] || [] }, { [nv]: auditData[cv] })[nv];
+      delete auditData[cv];
+      _audCambio = true;
+    });
+    if (_audCambio) {
+      safeSetLS('mt_audit', JSON.stringify(auditData));
+      if (supabaseOK && typeof flushSyncToSupabase === 'function') await flushSyncToSupabase('mt_audit', auditData);
+      else syncToSupabase('mt_audit', auditData);
+    }
+  } catch(e) { console.warn('migrando bitácora de auditoría:', e); }
   // comentarios local
   if (typeof comentarios !== 'undefined' && comentarios) {
     Object.values(comentarios).forEach(arr => {
@@ -4434,6 +4516,8 @@ function removeFromGrid(f, key) {
   // para que no aparezca en "Sin asignar" de pizarra ni cuente en totales.
   // Si solo querés mover sin cancelar → arrastrá la celda a otra columna.
   if (!confirm(`¿CANCELAR la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Saldrá de la pizarra y no contará en totales\n• Quedará tachada en "Sin ubicar" hasta que la reactives o la borres\n\n💡 Si solo querés MOVERLA, arrastrala a otra celda en vez de tocar la X.\n\n¿Cancelar?`)) return;
+  // AUDITORIA v99: motivo de cancelación (opcional) — queda en la bitácora y en las obs.
+  const _motivoCancel = (prompt('Motivo de la cancelación (opcional):', '') || '').trim();
 
   // Quitar de TODAS las celdas de esta fecha (por si ocupaba varios horarios)
   if (codigo) {
@@ -4452,12 +4536,12 @@ function removeFromGrid(f, key) {
   // Marcar como cancelada y quitar de la pizarra (igual que eliminar())
   if (r) {
     r.estado = 'cancelado';
-    _agregarNotaCancelacion(r);
+    _agregarNotaCancelacion(r, _motivoCancel);
     // Limpieza COMPLETA: slots, cobros pendientes, flags _cobrado (v46 fix).
     _limpiarPDDataYCobrosPorCancelacion(r);
     savePD();
     saveSingle(r);
-    _logAudit(r.codigo, 'cancelada', 'desde la agenda');
+    _logAudit(r.codigo, 'cancelada', 'desde la agenda' + (_motivoCancel ? ' — ' + _motivoCancel : ''));
     try { renderPD(); } catch(e) {}
   }
   renderAll();
@@ -5121,7 +5205,10 @@ function guardar() {
       percheros: document.getElementById('m-percheros').value,
       obs: document.getElementById('m-obs-emp').value
     } : null,
-    vendedor: usuarioActual ? usuarioActual.nombre : ''
+    vendedor: usuarioActual ? usuarioActual.nombre : '',
+    // AUDITORIA v99: sello local de creación — se muestra de inmediato en "Propiedad de la
+    // reservación". En el próximo full sync lo reemplaza el created_at oficial de Supabase.
+    _creadoEn: new Date().toISOString()
   };
   reservas.unshift(r);
   saveSingle(r);
@@ -5161,6 +5248,9 @@ function verRes(idxOCodigo) {
   // Historial / bitacora de auditoria (pestaña Estado)
   const pHist = document.getElementById('p-historial');
   if (pHist) pHist.innerHTML = _renderHistorial(r.codigo);
+  // AUDITORIA v99: resumen de propiedad (creador, creación, última modificación)
+  const pResAud = document.getElementById('p-resumen-audit');
+  if (pResAud) pResAud.innerHTML = _renderResumenAudit(r);
   const unidadFull = r.unidad === 'grande' ? `Camión Grande – Furgón 7m / 10 ton${r.rampa ? ', '+r.rampa : ''}` :
                      r.unidad === 'mediano' ? 'Camión Mediano – Furgón 5m / 5 ton' : 'Camión Pequeño – Furgón 3m / 2 ton';
   document.getElementById('p-cod').textContent = r.codigo;
@@ -5427,6 +5517,12 @@ function guardarEdicion() {
   const oldCarga = r.carga || '';
   const oldDescarga = r.descarga || '';
   const oldObs = r.obs || '';
+  // AUDITORIA v99 (2026-07-08): también nombre, camión, personal y tipo de cliente.
+  const oldNombre = `${r.nombre || ''} ${r.apellido || ''}`.trim();
+  const oldUnidad = r.unidad || '';
+  const oldCamionEsp = r.camionEspecifico || '';
+  const oldPersonal = String(r.personal || '');
+  const oldTipoCliente = r.tipoCliente || '';
   const newFecha = document.getElementById('e-fecha').value;
   const horasCambiaron = (oldHoras.length !== horasEdit.length) || oldHoras.some((h,i) => h !== horasEdit[i]);
   const fechaCambio = oldFecha !== newFecha;
@@ -5551,6 +5647,14 @@ function guardarEdicion() {
   if (oldCarga !== (r.carga || '')) _logAudit(r.codigo, 'cambio_carga', `${_auditTrunc(oldCarga)} → ${_auditTrunc(r.carga)}`);
   if (oldDescarga !== (r.descarga || '')) _logAudit(r.codigo, 'cambio_descarga', `${_auditTrunc(oldDescarga)} → ${_auditTrunc(r.descarga)}`);
   if (oldObs !== (r.obs || '')) _logAudit(r.codigo, 'cambio_obs', `${_auditTrunc(oldObs)} → ${_auditTrunc(r.obs)}`);
+  // AUDITORIA v99: nombre, camión, personal y tipo de cliente con valor viejo → nuevo.
+  const _nombreNuevo = `${r.nombre || ''} ${r.apellido || ''}`.trim();
+  if (oldNombre !== _nombreNuevo) _logAudit(r.codigo, 'cambio_nombre', `${_auditTrunc(oldNombre)} → ${_auditTrunc(_nombreNuevo)}`);
+  const _camionViejo = `${oldUnidad}${oldCamionEsp ? ' (' + oldCamionEsp + ')' : ''}`;
+  const _camionNuevo = `${r.unidad || ''}${r.camionEspecifico ? ' (' + r.camionEspecifico + ')' : ''}`;
+  if (_camionViejo !== _camionNuevo) _logAudit(r.codigo, 'cambio_camion', `${_camionViejo || '—'} → ${_camionNuevo || '—'}`);
+  if (oldPersonal !== String(r.personal || '')) _logAudit(r.codigo, 'cambio_personal', `${oldPersonal || '—'} → ${r.personal || '—'} hombres`);
+  if (oldTipoCliente !== (r.tipoCliente || '')) _logAudit(r.codigo, 'cambio_tipocliente', `${oldTipoCliente || '—'} → ${r.tipoCliente || '—'}`);
   renderAll();
   renderAgenda();
   alert('✅ Reservación actualizada.');
@@ -5711,10 +5815,12 @@ function _limpiarPDDataYCobrosPorCancelacion(r) {
 
 // Agrega una nota de cancelación a r.obs SIN borrar las observaciones existentes.
 // Si ya hay una nota previa de cancelación (mismo prefijo), no la duplica.
-function _agregarNotaCancelacion(r) {
+function _agregarNotaCancelacion(r, motivo) {
   if (!r) return;
   const hoy = new Date().toLocaleDateString('es-SV',{day:'2-digit',month:'long',year:'numeric'});
-  const nota = `Servicio cancelado por el cliente el ${hoy}`;
+  // v99: si hay motivo, va en la misma línea (el prefijo no cambia — _quitarNotaCancelacion
+  // y el reemplazo de nota previa dependen de ese prefijo).
+  const nota = `Servicio cancelado por el cliente el ${hoy}` + (motivo ? ` — Motivo: ${motivo}` : '');
   const obsActual = (r.obs || '').trim();
   // Si ya existe una nota de cancelación previa (mismo prefijo), reemplazarla por la nueva fecha
   // pero conservar todo lo demás. Esto evita acumular notas si se cancela/reactiva varias veces.
@@ -5745,11 +5851,16 @@ function cambiarEst(est) {
   // GUARD día cerrado: no tocar reservaciones de un día ya cuadrado/cerrado (corrompe el arqueo).
   if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cambiar o cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const _estadoAntes = r.estado;
+  // AUDITORIA v99: si ya está en ese estado, no hay nada que cambiar (evita eventos duplicados).
+  if (_estadoAntes === est) { alert(`La reservación ya está en estado: ${est}`); return; }
   const nombre = `${r.nombre} ${r.apellido||''}`.trim();
+  let _motivoCancel = '';
   // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
   if (est === 'cancelado') {
     if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
-    _agregarNotaCancelacion(r);
+    // AUDITORIA v99: motivo de cancelación (opcional) — queda en la bitácora y en las obs.
+    _motivoCancel = (prompt('Motivo de la cancelación (opcional):', '') || '').trim();
+    _agregarNotaCancelacion(r, _motivoCancel);
     // Quitar de agGrid y pdData (mismo comportamiento que eliminar())
     const agDay = agGrid[r.fecha];
     if (agDay?.cells) {
@@ -5768,9 +5879,12 @@ function cambiarEst(est) {
   }
   r.estado = est;
   saveSingle(r);
-  if (est === 'cancelado') _logAudit(r.codigo, 'cancelada', '');
+  // AUDITORIA v99: TODO cambio de estado deja evento (antes pendiente→confirmado no se registraba).
+  if (est === 'cancelado') _logAudit(r.codigo, 'cancelada', _motivoCancel || '');
   else if (_estadoAntes === 'cancelado') _logAudit(r.codigo, 'reactivada', `→ ${est}`);
   else if (est === 'completado') _logAudit(r.codigo, 'completada', '');
+  else if (est === 'confirmado') _logAudit(r.codigo, 'confirmada', '');
+  else _logAudit(r.codigo, 'cambio_estado', `${_estadoAntes || '—'} → ${est}`);
   renderAll();
   try { renderAgenda(); } catch(e) {}
   try { renderPD(); } catch(e) {}
@@ -5873,8 +5987,10 @@ function eliminar(idxOCodigo) {
   if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const nombre = `${r.nombre} ${r.apellido || ''}`.trim();
   if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+  // AUDITORIA v99: motivo de cancelación (opcional) — queda en la bitácora y en las obs.
+  const _motivoCancel = (prompt('Motivo de la cancelación (opcional):', '') || '').trim();
   r.estado = 'cancelado';
-  _agregarNotaCancelacion(r);
+  _agregarNotaCancelacion(r, _motivoCancel);
   // Quitar de la agenda visual (si estaba ubicada) para que no confunda
   const agDay = agGrid[r.fecha];
   if (agDay?.cells) {
@@ -5891,7 +6007,7 @@ function eliminar(idxOCodigo) {
   _limpiarPDDataYCobrosPorCancelacion(r);
   savePD();
   saveSingle(r);
-  _logAudit(r.codigo, 'cancelada', '');
+  _logAudit(r.codigo, 'cancelada', _motivoCancel || '');
   renderAll();
   renderAgenda();
   try { renderPD(); } catch(e) {}
@@ -5933,6 +6049,30 @@ const MOTORISTAS = new Set([
   'Jose Roberto García Alvarado',
   'Fabio Jose González Coto',
 ]);
+
+// ==================== ROSTER OFICIAL DE APOYO (28) ====================
+// Fuente de verdad: CEREBRO/03-operaciones/recursos-humanos/personal-completo-apoyo.md (8-jul-2026).
+// Nombre + N° de DUI. Los primeros 25 nombres coinciden EXACTO con EMPLEADOS (misma grafia)
+// para que el DUI y el autocompletado apunten a la MISMA persona sin duplicar por acentos.
+// Los 3 ultimos son eventuales recurrentes que no estan en la planta fija (checkboxes).
+// Solo lectura: no toca finanzas, cuadre, slots ni sync. Uso: autocompletado de ayudantes.
+const _DUIS_EMPLEADOS = ['05398325-7','03963788-4','01084527-4','04791545-8','02439317-4','06279533-6','03470911-5','04899216-0','04998056-4','04543696-1','04103053-5','05656598-5','05487151-8','05651643-1','04183746-6','05087793-6','02737464-0','06220567-4','07431975-6','03803056-8','04033912-2','06852786-2','08262843-6','00140723-9','08438869-2'];
+const PERSONAL_ROSTER = [
+  ...EMPLEADOS.map((nombre,i) => ({ nombre, dui: _DUIS_EMPLEADOS[i] || '' })),
+  { nombre:'Joel de Jesus Hernandez Martinez', dui:'' },          // DUI PENDIENTE de escanear
+  { nombre:'Cesar Alberto Monterroza Menjivar', dui:'06739473-7' },
+  { nombre:'Pablo Elias Soriano Diaz', dui:'07568077-8' },
+];
+// Nombres para el <datalist> reutilizable de ayudantes eventuales (autocompletado).
+const NOMBRES_PERSONAL = PERSONAL_ROSTER.map(p => p.nombre);
+
+// Crea/actualiza el <datalist id="dl-personal"> una sola vez; idempotente.
+function ensureDatalistPersonal() {
+  let dl = document.getElementById('dl-personal');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'dl-personal'; document.body.appendChild(dl); }
+  dl.innerHTML = NOMBRES_PERSONAL.map(n => `<option value="${n}"></option>`).join('');
+}
+
 const HORARIOS = ['8:00 AM','11:00 AM','2:30 PM'];
 const METODOS_PAGO = ['EFECTIVO','CUSCA','LINK','PENDIENTE','CANCELADO'];
 const LINK_NETO = 0.96228;    // FIX (2026-07-04): comision real link Cuscatlan = 3.772% medida en conciliacion de junio (antes se asumia 5%)
@@ -6304,6 +6444,8 @@ function buildColumnaTV(col, idx, f) {
   }).join('');
 
   // Total del equipo (suma de reservaciones asignadas, sin doble conteo multi-hora)
+  // FIX A1-TV (2026-07-08): criterio unificado A1 — costo de la celda si tiene (>0),
+  // si no el de la reserva. Antes sumaba slot.costo + reserva.costo (badge inflado).
   const contados = new Set();
   let total = 0;
   HORARIOS.forEach(h => {
@@ -6312,12 +6454,14 @@ function buildColumnaTV(col, idx, f) {
     const m = s.metodo || 'EFECTIVO';
     if (m === 'CANCELADO') return;
     const codigo = s.reservaCodigo;
+    const cSlot = parseFloat(s.costo) || 0;
+    let cRes = 0;
     if (codigo && !contados.has(codigo)) {
       const r = reservas.find(rv => rv.codigo === codigo);
-      if (r) total += parseFloat(r.costo) || 0;
+      if (r) cRes = parseFloat(r.costo) || 0;
       contados.add(codigo);
     }
-    total += parseFloat(s.costo) || 0;
+    total += cSlot > 0 ? cSlot : cRes;
   });
 
   return `<div class="tv-pz-col" style="border-top:4px solid ${col.finalizada?'#16a34a':borderColor};${col.finalizada?'opacity:.55;':''}">
@@ -7027,6 +7171,8 @@ function abrirModalColumna(editIdx=null) {
   document.getElementById('col-nombre').value = col ? col.nombre : '';
   document.getElementById('col-camion').value = col ? col.camion : '';
 
+  ensureDatalistPersonal(); // datalist de autocompletado para ayudantes eventuales
+
   // Find employees already assigned to OTHER teams today
   const asignadosOtros = new Set();
   day.columnas.forEach((c2, ci) => {
@@ -7079,6 +7225,7 @@ function addExtraInput(valor) {
   div.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
   div.innerHTML = `
     <input type="text" class="extra-nombre" value="${valor}" placeholder="Nombre del ayudante eventual..."
+      list="dl-personal" autocomplete="off"
       style="flex:1;border:1.5px solid #d97706;border-radius:6px;padding:7px 10px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;background:#fef9f0;">
     <button onclick="this.parentElement.remove();_extraCount--;" style="background:#fee2e2;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;color:#d42b2b;">✕</button>`;
   cont.appendChild(div);
@@ -9356,12 +9503,17 @@ function cambiarEstRapido(idxOCodigo, est) {
   // GUARD día cerrado: no cambiar estado de reservas de un día ya cuadrado.
   if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado. Desbloqueá ese día en Programación para cambiarla.`); return; }
   const _estadoAntes = r.estado;
+  // AUDITORIA v99: no-op si ya está en ese estado (evita eventos duplicados en la bitácora).
+  if (_estadoAntes === est) { renderNotificaciones(); return; }
   if (est !== 'cancelado') _quitarNotaCancelacion(r);
   r.estado = est;
   saveSingle(r);
   if (est === 'cancelado') _logAudit(r.codigo, 'cancelada', '');
   else if (_estadoAntes === 'cancelado') _logAudit(r.codigo, 'reactivada', `→ ${est}`);
   else if (est === 'completado') _logAudit(r.codigo, 'completada', '');
+  // AUDITORIA v99: registrar también confirmaciones y cualquier otro cambio de estado.
+  else if (est === 'confirmado') _logAudit(r.codigo, 'confirmada', '');
+  else _logAudit(r.codigo, 'cambio_estado', `${_estadoAntes || '—'} → ${est}`);
   renderAll();
   renderNotificaciones();
 }
