@@ -1610,19 +1610,111 @@ function _contarItemsFinancieros(day) {
   const cb = (day.cobrosPendientes||[]).filter(x => parseFloat(x.monto)>0).length;
   return g + oi + mv + cb;
 }
-// Merge que NUNCA pierde datos del cuaderno: base = nube, pero si una fecha LOCAL tiene más
-// items financieros que la nube (gastos no subidos aún), conserva el local. También conserva
-// fechas que solo existen localmente.
-function _mergePdDataSeguro(local, nube) {
-  const resultado = {};
-  Object.keys(nube||{}).forEach(f => { resultado[f] = nube[f]; });
-  Object.keys(local||{}).forEach(f => {
-    const nLocal = _contarItemsFinancieros(local[f]);
-    const nNube  = _contarItemsFinancieros(nube && nube[f]);
-    if (!nube || !(f in nube)) { resultado[f] = local[f]; return; } // solo existe local
-    if (nLocal > nNube) { resultado[f] = local[f]; }                 // local tiene gastos no subidos
+// ==================== MERGE FINO POR ÍTEM (v101, 2026-07-09) ====================
+// PROBLEMA que resuelve (pendiente P2): el merge viejo elegía el DÍA COMPLETO de un solo lado
+// (el que tuviera MÁS items). Si dos personas anotaban gastos del MISMO día en compus distintas,
+// el lado con menos items se DESCARTABA entero → se perdían gastos, o (por la ventana de gracia)
+// se duplicaban restos del día anterior. Ahora cada gasto/ingreso/movimiento/cobro es un ÍTEM
+// con identidad propia (`_id`), marca de tiempo (`_ts`) y, al borrarlo, una "tumba" (`_tomb`).
+// El merge UNE los ítems de ambos lados: si un id existe en los dos, gana el de `_ts` más nuevo;
+// si fue borrado (tumba con ts >= a la última edición), queda borrado y no "resucita".
+const _LISTAS_FIN = ['gastos','otrosIngresos','movimientos','cobrosPendientes'];
+
+function _hashStr(s) { let h = 5381; s = String(s); for (let i=0;i<s.length;i++) h = ((h<<5)+h + s.charCodeAt(i)) >>> 0; return h.toString(36); }
+// id para ítems NUEVOS (único por dispositivo/tiempo).
+function _itemId() { return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+// Clave de CONTENIDO de un ítem (para migrar datos viejos sin _id de forma estable entre compus).
+function _claveContenido(it) {
+  return (it.titulo||it.desc||'') + '|' + (it.monto||'') + '|' +
+         (it.fondo||it.destino||it.origen||'') + '|' + (it.codigo||'') + '|' + (it.metodo||'');
+}
+// id DETERMINISTA para ítems VIEJOS (sin _id): depende del CONTENIDO + número de OCURRENCIA (no del
+// índice absoluto). Así dos compus generan el MISMO id para la misma fila histórica AUNQUE una tenga
+// gastos extra sin subir que corran las posiciones → no se duplica al migrar, y dos filas idénticas
+// del mismo día (ocurrencia 0 y 1) conservan ids distintos y no se colapsan.
+function _idLegacyDeterminista(campo, claveContenido, occ) {
+  return 'l' + _hashStr(campo + '|' + claveContenido + '|' + occ);
+}
+// Poda de tumbas viejas (ya propagadas a todas las compus) para que no crezcan sin límite.
+function _gcTombs(day) {
+  if (!day || !day._tomb) return;
+  const limite = Date.now() - 14*24*60*60*1000; // 14 días
+  Object.keys(day._tomb).forEach(campo => {
+    const m = day._tomb[campo]; if (!m) return;
+    Object.keys(m).forEach(id => { if ((+m[id]||0) < limite) delete m[id]; });
   });
-  return resultado;
+}
+// Asegura _id/_ts en las 4 listas y la estructura de tumbas. Idempotente (se puede llamar siempre).
+function _asegurarIdsItems(day) {
+  if (!day || typeof day !== 'object') return;
+  if (!day._tomb) day._tomb = {};
+  _LISTAS_FIN.forEach(campo => {
+    if (!day._tomb[campo]) day._tomb[campo] = {};
+    const arr = Array.isArray(day[campo]) ? day[campo] : [];
+    const cont = {}; // contador de ocurrencias por clave de contenido
+    arr.forEach((it) => {
+      if (it && typeof it === 'object' && !it._id) {
+        const ck = _claveContenido(it);
+        const occ = (cont[ck] = (cont[ck]||0) + 1) - 1;
+        it._id = _idLegacyDeterminista(campo, ck, occ);
+        if (it._ts == null) it._ts = 1; // histórico viejo: cualquier edición real (ts=now) lo supera
+      }
+    });
+  });
+  _gcTombs(day);
+}
+// Une dos listas de ítems (local + nube) por _id, respetando ediciones (_ts) y borrados (tumbas).
+function _mergeItems(aArr, bArr, aTomb, bTomb) {
+  aArr = Array.isArray(aArr) ? aArr : [];
+  bArr = Array.isArray(bArr) ? bArr : [];
+  // tumbas: por id, el ts de borrado MÁS nuevo de ambos lados.
+  const tomb = {};
+  Object.keys(aTomb||{}).forEach(id => { tomb[id] = +aTomb[id]||0; });
+  Object.keys(bTomb||{}).forEach(id => { const t=+bTomb[id]||0; if (!(id in tomb) || t > tomb[id]) tomb[id] = t; });
+  // unión por id: gana el _ts más nuevo. Orden: primero nube, luego los ítems que solo tiene el local.
+  const byId = new Map();
+  const consider = (it) => {
+    if (!it || typeof it !== 'object' || !it._id) return;
+    const prev = byId.get(it._id);
+    if (!prev) { byId.set(it._id, it); return; }
+    if ((+it._ts||0) >= (+prev._ts||0)) byId.set(it._id, it);
+  };
+  bArr.forEach(consider);
+  aArr.forEach(consider); // empates de ts → gana el local (las teclas más frescas del que edita)
+  const out = [];
+  byId.forEach((it, id) => {
+    const t = tomb[id];
+    if (t != null && t >= (+it._ts||0)) return; // borrado DESPUÉS de la última edición → queda borrado
+    out.push(it);
+  });
+  return { items: out, tomb };
+}
+// Merge de todo pdData: por fecha, las 4 listas financieras se UNEN ítem por ítem; las columnas de
+// la pizarra y las cuentas se toman del lado con más items (misma elección conservadora de siempre).
+function _mergePdDataSeguro(local, nube) {
+  const out = {};
+  const fechas = new Set([...Object.keys(nube||{}), ...Object.keys(local||{})]);
+  fechas.forEach(f => {
+    const L = local && local[f];
+    const N = nube && nube[f];
+    if (!L) { out[f] = N; return; }
+    if (!N) { out[f] = L; return; }
+    _asegurarIdsItems(L); _asegurarIdsItems(N);
+    // Base del día (columnas/cuentas/escalares): el lado con MÁS items financieros, como antes.
+    const base = (_contarItemsFinancieros(L) > _contarItemsFinancieros(N)) ? L : N;
+    const merged = Object.assign({}, base);
+    const tombOut = {};
+    _LISTAS_FIN.forEach(campo => {
+      const at = (L._tomb && L._tomb[campo]) || {};
+      const bt = (N._tomb && N._tomb[campo]) || {};
+      const r = _mergeItems(L[campo], N[campo], at, bt);
+      merged[campo] = r.items;
+      tombOut[campo] = r.tomb;
+    });
+    merged._tomb = tombOut;
+    out[f] = merged;
+  });
+  return out;
 }
 
 async function syncAllFromSupabase(silent, hardReplace=false) {
@@ -2510,7 +2602,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-08-v100';
+const APP_VERSION = '2026-07-09-v101';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -2863,6 +2955,25 @@ function genCod() {
   }
   // Fallback ultra improbable: sufijo extra random para asegurar unicidad
   return _formatCod6() + '-' + Math.random().toString(36).substring(2,4).toUpperCase();
+}
+// FIX B1 (2026-07-09): genera un código único verificándolo TAMBIÉN contra la nube.
+// genCod() solo mira los códigos LOCALES; dos compus que no ven la misma lista (offline o
+// justo antes de un sync) podían generar el mismo código y, como el guardado es upsert por
+// 'codigo', una reserva pisaba a la otra en silencio. Aquí, si hay conexión, se confirma que
+// el código no exista ya en Supabase antes de usarlo y se reintenta si choca. Offline: cae al
+// mejor esfuerzo con unicidad local (comportamiento previo), sin bloquear el alta.
+async function _genCodUnicoNube(maxTries = 8) {
+  for (let i = 0; i < maxTries; i++) {
+    const c = genCod();
+    if (!sb || !supabaseOK) return c;
+    try {
+      const { data, error } = await sb.from('reservaciones').select('codigo').eq('codigo', c).limit(1);
+      if (error) return c;               // error de red → no bloquear el alta
+      if (!data || data.length === 0) return c;  // libre en la nube
+      // ocupado en la nube → seguir el loop y probar otro código
+    } catch(e) { return c; }
+  }
+  return genCod();  // fallback ultra improbable
 }
 
 // ==================== NAV ====================
@@ -5133,7 +5244,7 @@ function fmtCosto(input) {
   input.value = v;
 }
 
-function guardar() {
+async function guardar() {
   const nombre = document.getElementById('f-nombre').value.trim();
   const tel = _recolectarTelefonos('f-tel','f-tels-extra');
   const fecha = document.getElementById('f-fecha').value;
@@ -5175,7 +5286,7 @@ function guardar() {
   const horasExtra = horasSeleccionadas.slice(1);
 
   const r = {
-    codigo: genCod(),
+    codigo: await _genCodUnicoNube(),
     nombre, apellido: document.getElementById('f-apellido').value.trim(),
     tel, email: document.getElementById('f-email').value.trim(),
     fecha, hora: horaPrincipal,
@@ -5602,6 +5713,9 @@ function guardarEdicion() {
       // FIX M3 (2026-05-30): quitar cobros pendientes registrados para esta reserva en el día viejo.
       if (Array.isArray(pdOld.cobrosPendientes)) {
         const antes = pdOld.cobrosPendientes.length;
+        // v101: tumba de los cobros quitados para que el merge no los resucite desde otra compu.
+        if (!pdOld._tomb) pdOld._tomb={}; if(!pdOld._tomb.cobrosPendientes) pdOld._tomb.cobrosPendientes={};
+        pdOld.cobrosPendientes.forEach(cb => { if (cb.codigo === r.codigo && cb._id) pdOld._tomb.cobrosPendientes[cb._id]=Date.now(); });
         pdOld.cobrosPendientes = pdOld.cobrosPendientes.filter(cb => cb.codigo !== r.codigo);
         if (pdOld.cobrosPendientes.length !== antes) cambioPD = true;
       }
@@ -5804,6 +5918,9 @@ function _limpiarPDDataYCobrosPorCancelacion(r) {
   //    haber registrado en otro día distinto al de la reserva)
   Object.values(pdData).forEach(day => {
     if (Array.isArray(day.cobrosPendientes)) {
+      // v101: tumba de los cobros quitados (no resucitar por merge).
+      if (!day._tomb) day._tomb={}; if(!day._tomb.cobrosPendientes) day._tomb.cobrosPendientes={};
+      day.cobrosPendientes.forEach(cb => { if (cb.codigo === r.codigo && cb._id) day._tomb.cobrosPendientes[cb._id]=Date.now(); });
       day.cobrosPendientes = day.cobrosPendientes.filter(cb => cb.codigo !== r.codigo);
     }
   });
@@ -6151,6 +6268,8 @@ function getDayData(f) {
   if (!pdData[f].otrosIngresos) pdData[f].otrosIngresos = [];
   if (!pdData[f].movimientos) pdData[f].movimientos = [];
   if (!pdData[f].cobrosPendientes) pdData[f].cobrosPendientes = [];
+  // v101: identidad estable (_id) + timestamps + tumbas para el merge fino multi-dispositivo.
+  _asegurarIdsItems(pdData[f]);
   // init slots
   (pdData[f].columnas||[]).forEach(col => {
     if (!col.slots) col.slots = {};
@@ -7456,7 +7575,7 @@ function renderCuaderno() {
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
             <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;color:#16a34a;">$${parseFloat(cb.monto).toFixed(2)}</span>
-            ${!day.cuentas.diaCerrado ? `<button onclick="delCobroPendiente(${i})" style="background:#fee2e2;border:none;border-radius:5px;padding:3px 6px;color:#d42b2b;font-size:11px;cursor:pointer;">🗑</button>` : ''}
+            ${!day.cuentas.diaCerrado ? `<button onclick="delCobroPendiente('${cb._id}')" style="background:#fee2e2;border:none;border-radius:5px;padding:3px 6px;color:#d42b2b;font-size:11px;cursor:pointer;">🗑</button>` : ''}
           </div>
         </div>`;
       }).join('');
@@ -7702,6 +7821,9 @@ function cerrarDia() {
   } else {
     const tieneArqueo = CUENTAS.some(c => day.cuentas.arqueo && day.cuentas.arqueo[c]);
     if (!tieneArqueo) { alert('Ingresa el conteo real antes de cerrar el día.'); return; }
+    // FIX P5 (2026-07-09): avisar EXPLÍCITAMENTE qué cuentas quedan SIN contar antes de cerrar.
+    // Una cuenta sin arqueo hereda su valor TEÓRICO (cerramos) al cerrar → puede ocultar un descuadre en silencio.
+    const _sinContar = CUENTAS.filter(c => !(day.cuentas.arqueo && String(day.cuentas.arqueo[c] || '').trim() !== ''));
     // Asistente de cierre: revisar pendientes antes de bloquear
     let confirmados = 0, sinMarcar = [];
     (day.columnas||[]).forEach(col => {
@@ -7734,6 +7856,7 @@ function cerrarDia() {
     if (sinMarcar.length) resumen += `⚠️ ${sinMarcar.length} sin marcar como completado:\n   - ${sinMarcar.slice(0,6).join('\n   - ')}${sinMarcar.length>6?'\n   ...':''}\n`;
     if (linkHoy>0) resumen += `💳 LINK $${linkHoy.toFixed(2)} cae mañana en CUSCATLÁN\n`;
     if (pendCobro>0) resumen += `🟡 ${pendCobro} cobro(s) PENDIENTE sin marcar\n`;
+    if (_sinContar.length) resumen += `🔴 CUENTAS SIN CONTAR: ${_sinContar.join(', ')}\n   Se cerrarán con su valor teórico (podría ocultar un descuadre). Si podés, contá esas cuentas antes de cerrar.\n`;
     resumen += `\n¿Cerrar el día de todos modos? No podrás editar hasta desbloquear.`;
     if (!confirm(resumen)) return;
     // Refrescar el cerramos ANTES de congelarlo (por si había un recálculo en cola/debounce),
@@ -7777,7 +7900,7 @@ function updateCuenta(f, tipo, cuenta, val) {
 function addGasto() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
-  day.gastos.push({monto:'',titulo:'',desc:'',fondo:'CAJA CHICA'});
+  day.gastos.push({_id:_itemId(), _ts:Date.now(), monto:'',titulo:'',desc:'',fondo:'CAJA CHICA'});
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderGastos();
@@ -7790,19 +7913,19 @@ function renderGastos() {
   const dis = day.cuentas.diaCerrado ? 'disabled' : '';
   const gastosHtml = day.gastos.length===0
     ? '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin gastos registrados.</div>'
-    : day.gastos.map((g,i)=>`
+    : day.gastos.map((g)=>`
       <div style="display:grid;grid-template-columns:80px 1fr 1fr 90px 28px;gap:6px;align-items:center;margin-bottom:6px;">
-        <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateGasto(${i},'monto',this.value)" ${dis}
+        <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateGasto('${g._id}','monto',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:#d42b2b;">
-        <input type="text" value="${escHtml(g.titulo)}" placeholder="Título" list="dl-titulos-gastos" oninput="updateGasto(${i},'titulo',this.value)" ${dis}
+        <input type="text" value="${escHtml(g.titulo)}" placeholder="Título" list="dl-titulos-gastos" oninput="updateGasto('${g._id}','titulo',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateGasto(${i},'desc',this.value)" ${dis}
+        <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateGasto('${g._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <select onchange="updateGasto(${i},'fondo',this.value)" ${dis}
+        <select onchange="updateGasto('${g._id}','fondo',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
           ${FONDOS.map(fd=>`<option value="${fd}" ${g.fondo===fd?'selected':''}>${fd}</option>`).join('')}
         </select>
-        <button onclick="delGasto(${i})" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
+        <button onclick="delGasto('${g._id}')" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
       </div>`).join('');
 
   // Renglón SOLO-LECTURA de propinas (Opción A): las propinas se anotan en los equipos
@@ -7822,25 +7945,34 @@ function renderGastos() {
   const el = document.getElementById('total-gastos'); if(el) el.textContent='$'+total.toFixed(2);
 }
 
-function updateGasto(i, campo, val) {
+function updateGasto(id, campo, val) {
   if (isDiaCerrado()) return;
-  const f=getPDFecha();
-  if (!getDayData(f).gastos[i]) return; // FIX (2026-06-29): guard si un merge dejó el array más corto
-  getDayData(f).gastos[i][campo]=val;
+  const f=getPDFecha(); const day=getDayData(f);
+  // v101: resolver por _id (no por índice) → un merge que reordene la lista ya no edita la fila
+  // equivocada (era la causa del "gasto híbrido" duplicado).
+  const g = (day.gastos||[]).find(x=>x._id===id);
+  if (!g) return;
+  g[campo]=val; g._ts=Date.now();
   // Guardado LOCAL instantáneo (sin red, sin re-render): cada tecla se persiste pero
   // NO dispara el ciclo Realtime que re-dibujaba el bloque y borraba la fila en curso.
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   // Solo actualizar el total visible (cálculo liviano, no re-renderiza inputs).
-  const total=getDayData(f).gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
+  const total=day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el=document.getElementById('total-gastos'); if(el) el.textContent='$'+total.toFixed(2);
   // Recálculo de cuentas + sync a la nube: DIFERIDOS hasta que el usuario deja de escribir.
   _programarSyncFinanzas();
 }
 
-function delGasto(i) {
+function delGasto(id) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
-  const f=getPDFecha(); getDayData(f).gastos.splice(i,1);
+  const f=getPDFecha(); const day=getDayData(f);
+  const idx=(day.gastos||[]).findIndex(x=>x._id===id);
+  if (idx<0) return;
+  // v101: registrar la "tumba" del borrado para que el merge NO lo resucite desde otra compu.
+  if (!day._tomb) day._tomb={}; if(!day._tomb.gastos) day._tomb.gastos={};
+  day._tomb.gastos[id]=Date.now();
+  day.gastos.splice(idx,1);
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderGastos(); renderStats2(f);
@@ -7852,7 +7984,7 @@ function addOtroIngreso() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
   if (!day.otrosIngresos) day.otrosIngresos = [];
-  day.otrosIngresos.push({monto:'',titulo:'',desc:'',destino:'CAJA CHICA'});
+  day.otrosIngresos.push({_id:_itemId(), _ts:Date.now(), monto:'',titulo:'',desc:'',destino:'CAJA CHICA'});
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderOtrosIngresos();
@@ -7867,31 +7999,32 @@ function renderOtrosIngresos() {
   if (day.otrosIngresos.length===0) {
     cont.innerHTML = '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin otros ingresos registrados.</div>';
   } else {
-    cont.innerHTML = day.otrosIngresos.map((g,i)=>`
+    cont.innerHTML = day.otrosIngresos.map((g)=>`
       <div style="display:grid;grid-template-columns:80px 1fr 1fr 90px 28px;gap:6px;align-items:center;margin-bottom:6px;">
-        <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateOtroIngreso(${i},'monto',this.value)" ${dis}
+        <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateOtroIngreso('${g._id}','monto',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:#16a34a;">
-        <input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso(${i},'titulo',this.value)" ${dis}
+        <input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso('${g._id}','titulo',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateOtroIngreso(${i},'desc',this.value)" ${dis}
+        <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateOtroIngreso('${g._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <select onchange="updateOtroIngreso(${i},'destino',this.value)" ${dis}
+        <select onchange="updateOtroIngreso('${g._id}','destino',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
           ${CUENTAS.map(c=>`<option value="${c}" ${(g.destino||'CAJA CHICA')===c?'selected':''}>${c}</option>`).join('')}
         </select>
-        <button onclick="delOtroIngreso(${i})" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
+        <button onclick="delOtroIngreso('${g._id}')" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
       </div>`).join('');
   }
   const total = day.otrosIngresos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el = document.getElementById('total-otros-ingresos'); if(el) el.textContent='$'+total.toFixed(2);
 }
 
-function updateOtroIngreso(i, campo, val) {
+function updateOtroIngreso(id, campo, val) {
   if (isDiaCerrado()) return;
   const f=getPDFecha(); const day=getDayData(f);
   if (!day.otrosIngresos) day.otrosIngresos = [];
-  if (!day.otrosIngresos[i]) return; // FIX (2026-06-29): guard índice fuera de rango
-  day.otrosIngresos[i][campo]=val;
+  const g = day.otrosIngresos.find(x=>x._id===id);
+  if (!g) return;
+  g[campo]=val; g._ts=Date.now();
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   const total=day.otrosIngresos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
@@ -7899,11 +8032,15 @@ function updateOtroIngreso(i, campo, val) {
   _programarSyncFinanzas();
 }
 
-function delOtroIngreso(i) {
+function delOtroIngreso(id) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f=getPDFecha(); const day=getDayData(f);
   if (!day.otrosIngresos) return;
-  day.otrosIngresos.splice(i,1);
+  const idx=day.otrosIngresos.findIndex(x=>x._id===id);
+  if (idx<0) return;
+  if (!day._tomb) day._tomb={}; if(!day._tomb.otrosIngresos) day._tomb.otrosIngresos={};
+  day._tomb.otrosIngresos[id]=Date.now();
+  day.otrosIngresos.splice(idx,1);
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderOtrosIngresos(); renderStats2(f);
@@ -7914,7 +8051,7 @@ function delOtroIngreso(i) {
 function addMovimiento() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
-  day.movimientos.push({monto:'',origen:'CAJA CHICA',destino:'GUARDADO',desc:''});
+  day.movimientos.push({_id:_itemId(), _ts:Date.now(), monto:'',origen:'CAJA CHICA',destino:'GUARDADO',desc:''});
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderMovimientos();
@@ -7928,39 +8065,44 @@ function renderMovimientos() {
   if (day.movimientos.length===0) {
     cont.innerHTML = '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin movimientos registrados.</div>';
   } else {
-    cont.innerHTML = day.movimientos.map((m,i)=>`
+    cont.innerHTML = day.movimientos.map((m)=>`
       <div style="display:grid;grid-template-columns:80px 110px 110px 1fr 28px;gap:6px;align-items:center;margin-bottom:6px;">
-        <input type="number" value="${m.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateMovimiento(${i},'monto',this.value)" ${dis}
+        <input type="number" value="${m.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateMovimiento('${m._id}','monto',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:#1e4fa0;">
-        <select onchange="updateMovimiento(${i},'origen',this.value)" ${dis}
+        <select onchange="updateMovimiento('${m._id}','origen',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
           ${CUENTAS.map(c=>`<option value="${c}" ${m.origen===c?'selected':''}>${c}</option>`).join('')}
         </select>
-        <select onchange="updateMovimiento(${i},'destino',this.value)" ${dis}
+        <select onchange="updateMovimiento('${m._id}','destino',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
           ${CUENTAS.map(c=>`<option value="${c}" ${m.destino===c?'selected':''}>${c}</option>`).join('')}
         </select>
-        <input type="text" value="${escHtml(m.desc||'')}" placeholder="Ej: Cheque #123" oninput="updateMovimiento(${i},'desc',this.value)" ${dis}
+        <input type="text" value="${escHtml(m.desc||'')}" placeholder="Ej: Cheque #123" oninput="updateMovimiento('${m._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <button onclick="delMovimiento(${i})" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
+        <button onclick="delMovimiento('${m._id}')" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
       </div>`).join('');
   }
 }
 
-function updateMovimiento(i, campo, val) {
+function updateMovimiento(id, campo, val) {
   if (isDiaCerrado()) return;
   const f=getPDFecha(); const day=getDayData(f);
-  if (!day.movimientos[i]) return; // FIX (2026-06-29): guard índice fuera de rango
-  day.movimientos[i][campo]=val;
+  const m = (day.movimientos||[]).find(x=>x._id===id);
+  if (!m) return;
+  m[campo]=val; m._ts=Date.now();
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   _programarSyncFinanzas();
 }
 
-function delMovimiento(i) {
+function delMovimiento(id) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f=getPDFecha(); const day=getDayData(f);
-  day.movimientos.splice(i,1);
+  const idx=(day.movimientos||[]).findIndex(x=>x._id===id);
+  if (idx<0) return;
+  if (!day._tomb) day._tomb={}; if(!day._tomb.movimientos) day._tomb.movimientos={};
+  day._tomb.movimientos[id]=Date.now();
+  day.movimientos.splice(idx,1);
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderMovimientos();
@@ -8055,7 +8197,7 @@ function confirmarCobroModal() {
   if (!slotMarcado || montoCobrado <= 0) { alert('No se encontró el pago pendiente.'); return; }
   const dayCobro = getDayData(fechaCobro);
   if (!dayCobro.cobrosPendientes) dayCobro.cobrosPendientes = [];
-  dayCobro.cobrosPendientes.push({ codigo, monto: montoCobrado, metodo: metodoFinal, fechaOriginal, fecha: fechaCobro });
+  dayCobro.cobrosPendientes.push({ _id:_itemId(), _ts:Date.now(), codigo, monto: montoCobrado, metodo: metodoFinal, fechaOriginal, fecha: fechaCobro });
   // AUDITORIA v96 (2026-07-06): constancia permanente en el historial de la reservación de
   // quién registró el cobro, cuánto, cómo y cuándo (aunque el día del servicio esté cerrado).
   _logAudit(codigo, 'cobrada', `$${montoCobrado.toFixed(2)} ${metodoFinal} el ${fmtFecha(fechaCobro)} (servicio del ${fmtFecha(fechaOriginal)})`);
@@ -8074,12 +8216,13 @@ function confirmarCobroModal() {
   alert(`✅ Pago de $${montoCobrado.toFixed(2)} registrado como cobrado (${metodoFinal}) en ${fechaCobro}.`);
 }
 
-function delCobroPendiente(i) {
+function delCobroPendiente(id) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   if (!confirm('¿Eliminar este cobro? El pago volverá a aparecer como pendiente.')) return;
   const f = getPDFecha();
   const day = getDayData(f);
-  const cobro = day.cobrosPendientes[i];
+  const i = (day.cobrosPendientes||[]).findIndex(x=>x._id===id);
+  const cobro = i>=0 ? day.cobrosPendientes[i] : null;
   if (cobro) {
     // v96 (2026-07-06): se quitó el bloqueo F13 por día original cerrado. Igual que al COBRAR,
     // revertir solo toca metadata del día original (cobrado/fechaCobro/metodoCobro), que NO
@@ -8104,6 +8247,8 @@ function delCobroPendiente(i) {
       delete res._fechaCobro;
       delete res._metodoCobro;
     }
+    if (!day._tomb) day._tomb={}; if(!day._tomb.cobrosPendientes) day._tomb.cobrosPendientes={};
+    day._tomb.cobrosPendientes[id]=Date.now();
     day.cobrosPendientes.splice(i, 1);
     savePD(); safeSetLS('mt2_reservas', JSON.stringify(reservas));
     recalcCerramos();
