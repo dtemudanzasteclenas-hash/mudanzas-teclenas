@@ -924,22 +924,16 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
           style="border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;min-width:230px;">
       </div>
       <div style="padding:0;overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:1080px;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:680px;">
           <thead>
             <tr style="background:#ecfeff;color:#0e7490;text-align:left;">
               <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Fecha</th>
               <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Hora</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Usuario</th>
               <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Reservación</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Cliente</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Vendedor</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Tipo</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Motivo</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Valor anterior</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Agregado</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Descontado</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Nuevo total</th>
-              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:center;">Estado del día</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Usuario</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Aumento / Disminución</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Precio original</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Nuevo precio</th>
             </tr>
           </thead>
           <tbody id="audit-costos-body"></tbody>
@@ -2635,7 +2629,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-17-v102';
+const APP_VERSION = '2026-07-17-v103';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -8353,6 +8347,39 @@ function _sumaAjustes(codigo){
   return s;
 }
 
+// Método de pago con el que se COBRÓ la reservación (para el ajuste "Automático").
+// Busca el slot de la pizarra con ese código; si no, servicios extra; si no, _metodoCobro; si no, EFECTIVO.
+// Ignora 'CANCELADO' y 'PENDIENTE' (no son métodos realizados): un ajuste "automático" debe reflejar un
+// cobro real y entrar a una cuenta; si el servicio aún no se cobró, cae a EFECTIVO y el usuario puede
+// cambiarlo en el modal (el preview muestra el método antes de confirmar).
+function _metodoDeReserva(codigo){
+  const _real = m => m && m !== 'CANCELADO' && m !== 'PENDIENTE';
+  const r = reservas.find(rv => rv.codigo === codigo);
+  const fechas = (r && r.fecha) ? [r.fecha, ...Object.keys(pdData||{})] : Object.keys(pdData||{});
+  const vistos = new Set();
+  for (const f of fechas){
+    if (vistos.has(f)) continue; vistos.add(f);
+    const day = pdData && pdData[f]; if (!day || !day.columnas) continue;
+    for (const col of day.columnas){
+      if (col.slots){
+        for (const h of Object.keys(col.slots)){
+          const sl = col.slots[h];
+          if (sl && sl.reservaCodigo === codigo && _real(sl.metodo)) return sl.metodo;
+        }
+      }
+      if (col.serviciosExtra){
+        for (const it of col.serviciosExtra){
+          const c = (typeof it==='string') ? it : (it&&it.codigo);
+          const m = (typeof it==='string') ? 'EFECTIVO' : (it&&it.metodo);
+          if (c === codigo && _real(m)) return m;
+        }
+      }
+    }
+  }
+  if (r && _real(r._metodoCobro)) return r._metodoCobro;
+  return 'EFECTIVO';
+}
+
 function _renderAjusteInfo(r){
   const orig = parseFloat(r.costo)||0;
   const aj = _sumaAjustes(r.codigo);
@@ -8396,8 +8423,15 @@ function previewAjuste(){
   const montoAbs = parseFloat(document.getElementById('aj-monto').value)||0;
   const delta = (_ajusteSigno === '-' ? -1 : 1) * montoAbs;
   const nuevoTotal = orig + aj + delta;
+  const metSel = document.getElementById('aj-metodo').value;
+  const metEfectivo = (metSel === 'AUTO') ? _metodoDeReserva(r.codigo) : metSel;
+  const metNota = (metSel === 'AUTO')
+    ? `${metodoLabel(metEfectivo)} · igual que la reservación`
+    : metodoLabel(metEfectivo);
   el.innerHTML = `<div style="display:flex;justify-content:space-between;"><span>Este ajuste:</span><strong style="color:${delta<0?'#d42b2b':'#16a34a'};">${delta>=0?'+':''}$${delta.toFixed(2)}</strong></div>
     <div style="display:flex;justify-content:space-between;margin-top:2px;"><span style="font-weight:800;">Nuevo total cobrado:</span><strong style="color:#0891b2;font-size:15px;">$${nuevoTotal.toFixed(2)}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-top:2px;"><span>Método de pago:</span><strong>${metNota}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-top:2px;"><span>Entra en el cuaderno del:</span><strong>${fmtFecha(getPDFecha())}</strong></div>
     <div style="font-size:10px;color:var(--gris2);margin-top:4px;">El costo original ($${orig.toFixed(2)}) y la comisión del vendedor no cambian.</div>`;
 }
 
@@ -8407,8 +8441,7 @@ function abrirModificarCosto(){
   _ajusteCtx = { codigo: r.codigo };
   _ajusteSigno = '+';
   const set = (id,val)=>{ const e=document.getElementById(id); if(e) e.value=val; };
-  set('aj-tipo','Servicio adicional'); set('aj-monto',''); set('aj-metodo','EFECTIVO'); set('aj-motivo','');
-  set('aj-fecha', (r.fecha && /^\d{4}-\d{2}-\d{2}$/.test(r.fecha)) ? r.fecha : getPDFecha());
+  set('aj-tipo','Servicio adicional'); set('aj-monto',''); set('aj-metodo','AUTO'); set('aj-motivo','');
   _renderAjusteInfo(r);
   setAjusteSigno('+');
   closeVer();
@@ -8425,14 +8458,20 @@ function confirmarAjusteCobro(){
   const r = reservas.find(rv => rv.codigo === _ajusteCtx.codigo);
   if (!r){ alert('⚠️ No se encontró la reservación.'); return; }
   const tipo = document.getElementById('aj-tipo').value;
-  const metodo = document.getElementById('aj-metodo').value;
+  let metodo = document.getElementById('aj-metodo').value;
   const motivo = document.getElementById('aj-motivo').value.trim();
-  const fecha = document.getElementById('aj-fecha').value;
+  // El ajuste entra en el DÍA DE TRABAJO ACTUAL del cuaderno (igual que gastos, otros ingresos y
+  // movimientos), que en el flujo normal es el mismo día del servicio. Así el ingreso/descuento cae
+  // siempre en un día ABIERTO y su cuadre (recalcCerramos) se recomputa al instante en el día visible;
+  // nunca se toca un día pasado cerrado ni se difiere TARJETA a un día congelado. Queda VINCULADO a la
+  // reservación por resCodigo, así que el "total cobrado" del servicio suma sus ajustes de cualquier día.
+  const fecha = getPDFecha();
   const montoAbs = parseFloat(document.getElementById('aj-monto').value);
-  if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)){ alert('Elegí una fecha válida para el ingreso.'); return; }
+  // Método AUTOMÁTICO: mismo método de pago con que se cobró la reservación (nunca PENDIENTE/CANCELADO).
+  if (metodo === 'AUTO') metodo = _metodoDeReserva(r.codigo);
   if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
-  // CIERRE DE DÍA: no se puede agregar/modificar un ajuste económico en un día cerrado.
-  if (isDiaCerrado(fecha)){ alert('🔒 El día '+fmtFecha(fecha)+' está cerrado. Elegí un día abierto o desbloquealo en Programación.'); return; }
+  // CIERRE DE DÍA: no se puede agregar un ajuste económico a un día cerrado.
+  if (isDiaCerrado(fecha)){ alert('🔒 El día '+fmtFecha(fecha)+' está cerrado. Desbloquealo en Programación para ajustar el cobro.'); return; }
   const signo = (_ajusteSigno === '-') ? -1 : 1;
   const monto = signo * montoAbs;
   const cliente = `${r.nombre||''} ${r.apellido||''}`.trim();
@@ -8485,6 +8524,7 @@ function renderAuditoriaCostos(){
     const r = reservas.find(rv => rv.codigo === cod);
     const orig = r ? (parseFloat(r.costo)||0) : 0;
     if (acum[cod] === undefined) acum[cod] = orig;
+    it.orig = orig;
     it.anterior = acum[cod];
     it.monto = parseFloat(it.g.monto)||0;
     acum[cod] += it.monto;
@@ -8506,34 +8546,31 @@ function renderAuditoriaCostos(){
   if (countEl) countEl.textContent = totalCount + (totalCount===1?' modificación':' modificaciones');
 
   if (vistaFinal.length === 0){
-    cont.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--gris2);padding:22px;font-size:13px;">${_auditCostosFiltro ? 'Sin resultados para la búsqueda.' : 'Sin modificaciones de costo registradas todavía.'}</td></tr>`;
+    cont.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--gris2);padding:22px;font-size:13px;">${_auditCostosFiltro ? 'Sin resultados para la búsqueda.' : 'Sin modificaciones de costo registradas todavía.'}</td></tr>`;
     return;
   }
   cont.innerHTML = vistaFinal.map(it => {
     const d = new Date(it.g.en || '');
     const fechaTxt = isNaN(d.getTime()) ? (it.fecha||'—') : d.toLocaleDateString('es-SV',{day:'2-digit',month:'short',year:'numeric'});
     const horaTxt = isNaN(d.getTime()) ? '—' : d.toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
-    const agregado = it.monto > 0 ? `+$${it.monto.toFixed(2)}` : '—';
-    const descontado = it.monto < 0 ? `-$${Math.abs(it.monto).toFixed(2)}` : '—';
-    const estadoDia = it.cerrado
-      ? '<span style="background:#dcfce7;color:#15803d;font-weight:800;font-size:10px;padding:1px 6px;border-radius:10px;">🔒 CERRADO</span>'
-      : '<span style="background:#fef9c3;color:#a16207;font-weight:800;font-size:10px;padding:1px 6px;border-radius:10px;">ABIERTO</span>';
+    const cod = String(it.g.resCodigo||'').replace(/'/g,'');
+    const codCell = cod
+      ? `<span onclick="verRes('${cod}')" title="Abrir reservación" style="display:inline-block;background:#0891b2;color:#fff;font-weight:800;font-size:11px;padding:2px 8px;border-radius:11px;cursor:pointer;">${escHtml(cod)}</span>`
+      : '—';
+    const movCell = it.monto >= 0
+      ? `<span style="font-weight:800;color:#16a34a;">▲ Aumento +$${it.monto.toFixed(2)}</span>`
+      : `<span style="font-weight:800;color:#d42b2b;">▼ Disminución -$${Math.abs(it.monto).toFixed(2)}</span>`;
+    const detalle = `${escHtml(it.g.tipoMod||'')}${it.g.motivo?' · '+escHtml(it.g.motivo):''}`;
     return `<tr style="border-bottom:1px solid var(--gris1);">
       <td style="padding:6px 8px;white-space:nowrap;">${escHtml(fechaTxt)}</td>
       <td style="padding:6px 8px;white-space:nowrap;color:var(--gris2);">${escHtml(horaTxt)}</td>
+      <td style="padding:6px 8px;white-space:nowrap;">${codCell}</td>
       <td style="padding:6px 8px;white-space:nowrap;"><strong style="color:var(--azul2);">${escHtml(it.g.por||'—')}</strong></td>
-      <td style="padding:6px 8px;white-space:nowrap;"><span class="chip a" style="font-size:10px;">${escHtml(it.g.resCodigo||'—')}</span></td>
-      <td style="padding:6px 8px;">${escHtml(it.cliente||'—')}</td>
-      <td style="padding:6px 8px;white-space:nowrap;">${escHtml(it.vendedor||'—')}</td>
-      <td style="padding:6px 8px;white-space:nowrap;"><strong>${escHtml(it.g.tipoMod||'—')}</strong><div style="font-size:10px;color:var(--gris2);">${metodoLabel(it.g.metodo||'')}</div></td>
-      <td style="padding:6px 8px;">${escHtml(it.g.motivo||'—')}</td>
-      <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--gris2);">$${it.anterior.toFixed(2)}</td>
-      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#16a34a;">${agregado}</td>
-      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#d42b2b;">${descontado}</td>
+      <td style="padding:6px 8px;">${movCell}<div style="font-size:10px;color:var(--gris2);">${detalle}</div></td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--gris2);">$${(it.orig||0).toFixed(2)}</td>
       <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#0891b2;">$${it.nuevo.toFixed(2)}</td>
-      <td style="padding:6px 8px;text-align:center;">${estadoDia}</td>
     </tr>`;
-  }).join('') + (recortado ? `<tr><td colspan="13" style="text-align:center;color:var(--gris2);padding:8px;font-size:11px;">Mostrando ${TOPE} de ${vista.length} coincidencias — refiná la búsqueda para ver el resto.</td></tr>` : '');
+  }).join('') + (recortado ? `<tr><td colspan="7" style="text-align:center;color:var(--gris2);padding:8px;font-size:11px;">Mostrando ${TOPE} de ${vista.length} coincidencias — refiná la búsqueda para ver el resto.</td></tr>` : '');
 }
 
 // ==================== AUTOCOMPLETAR TÍTULOS ====================
@@ -9156,7 +9193,9 @@ function renderConciliacion() {
   // neto diferido). Registros viejos sin metodo usan su destino CUSCATLAN (como antes).
   (pdDay.otrosIngresos || []).forEach(g => {
     const c = parseFloat(g.monto)||0;
-    if (!(c > 0)) return;
+    // Incluir también montos negativos (DESCUENTOS de ajustes de cobro): recalcCerramos SÍ los resta
+    // de CUSCATLAN, así que la conciliación debe reflejarlos para no descuadrar contra el cierre.
+    if (!c) return;
     const met = g.metodo || (((g.destino||'CAJA CHICA')==='CUSCATLAN') ? 'CUSCA' : '');
     if (met === 'CUSCA') ingresosCusca.push({ desc: `Otro ingreso: ${g.titulo||''}${g.desc?' — '+g.desc:''}`, monto: c });
     else if (met === 'LINK') ingresosLink.push({ desc: `Otro ingreso: ${g.titulo||''} (TARJETA bruto)`, bruto: c, neto: c*LINK_NETO, comision: c*LINK_COMISION });
@@ -9189,7 +9228,7 @@ function renderConciliacion() {
       elIC.innerHTML = ingresosCusca.map(i => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--gris1);">
           <span style="font-size:12px;color:var(--texto);">${escHtml(i.desc)}</span>
-          <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:#1e4fa0;">+$${i.monto.toFixed(2)}</span>
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:${i.monto<0?'#d42b2b':'#1e4fa0'};">${i.monto<0?'-':'+'}$${Math.abs(i.monto).toFixed(2)}</span>
         </div>`).join('');
     }
   }
@@ -9204,9 +9243,9 @@ function renderConciliacion() {
         <div style="padding:6px 0;border-bottom:1px solid var(--gris1);">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <span style="font-size:12px;color:var(--texto);">${escHtml(i.desc)}</span>
-            <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:#7c3aed;">+$${i.neto.toFixed(2)}</span>
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:800;color:${i.neto<0?'#d42b2b':'#7c3aed'};">${i.neto<0?'-':'+'}$${Math.abs(i.neto).toFixed(2)}</span>
           </div>
-          <div style="font-size:10px;color:var(--gris2);">Bruto: $${i.bruto.toFixed(2)} — Comisión banco 3.772%: -$${i.comision.toFixed(2)}</div>
+          <div style="font-size:10px;color:var(--gris2);">Bruto: $${i.bruto.toFixed(2)} — Comisión banco 3.772%: -$${Math.abs(i.comision).toFixed(2)}</div>
         </div>`).join('');
     }
   }
@@ -10153,7 +10192,7 @@ function alertaPendientesUrgentes() {
     <button class="mc" onclick="cerrarAjusteCobro()">✕</button>
   </div>
   <div class="mb">
-    <div style="font-size:11px;color:var(--gris2);margin-bottom:10px;">El <strong>costo original pactado</strong> con el cliente NO se toca. Este ajuste se registra como un ingreso/descuento aparte, vinculado a la reservación, y entra al cuaderno del día que elijás.</div>
+    <div style="font-size:11px;color:var(--gris2);margin-bottom:10px;">El <strong>costo original pactado</strong> con el cliente NO se toca. Este ajuste se registra como un ingreso/descuento aparte, vinculado a la reservación, y entra al cuaderno del <strong>día que tenés abierto</strong> en Programación.</div>
     <div id="aj-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px;"></div>
     <div class="fg">
       <label>Tipo de modificación *</label>
@@ -10180,7 +10219,8 @@ function alertaPendientesUrgentes() {
     </div>
     <div class="fg" style="margin-top:12px;">
       <label>Método de pago *</label>
-      <select id="aj-metodo" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+      <select id="aj-metodo" onchange="previewAjuste()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+        <option value="AUTO">Automático (igual que la reservación)</option>
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
         <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
@@ -10190,10 +10230,6 @@ function alertaPendientesUrgentes() {
     <div class="fg" style="margin-top:12px;">
       <label>Motivo / detalle</label>
       <input type="text" id="aj-motivo" placeholder="Ej: 10 cajas medianas, descuento por cliente frecuente…" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
-    </div>
-    <div class="fg" style="margin-top:12px;">
-      <label>Día donde entra el ingreso *</label>
-      <input type="date" id="aj-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
     </div>
     <div id="aj-preview" style="margin-top:14px;padding:10px 14px;background:#ecfeff;border:1px solid #0891b2;border-radius:8px;font-size:13px;"></div>
   </div>
