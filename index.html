@@ -829,10 +829,11 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
               <div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Monto</div>
               <div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Título</div>
               <div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Descripción</div>
-              <div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Destino</div>
+              <div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Método</div>
               <div></div>
             </div>
             <div id="otros-ingresos-lista"></div>
+            <div style="font-size:10px;color:var(--gris2);margin-top:6px;">💳 El método de pago es el mismo de las reservaciones. Los <strong>ajustes de cobro</strong> (cajas, plástico, servicios, descuentos) aparecen aquí con vínculo a su reservación.</div>
             <div style="margin-top:10px;padding-top:10px;border-top:2px solid #1a2236;display:flex;justify-content:space-between;">
               <span style="font-weight:800;font-size:13px;">TOTAL OTROS INGRESOS:</span>
               <span id="total-otros-ingresos" style="font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:900;color:#16a34a;">$0.00</span>
@@ -915,6 +916,37 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       </div>
     </div>
 
+    <!-- ===== PANEL DE AUDITORÍA DE MODIFICACIONES DE COSTO (v102, CAMBIO 1) ===== -->
+    <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #0891b2;overflow:hidden;">
+      <div style="background:#0e7490;color:#fff;padding:11px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;">🧾 AUDITORÍA DE MODIFICACIONES DE COSTO <span id="audit-costos-count" style="font-size:12px;font-weight:600;opacity:.85;"></span></span>
+        <input type="text" id="audit-costos-filtro" placeholder="🔍 Buscar código, cliente, vendedor, tipo…" oninput="_setAuditCostosFiltro(this.value)"
+          style="border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;min-width:230px;">
+      </div>
+      <div style="padding:0;overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:1080px;">
+          <thead>
+            <tr style="background:#ecfeff;color:#0e7490;text-align:left;">
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Fecha</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Hora</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Usuario</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Reservación</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Cliente</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Vendedor</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Tipo</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Motivo</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Valor anterior</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Agregado</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Descontado</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Nuevo total</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:center;">Estado del día</th>
+            </tr>
+          </thead>
+          <tbody id="audit-costos-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Resumen mensual -->
     <div style="margin-top:18px;text-align:center;">
       <button onclick="descargarReporteDia()" style="background:#1e4fa0;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;letter-spacing:.03em;">📋 Descargar Reporte del Día (PDF)</button>
@@ -964,7 +996,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <div id="conc-ingresos-cusca"></div>
 
         <!-- Ingresos LINK -->
-        <div style="font-size:11px;font-weight:800;color:var(--gris2);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">🔗 Ingresos recibidos vía LINK <span style="font-weight:500;font-size:10px;">(neto -3.772%)</span></div>
+        <div style="font-size:11px;font-weight:800;color:var(--gris2);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 8px;">💳 Ingresos recibidos vía TARJETA <span style="font-weight:500;font-size:10px;">(neto -3.772%)</span></div>
         <div id="conc-ingresos-link"></div>
 
         <!-- Gastos CUSCATLAN -->
@@ -1236,6 +1268,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <button id="tb-coment" onclick="showTab('coment')">💬 Comentarios</button>
       <button id="tb-est" onclick="showTab('est')">🔄 Estado</button>
       <button id="tb-dup" onclick="duplicarReserva()" style="background:#7c3aed;color:#fff;">📋 Duplicar</button>
+      <button id="tb-ajuste" onclick="abrirModificarCosto()" style="background:#0891b2;color:#fff;">💵 Ajustar cobro</button>
     </div>
 
     <!-- PDF -->
@@ -2602,7 +2635,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-09-v101';
+const APP_VERSION = '2026-07-17-v102';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3449,7 +3482,9 @@ const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', react
   cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', cobrada:'💰 Cobro registrado',
   // AUDITORIA v99 (2026-07-08): tipos nuevos — nombre/camión/personal/tipo de cliente,
   // confirmación, cambio de estado genérico y reasignación de vendedor (solo admin).
-  cambio_nombre:'👤 Cambio de nombre del cliente', cambio_camion:'🚚 Cambio de camión', cambio_personal:'👷 Cambio de personal', cambio_tipocliente:'🧾 Cambio tipo de cliente', confirmada:'✅ Confirmada', cambio_estado:'🔄 Cambio de estado', cambio_vendedor:'🤝 Vendedor reasignado (admin)' };
+  cambio_nombre:'👤 Cambio de nombre del cliente', cambio_camion:'🚚 Cambio de camión', cambio_personal:'👷 Cambio de personal', cambio_tipocliente:'🧾 Cambio tipo de cliente', confirmada:'✅ Confirmada', cambio_estado:'🔄 Cambio de estado', cambio_vendedor:'🤝 Vendedor reasignado (admin)',
+  // v102 (2026-07-17): ajuste de cobro (cargo/descuento aparte, sin tocar el costo original).
+  ajuste_cobro:'💵 Ajuste de cobro' };
 // Recorta valores largos (direcciones/obs) para que la bitácora no crezca sin control.
 function _auditTrunc(s) { s = String(s == null ? '' : s).trim(); return s ? (s.length > 45 ? s.slice(0, 45) + '…' : s) : '—'; }
 function _fmtAuditFechaHora(iso) {
@@ -5665,6 +5700,22 @@ function guardarEdicion() {
   r.horasOcupadas = horasEdit;
   let costo = document.getElementById('e-costo').value.trim();
   if (costo && !isNaN(parseFloat(costo))) costo = parseFloat(costo).toFixed(2);
+  // v102 (CAMBIO 1): el COSTO ORIGINAL (precio pactado, base de comisiones) solo lo puede cambiar
+  // el ADMIN. Si un no-admin intenta cambiarlo, se pide PIN de administrador; sin PIN válido se
+  // conserva el original (los demás cambios de la edición SÍ se guardan). Para cobrar extras o
+  // aplicar descuentos sin tocar el original, existe el botón "💵 Ajustar cobro".
+  const _pOrigViejo = parseFloat(oldCosto), _pOrigNuevo = parseFloat(costo);
+  const _costoOrigCambia = (isNaN(_pOrigViejo) || isNaN(_pOrigNuevo)) ? (String(oldCosto||'') !== String(costo||'')) : _pOrigViejo.toFixed(2) !== _pOrigNuevo.toFixed(2);
+  if (_costoOrigCambia && !_esAdmin()) {
+    const pin = prompt('🔒 Cambiar el COSTO ORIGINAL (precio pactado con el cliente) requiere PIN de ADMINISTRADOR.\n\nSi solo querés cobrar un extra (cajas, plástico, servicio adicional) o aplicar un descuento, cancelá y usá el botón "💵 Ajustar cobro" de la reservación.\n\nPIN de administrador:');
+    const pinOk = pin !== null && USUARIOS.some(u => u.rol === 'admin' && u.pin === String(pin).trim());
+    if (!pinOk) {
+      if (pin !== null) alert('❌ PIN incorrecto. El costo original se mantiene sin cambios; el resto de la edición sí se guarda.');
+      costo = oldCosto; // conservar el original intacto
+    }
+    // Si el PIN es válido, se deja pasar el nuevo costo; el bloque de bitácora de más abajo
+    // registra el cambio_precio (autorizado) como en cualquier edición de precio.
+  }
   r.costo = costo;
   r.personal = document.getElementById('e-personal').value || '5';
   r.unidad = document.getElementById('e-unidad').value;
@@ -6194,6 +6245,17 @@ const HORARIOS = ['8:00 AM','11:00 AM','2:30 PM'];
 const METODOS_PAGO = ['EFECTIVO','CUSCA','LINK','PENDIENTE','CANCELADO'];
 const LINK_NETO = 0.96228;    // FIX (2026-07-04): comision real link Cuscatlan = 3.772% medida en conciliacion de junio (antes se asumia 5%)
 const LINK_COMISION = 1 - LINK_NETO;
+// v102 (2026-07-17): CAMBIO 3 — la palabra "LINK" se MUESTRA al usuario como "TARJETA"
+// (link de pago, POS electronico o cobro con tarjeta en oficina). El VALOR interno sigue
+// siendo 'LINK' en datos/logica/Supabase para NO romper miles de registros historicos; solo
+// cambia la ETIQUETA visible. Usar metodoLabel(m) en TODO texto mostrado al usuario.
+const METODO_LABELS = { EFECTIVO:'EFECTIVO', CUSCA:'CUSCA', LINK:'TARJETA', PENDIENTE:'PENDIENTE', CANCELADO:'CANCELADO' };
+function metodoLabel(m){ return METODO_LABELS[m] || m || ''; }
+// Metodos de pago para OTROS INGRESOS (CAMBIO 2): mismo sistema que reservaciones, sin CANCELADO.
+const METODOS_OI = ['EFECTIVO','CUSCA','LINK','PENDIENTE'];
+const COLOR_METODO = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', LINK:'#7c3aed', PENDIENTE:'#d97706', CANCELADO:'#991b1b' };
+// Deriva un metodo de pago a partir del 'destino' (cuenta) de registros VIEJOS sin metodo.
+function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : 'EFECTIVO'; }
 const FONDOS = ['CAJA CHICA','CUSCATLAN'];
 const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN'];
 
@@ -6383,7 +6445,7 @@ function renderPD() {
       <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
+      <div class="sc a"><div class="sc-lbl">TARJETA CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
       <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
       <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>
     `;
@@ -6751,7 +6813,7 @@ function buildColumna2(col, idx, f) {
           ${!isSecondaryHora ? `<span style="font-size:10px;font-weight:700;color:#888;">Pago:</span>
           <select ${isDiaCerrado(f)?'disabled title="Día cerrado"':''} onchange="updateSlot2('${f}',${idx},'${h}','metodo',this.value)"
             style="border:1px solid #d4d4d4;border-radius:5px;background:#fff;font-size:11px;font-weight:800;color:${mc};font-family:'Barlow',sans-serif;outline:none;cursor:pointer;padding:3px 6px;">
-            ${METODOS_PAGO.map(mp=>`<option value="${mp}" ${slot.metodo===mp?'selected':''}>${mp}</option>`).join('')}
+            ${METODOS_PAGO.map(mp=>`<option value="${mp}" ${slot.metodo===mp?'selected':''}>${metodoLabel(mp)}</option>`).join('')}
           </select>` : ''}
           ${resIdx >= 0 ? `<button onclick="verRes('${asignadaR.codigo}')" style="background:var(--gris0);border:1px solid var(--gris1);border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;color:var(--azul2);cursor:pointer;">✏️ Editar</button>` : ''}
         </div>
@@ -6879,7 +6941,7 @@ function buildColumna2(col, idx, f) {
           </div>
           <select onchange="updateServicioExtraMetodo('${f}',${idx},'${x.r.codigo}',this.value)" title="¿Cómo se recibió el dinero?"
             style="border:1.5px solid ${_colorMetodoExtra[x.metodo]||'#d97706'};border-radius:5px;padding:3px 4px;font-size:10px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:#fff;cursor:pointer;color:${_colorMetodoExtra[x.metodo]||'#d97706'};flex-shrink:0;">
-            ${_METODOS_EXTRA.map(m => `<option value="${m}" ${x.metodo===m?'selected':''}>${m}</option>`).join('')}
+            ${_METODOS_EXTRA.map(m => `<option value="${m}" ${x.metodo===m?'selected':''}>${metodoLabel(m)}</option>`).join('')}
           </select>
           <button onclick="delServicioExtra('${f}',${idx},'${x.r.codigo}')" style="background:#fee2e2;border:none;border-radius:4px;padding:2px 7px;font-size:10px;color:#d42b2b;cursor:pointer;flex-shrink:0;">✕</button>
         </div>`).join('')}
@@ -7273,7 +7335,7 @@ function renderStats2(f) {
       <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-      <div class="sc a"><div class="sc-lbl">LINK CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
+      <div class="sc a"><div class="sc-lbl">TARJETA CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
       <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
       <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>`;
   } catch(e) { console.warn('render stats2 error:', e); }
@@ -7534,7 +7596,7 @@ function renderCuaderno() {
       <div style="display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;">
         <span style="font-size:13px;font-weight:600;">EFECTIVO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#16a34a;">$${ing.EFECTIVO.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">CUSCA (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#1e4fa0;">$${ing.CUSCA.toFixed(2)}</span>
-        <span style="font-size:13px;font-weight:600;">LINK <span style="font-size:10px;font-weight:500;color:#7c3aed;">(bruto $${ing.LINK.toFixed(2)} − 3.772% = neto)</span></span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#7c3aed;">$${linkNeto.toFixed(2)}</span>
+        <span style="font-size:13px;font-weight:600;">TARJETA <span style="font-size:10px;font-weight:500;color:#7c3aed;">(bruto $${ing.LINK.toFixed(2)} − 3.772% = neto)</span></span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#7c3aed;">$${linkNeto.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">PENDIENTE</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#d97706;">$${ing.PENDIENTE.toFixed(2)}</span>
         ${ing.CANCELADO>0?`<span style="font-size:13px;font-weight:600;color:#991b1b;">CANCELADO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#991b1b;text-decoration:line-through;">$${ing.CANCELADO.toFixed(2)}</span>`:''}
         <div style="grid-column:1/-1;border-top:2px solid #1a2236;padding-top:6px;display:flex;justify-content:space-between;align-items:center;">
@@ -7630,6 +7692,9 @@ function renderCuaderno() {
   const tg=document.getElementById('tot-gastos2'); if(tg) tg.textContent='$'+totalGastos.toFixed(2);
   const tp=document.getElementById('tot-personal'); if(tp) tp.textContent='$'+totalPersonal.toFixed(2);
   const tn=document.getElementById('tot-neto'); if(tn) { tn.textContent='$'+neto.toFixed(2); tn.style.color=neto>=0?'#4ade80':'#f87171'; }
+
+  // v102 (CAMBIO 1): panel de auditoría de modificaciones de costo (debajo de CUENTAS).
+  try { renderAuditoriaCostos(); } catch(e) { console.warn('renderAuditoriaCostos:', e); }
 }
 
 function getFechaAnterior(f) {
@@ -7713,14 +7778,14 @@ function renderCuentas(f) {
       const colorVal = numVal < 0 ? '#d42b2b' : '#16a34a';
       // Mostrar detalle de LINK en CUSCATLAN
       const linkInfo = c === 'CUSCATLAN' && linkAyerC > 0
-        ? `<div style="font-size:9px;color:#7c3aed;font-weight:600;">+$${linkAyerC.toFixed(2)} LINK de ayer</div>` : '';
+        ? `<div style="font-size:9px;color:#7c3aed;font-weight:600;">+$${linkAyerC.toFixed(2)} TARJETA de ayer</div>` : '';
       return `<div style="margin-bottom:7px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <span style="font-size:12px;font-weight:600;">${c}</span>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:${colorVal};">$${numVal.toFixed(2)}</span>
         </div>${linkInfo}
       </div>`;
-    }).join('') + (linkPend > 0 ? `<div style="margin-top:4px;padding:5px 8px;background:#f5f3ff;border-left:3px solid #7c3aed;border-radius:0 4px 4px 0;font-size:10px;color:#7c3aed;font-weight:700;">⏳ LINK pendiente hoy: $${linkPend.toFixed(2)} — cae mañana en CUSCATLAN</div>` : '');
+    }).join('') + (linkPend > 0 ? `<div style="margin-top:4px;padding:5px 8px;background:#f5f3ff;border-left:3px solid #7c3aed;border-radius:0 4px 4px 0;font-size:10px;color:#7c3aed;font-weight:700;">⏳ TARJETA pendiente hoy: $${linkPend.toFixed(2)} — cae mañana en CUSCATLAN</div>` : '');
     const totalCe = CUENTAS.reduce((s,c)=>s+(parseFloat(day.cuentas.cerramos[c])||0),0);
     const elCe = document.getElementById('cerramos-total'); if(elCe) { elCe.textContent='$'+totalCe.toFixed(2); elCe.style.color=totalCe<0?'#d42b2b':'#1a2236'; }
   }
@@ -7854,7 +7919,7 @@ function cerrarDia() {
     let resumen = `📋 ANTES DE CERRAR EL DÍA ${f}\n\n`;
     resumen += `✅ ${confirmados} servicio(s) completado(s)\n`;
     if (sinMarcar.length) resumen += `⚠️ ${sinMarcar.length} sin marcar como completado:\n   - ${sinMarcar.slice(0,6).join('\n   - ')}${sinMarcar.length>6?'\n   ...':''}\n`;
-    if (linkHoy>0) resumen += `💳 LINK $${linkHoy.toFixed(2)} cae mañana en CUSCATLÁN\n`;
+    if (linkHoy>0) resumen += `💳 TARJETA $${linkHoy.toFixed(2)} cae mañana en CUSCATLÁN\n`;
     if (pendCobro>0) resumen += `🟡 ${pendCobro} cobro(s) PENDIENTE sin marcar\n`;
     if (_sinContar.length) resumen += `🔴 CUENTAS SIN CONTAR: ${_sinContar.join(', ')}\n   Se cerrarán con su valor teórico (podría ocultar un descuadre). Si podés, contá esas cuentas antes de cerrar.\n`;
     resumen += `\n¿Cerrar el día de todos modos? No podrás editar hasta desbloquear.`;
@@ -7984,7 +8049,9 @@ function addOtroIngreso() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
   if (!day.otrosIngresos) day.otrosIngresos = [];
-  day.otrosIngresos.push({_id:_itemId(), _ts:Date.now(), monto:'',titulo:'',desc:'',destino:'CAJA CHICA'});
+  // v102 (CAMBIO 2): metodo de pago igual que reservaciones (EFECTIVO/CUSCA/LINK[=TARJETA]/PENDIENTE).
+  // Se conserva 'destino' derivado para compatibilidad con lectores viejos.
+  day.otrosIngresos.push({_id:_itemId(), _ts:Date.now(), monto:'',titulo:'',desc:'',metodo:'EFECTIVO',destino:'CAJA CHICA'});
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderOtrosIngresos();
@@ -7999,20 +8066,28 @@ function renderOtrosIngresos() {
   if (day.otrosIngresos.length===0) {
     cont.innerHTML = '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin otros ingresos registrados.</div>';
   } else {
-    cont.innerHTML = day.otrosIngresos.map((g)=>`
-      <div style="display:grid;grid-template-columns:80px 1fr 1fr 90px 28px;gap:6px;align-items:center;margin-bottom:6px;">
-        <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateOtroIngreso('${g._id}','monto',this.value)" ${dis}
-          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:#16a34a;">
-        <input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso('${g._id}','titulo',this.value)" ${dis}
-          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
+    cont.innerHTML = day.otrosIngresos.map((g)=>{
+      // v102 (CAMBIO 2): selector de METODO de pago (mismo sistema/colores que la pizarra).
+      // Registros viejos sin 'metodo' muestran el derivado de su 'destino' (el calculo respeta
+      // el 'destino' legacy hasta que el usuario elija un metodo).
+      const metSel = g.metodo || _metodoDesdeDestino(g.destino);
+      const metColor = COLOR_METODO[metSel] || '#16a34a';
+      // v102 (CAMBIO 1): badge de vinculo cuando el ingreso proviene de un ajuste de cobro.
+      const badge = g.ajuste ? `<span title="Ajuste de cobro vinculado a ${escHtml(g.resCodigo||'')}" style="display:inline-block;background:#ecfeff;color:#0891b2;border:1px solid #0891b2;border-radius:4px;font-size:9px;font-weight:800;padding:0 4px;margin-left:4px;">🔗 ${escHtml(g.resCodigo||'')}</span>` : '';
+      return `
+      <div style="display:grid;grid-template-columns:80px 1fr 1fr 100px 28px;gap:6px;align-items:center;margin-bottom:6px;">
+        <input type="number" value="${g.monto}" placeholder="0.00" step="0.01" oninput="updateOtroIngreso('${g._id}','monto',this.value)" ${dis}
+          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:${(parseFloat(g.monto)||0)<0?'#d42b2b':'#16a34a'};">
+        <div style="min-width:0;"><input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso('${g._id}','titulo',this.value)" ${g.ajuste?'readonly title="Generado por un ajuste de cobro"':''} ${dis}
+          style="width:100%;border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;${g.ajuste?'background:#f8fafc;':''}">${badge}</div>
         <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateOtroIngreso('${g._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <select onchange="updateOtroIngreso('${g._id}','destino',this.value)" ${dis}
-          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
-          ${CUENTAS.map(c=>`<option value="${c}" ${(g.destino||'CAJA CHICA')===c?'selected':''}>${c}</option>`).join('')}
+        <select onchange="updateOtroIngreso('${g._id}','metodo',this.value)" ${dis} title="¿Cómo se recibió el dinero?"
+          style="border:1.5px solid ${metColor};border-radius:5px;padding:5px 4px;font-size:11px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:#fff;color:${metColor};">
+          ${METODOS_OI.map(m=>`<option value="${m}" ${metSel===m?'selected':''}>${metodoLabel(m)}</option>`).join('')}
         </select>
         <button onclick="delOtroIngreso('${g._id}')" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
-      </div>`).join('');
+      </div>`;}).join('');
   }
   const total = day.otrosIngresos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el = document.getElementById('total-otros-ingresos'); if(el) el.textContent='$'+total.toFixed(2);
@@ -8025,10 +8100,14 @@ function updateOtroIngreso(id, campo, val) {
   const g = day.otrosIngresos.find(x=>x._id===id);
   if (!g) return;
   g[campo]=val; g._ts=Date.now();
+  // v102 (CAMBIO 2): al elegir metodo, derivar tambien 'destino' (cuenta) para lectores legacy.
+  // EFECTIVO→CAJA CHICA, CUSCA/LINK→CUSCATLAN. PENDIENTE no cae en cuenta (queda en destino previo).
+  if (campo==='metodo') { g.destino = (val==='EFECTIVO') ? 'CAJA CHICA' : (val==='CUSCA'||val==='LINK') ? 'CUSCATLAN' : (g.destino||'CAJA CHICA'); }
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   const total=day.otrosIngresos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el=document.getElementById('total-otros-ingresos'); if(el) el.textContent='$'+total.toFixed(2);
+  // El cuadre (cerramos) por cuenta se recalcula en el debounce de _programarSyncFinanzas().
   _programarSyncFinanzas();
 }
 
@@ -8257,6 +8336,206 @@ function delCobroPendiente(id) {
   }
 }
 
+// ==================== AJUSTE DE COBRO (v102, CAMBIO 1) ====================
+// El costo ORIGINAL de la reservación (precio pactado, base de comisiones) NO se modifica aquí.
+// Cada ajuste (aumento por cajas/plástico/servicio adicional/recargo, o descuento) se registra
+// como un OTRO INGRESO independiente y VINCULADO a la reservación (campos ajuste/resCodigo/...).
+// El "nuevo total cobrado" = costo original ± suma de ajustes. Todo queda con trazabilidad
+// completa (quién, cuándo, motivo, cuánto aumentó/descontó) y aparece en el panel de auditoría.
+let _ajusteCtx = null, _ajusteSigno = '+';
+
+// Suma de todos los ajustes (con signo) aplicados a una reservación, en todos los días.
+function _sumaAjustes(codigo){
+  let s = 0;
+  Object.values(pdData||{}).forEach(day => {
+    (day.otrosIngresos||[]).forEach(g => { if (g.ajuste && g.resCodigo === codigo) s += parseFloat(g.monto)||0; });
+  });
+  return s;
+}
+
+function _renderAjusteInfo(r){
+  const orig = parseFloat(r.costo)||0;
+  const aj = _sumaAjustes(r.codigo);
+  const el = document.getElementById('aj-info'); if (!el) return;
+  el.innerHTML = `<div style="font-weight:800;color:var(--azul);margin-bottom:4px;">${escHtml(r.nombre)} ${escHtml(r.apellido||'')} · ${r.codigo}</div>
+    <div style="display:flex;justify-content:space-between;padding:2px 0;"><span>Costo original (pactado):</span><strong>$${orig.toFixed(2)}</strong></div>
+    <div style="display:flex;justify-content:space-between;padding:2px 0;"><span>Ajustes ya aplicados:</span><strong style="color:${aj<0?'#d42b2b':'#16a34a'};">${aj>=0?'+':''}$${aj.toFixed(2)}</strong></div>
+    <div style="display:flex;justify-content:space-between;border-top:1px solid var(--gris1);margin-top:4px;padding-top:4px;"><span style="font-weight:800;">Total cobrado actual:</span><strong style="color:#0891b2;">$${(orig+aj).toFixed(2)}</strong></div>`;
+}
+
+function setAjusteSigno(sig){
+  _ajusteSigno = (sig === '-') ? '-' : '+';
+  const bMas = document.getElementById('aj-signo-mas'), bMenos = document.getElementById('aj-signo-menos');
+  if (bMas && bMenos){
+    const on = 'flex:1;border-radius:7px;padding:8px 0;font-size:13px;font-weight:800;font-family:\'Barlow\',sans-serif;cursor:pointer;';
+    if (_ajusteSigno === '+'){
+      bMas.style.cssText = on+'border:2px solid #16a34a;background:#16a34a;color:#fff;';
+      bMenos.style.cssText = on+'border:2px solid #d42b2b;background:#fff;color:#d42b2b;';
+    } else {
+      bMas.style.cssText = on+'border:2px solid #16a34a;background:#fff;color:#16a34a;';
+      bMenos.style.cssText = on+'border:2px solid #d42b2b;background:#d42b2b;color:#fff;';
+    }
+  }
+  previewAjuste();
+}
+
+// Al elegir "Descuento", sugerir automáticamente el signo negativo (se puede cambiar a mano).
+function _ajusteTipoChange(){
+  const t = document.getElementById('aj-tipo');
+  if (t && t.value === 'Descuento') setAjusteSigno('-');
+  else if (t && _ajusteSigno === '-' && (t.value==='Servicio adicional'||t.value==='Venta de cajas'||t.value==='Venta de plástico stretch'||t.value==='Recargo')) setAjusteSigno('+');
+  previewAjuste();
+}
+
+function previewAjuste(){
+  const el = document.getElementById('aj-preview'); if (!el || !_ajusteCtx) return;
+  const r = reservas.find(rv => rv.codigo === _ajusteCtx.codigo);
+  if (!r){ el.innerHTML = ''; return; }
+  const orig = parseFloat(r.costo)||0;
+  const aj = _sumaAjustes(r.codigo);
+  const montoAbs = parseFloat(document.getElementById('aj-monto').value)||0;
+  const delta = (_ajusteSigno === '-' ? -1 : 1) * montoAbs;
+  const nuevoTotal = orig + aj + delta;
+  el.innerHTML = `<div style="display:flex;justify-content:space-between;"><span>Este ajuste:</span><strong style="color:${delta<0?'#d42b2b':'#16a34a'};">${delta>=0?'+':''}$${delta.toFixed(2)}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-top:2px;"><span style="font-weight:800;">Nuevo total cobrado:</span><strong style="color:#0891b2;font-size:15px;">$${nuevoTotal.toFixed(2)}</strong></div>
+    <div style="font-size:10px;color:var(--gris2);margin-top:4px;">El costo original ($${orig.toFixed(2)}) y la comisión del vendedor no cambian.</div>`;
+}
+
+function abrirModificarCosto(){
+  const r = _resolveVerR();
+  if (!r){ alert('⚠️ No se pudo identificar la reservación.'); return; }
+  _ajusteCtx = { codigo: r.codigo };
+  _ajusteSigno = '+';
+  const set = (id,val)=>{ const e=document.getElementById(id); if(e) e.value=val; };
+  set('aj-tipo','Servicio adicional'); set('aj-monto',''); set('aj-metodo','EFECTIVO'); set('aj-motivo','');
+  set('aj-fecha', (r.fecha && /^\d{4}-\d{2}-\d{2}$/.test(r.fecha)) ? r.fecha : getPDFecha());
+  _renderAjusteInfo(r);
+  setAjusteSigno('+');
+  closeVer();
+  document.getElementById('mo-ajuste').classList.add('open');
+}
+
+function cerrarAjusteCobro(){
+  document.getElementById('mo-ajuste').classList.remove('open');
+  _ajusteCtx = null;
+}
+
+function confirmarAjusteCobro(){
+  if (!_ajusteCtx) return;
+  const r = reservas.find(rv => rv.codigo === _ajusteCtx.codigo);
+  if (!r){ alert('⚠️ No se encontró la reservación.'); return; }
+  const tipo = document.getElementById('aj-tipo').value;
+  const metodo = document.getElementById('aj-metodo').value;
+  const motivo = document.getElementById('aj-motivo').value.trim();
+  const fecha = document.getElementById('aj-fecha').value;
+  const montoAbs = parseFloat(document.getElementById('aj-monto').value);
+  if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)){ alert('Elegí una fecha válida para el ingreso.'); return; }
+  if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
+  // CIERRE DE DÍA: no se puede agregar/modificar un ajuste económico en un día cerrado.
+  if (isDiaCerrado(fecha)){ alert('🔒 El día '+fmtFecha(fecha)+' está cerrado. Elegí un día abierto o desbloquealo en Programación.'); return; }
+  const signo = (_ajusteSigno === '-') ? -1 : 1;
+  const monto = signo * montoAbs;
+  const cliente = `${r.nombre||''} ${r.apellido||''}`.trim();
+  const day = getDayData(fecha);
+  if (!day.otrosIngresos) day.otrosIngresos = [];
+  day.otrosIngresos.push({
+    _id:_itemId(), _ts:Date.now(),
+    monto: monto.toFixed(2),
+    titulo: `${tipo} · ${r.codigo}`,
+    desc: motivo,
+    metodo: metodo,
+    destino: (metodo==='EFECTIVO' ? 'CAJA CHICA' : (metodo==='CUSCA'||metodo==='LINK') ? 'CUSCATLAN' : 'CAJA CHICA'),
+    // --- vínculo y trazabilidad (CAMBIO 1) ---
+    ajuste: true, resCodigo: r.codigo, resCliente: cliente, resVendedor: r.vendedor||'',
+    tipoMod: tipo, motivo: motivo, signo: (signo<0?'-':'+'),
+    por: _quienSoy(), en: new Date().toISOString()
+  });
+  _logAudit(r.codigo, 'ajuste_cobro', `${signo<0?'−':'+'}$${montoAbs.toFixed(2)} ${metodoLabel(metodo)} · ${tipo}${motivo?' ('+_auditTrunc(motivo)+')':''} · día ${fmtFecha(fecha)}`);
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); else savePD();
+  try { if (getPDFecha() === fecha) recalcCerramos(); } catch(e){}
+  cerrarAjusteCobro();
+  try { if (pdTabActual === 'cuaderno') renderCuaderno(); } catch(e){}
+  // renderCuaderno omite la lista de otros ingresos si hubo edición reciente (evita pisar inputs);
+  // como el ajuste acaba de crear una fila nueva, forzamos su refresco si es el día visible.
+  try { if (getPDFecha() === fecha) { renderOtrosIngresos(); renderCuentas(fecha); } } catch(e){}
+  try { renderAuditoriaCostos(); } catch(e){}
+  alert(`✅ Ajuste registrado: ${signo<0?'−':'+'}$${montoAbs.toFixed(2)} (${tipo}) en ${fmtFecha(fecha)}.\n\nCosto original intacto: $${(parseFloat(r.costo)||0).toFixed(2)}\nNuevo total cobrado: $${((parseFloat(r.costo)||0) + _sumaAjustes(r.codigo)).toFixed(2)}`);
+}
+
+// ==================== PANEL DE AUDITORÍA DE AJUSTES DE COBRO (v102, CAMBIO 1) ====================
+let _auditCostosFiltro = '';
+function _setAuditCostosFiltro(v){ _auditCostosFiltro = String(v||'').toLowerCase().trim(); renderAuditoriaCostos(); }
+
+function renderAuditoriaCostos(){
+  const cont = document.getElementById('audit-costos-body'); if (!cont) return;
+  // Recolectar TODOS los ajustes de todos los días.
+  const items = [];
+  Object.entries(pdData||{}).forEach(([fecha,day]) => {
+    (day.otrosIngresos||[]).forEach(g => {
+      if (g.ajuste) items.push({ fecha, cerrado: !!(day.cuentas && day.cuentas.diaCerrado), g });
+    });
+  });
+  // Orden cronológico por 'en' (fallback _ts) para acumular el "valor anterior"/"nuevo total".
+  items.sort((a,b) => (a.g.en||'').localeCompare(b.g.en||'') || ((a.g._ts||0)-(b.g._ts||0)));
+  const acum = {};
+  items.forEach(it => {
+    const cod = it.g.resCodigo;
+    const r = reservas.find(rv => rv.codigo === cod);
+    const orig = r ? (parseFloat(r.costo)||0) : 0;
+    if (acum[cod] === undefined) acum[cod] = orig;
+    it.anterior = acum[cod];
+    it.monto = parseFloat(it.g.monto)||0;
+    acum[cod] += it.monto;
+    it.nuevo = acum[cod];
+    it.cliente = it.g.resCliente || (r ? `${r.nombre} ${r.apellido||''}`.trim() : cod);
+    it.vendedor = it.g.resVendedor || (r ? (r.vendedor||'') : '') || '—';
+  });
+  // Filtro de búsqueda.
+  let vista = items.slice().reverse(); // más reciente primero
+  if (_auditCostosFiltro){
+    vista = vista.filter(it => (`${it.g.resCodigo||''} ${it.cliente||''} ${it.vendedor||''} ${it.g.tipoMod||''} ${it.g.motivo||''} ${it.g.por||''}`).toLowerCase().includes(_auditCostosFiltro));
+  }
+  const totalCount = items.length;
+  const TOPE = 300;
+  const recortado = vista.length > TOPE;
+  const vistaFinal = vista.slice(0, TOPE);
+
+  const countEl = document.getElementById('audit-costos-count');
+  if (countEl) countEl.textContent = totalCount + (totalCount===1?' modificación':' modificaciones');
+
+  if (vistaFinal.length === 0){
+    cont.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--gris2);padding:22px;font-size:13px;">${_auditCostosFiltro ? 'Sin resultados para la búsqueda.' : 'Sin modificaciones de costo registradas todavía.'}</td></tr>`;
+    return;
+  }
+  cont.innerHTML = vistaFinal.map(it => {
+    const d = new Date(it.g.en || '');
+    const fechaTxt = isNaN(d.getTime()) ? (it.fecha||'—') : d.toLocaleDateString('es-SV',{day:'2-digit',month:'short',year:'numeric'});
+    const horaTxt = isNaN(d.getTime()) ? '—' : d.toLocaleTimeString('es-SV',{hour:'2-digit',minute:'2-digit'});
+    const agregado = it.monto > 0 ? `+$${it.monto.toFixed(2)}` : '—';
+    const descontado = it.monto < 0 ? `-$${Math.abs(it.monto).toFixed(2)}` : '—';
+    const estadoDia = it.cerrado
+      ? '<span style="background:#dcfce7;color:#15803d;font-weight:800;font-size:10px;padding:1px 6px;border-radius:10px;">🔒 CERRADO</span>'
+      : '<span style="background:#fef9c3;color:#a16207;font-weight:800;font-size:10px;padding:1px 6px;border-radius:10px;">ABIERTO</span>';
+    return `<tr style="border-bottom:1px solid var(--gris1);">
+      <td style="padding:6px 8px;white-space:nowrap;">${escHtml(fechaTxt)}</td>
+      <td style="padding:6px 8px;white-space:nowrap;color:var(--gris2);">${escHtml(horaTxt)}</td>
+      <td style="padding:6px 8px;white-space:nowrap;"><strong style="color:var(--azul2);">${escHtml(it.g.por||'—')}</strong></td>
+      <td style="padding:6px 8px;white-space:nowrap;"><span class="chip a" style="font-size:10px;">${escHtml(it.g.resCodigo||'—')}</span></td>
+      <td style="padding:6px 8px;">${escHtml(it.cliente||'—')}</td>
+      <td style="padding:6px 8px;white-space:nowrap;">${escHtml(it.vendedor||'—')}</td>
+      <td style="padding:6px 8px;white-space:nowrap;"><strong>${escHtml(it.g.tipoMod||'—')}</strong><div style="font-size:10px;color:var(--gris2);">${metodoLabel(it.g.metodo||'')}</div></td>
+      <td style="padding:6px 8px;">${escHtml(it.g.motivo||'—')}</td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--gris2);">$${it.anterior.toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#16a34a;">${agregado}</td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#d42b2b;">${descontado}</td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#0891b2;">$${it.nuevo.toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:center;">${estadoDia}</td>
+    </tr>`;
+  }).join('') + (recortado ? `<tr><td colspan="13" style="text-align:center;color:var(--gris2);padding:8px;font-size:11px;">Mostrando ${TOPE} de ${vista.length} coincidencias — refiná la búsqueda para ver el resto.</td></tr>` : '');
+}
+
 // ==================== AUTOCOMPLETAR TÍTULOS ====================
 function buildTitulosDatalist() {
   const titulosGastos = new Set();
@@ -8324,6 +8603,16 @@ function calcIngresosServiciosPorCuenta(day) {
   return ing;
 }
 
+// v102 (CAMBIO 2): suma NETA (96.228%) de los otros ingresos pagados con TARJETA (metodo 'LINK')
+// de un día. Se usa para diferirlos al día siguiente en CUSCATLAN, igual que servicios/cobros.
+function _linkOtrosDelDia(dayObj){
+  let s = 0;
+  (dayObj && dayObj.otrosIngresos || []).forEach(g => {
+    if (g.metodo === 'LINK') s += (parseFloat(g.monto)||0) * LINK_NETO;
+  });
+  return s;
+}
+
 function recalcCerramos() {
   const f = getPDFecha();
   const day = getDayData(f);
@@ -8343,13 +8632,27 @@ function recalcCerramos() {
     (dayAyer.cobrosPendientes||[]).forEach(cb => {
       if (cb.metodo === 'LINK') linkAyer += (parseFloat(cb.monto)||0) * LINK_NETO;
     });
+    // v102 (CAMBIO 2): los OTROS INGRESOS por TARJETA de ayer también caen hoy en CUSCATLAN.
+    linkAyer += _linkOtrosDelDia(dayAyer);
   }
 
-  // Otros ingresos por destino
+  // Otros ingresos por cuenta (v102, CAMBIO 2): según MÉTODO de pago, mismo criterio que las
+  // reservaciones. EFECTIVO→CAJA CHICA, CUSCA→CUSCATLAN, LINK(TARJETA)→diferido (cae mañana en
+  // CUSCATLAN, 96.228%), PENDIENTE→no suma. Registros VIEJOS sin `metodo` usan su `destino`.
   const ingOtros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
+  let linkOtrosHoy = 0;
   (day.otrosIngresos||[]).forEach(g => {
-    const dest = g.destino || 'CAJA CHICA';
-    ingOtros[dest] = (ingOtros[dest]||0) + (parseFloat(g.monto)||0);
+    const monto = parseFloat(g.monto)||0;
+    if (!monto) return;
+    if (g.metodo) {
+      if (g.metodo === 'EFECTIVO') ingOtros['CAJA CHICA'] += monto;
+      else if (g.metodo === 'CUSCA') ingOtros['CUSCATLAN'] += monto;
+      else if (g.metodo === 'LINK') linkOtrosHoy += monto * LINK_NETO;
+      // PENDIENTE / CANCELADO: no suma a cuentas hoy
+    } else {
+      const dest = g.destino || 'CAJA CHICA';
+      if (ingOtros[dest] !== undefined) ingOtros[dest] += monto;
+    }
   });
 
   // Gastos por fondo
@@ -8390,8 +8693,8 @@ function recalcCerramos() {
     if (c === 'CUSCATLAN') cierre += linkAyer;
     day.cuentas.cerramos[c] = cierre.toFixed(2);
   });
-  // Guardar el LINK pendiente del día para referencia (servicios + cobros de pendientes por LINK)
-  day.cuentas._linkPendiente = (ingServ['_LINK_PENDIENTE'] || 0) + (ingCobros['_LINK_PENDIENTE'] || 0);
+  // Guardar el LINK/TARJETA pendiente del día (servicios + cobros de pendientes + otros ingresos por TARJETA)
+  day.cuentas._linkPendiente = (ingServ['_LINK_PENDIENTE'] || 0) + (ingCobros['_LINK_PENDIENTE'] || 0) + linkOtrosHoy;
   savePD();
   } // fin del recálculo (solo cuando el día NO está cerrado)
 
@@ -8426,7 +8729,7 @@ function descargarReporteDia() {
   const fechaLegible = new Date(f + 'T12:00:00').toLocaleDateString('es-SV', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
   const esc = _pdfEsc;
   const MC = { EFECTIVO:['#dcfce7','#15803d'], CUSCA:['#dbeafe','#1d4ed8'], LINK:['#ede9fe','#6d28d9'], PENDIENTE:['#fef9c3','#a16207'], CANCELADO:['#fee2e2','#b91c1c'] };
-  const metBadge = (m) => { const c = MC[m]||['#e5e7eb','#111']; return `<span style="font-size:7pt;font-weight:700;padding:0.3mm 1.5mm;border-radius:3px;background:${c[0]};color:${c[1]};">${esc(m||'EFECTIVO')}</span>`; };
+  const metBadge = (m) => { const c = MC[m]||['#e5e7eb','#111']; return `<span style="font-size:7pt;font-weight:700;padding:0.3mm 1.5mm;border-radius:3px;background:${c[0]};color:${c[1]};">${esc(metodoLabel(m||'EFECTIVO'))}</span>`; };
 
   // ===== Sección 1: SERVICIOS POR EQUIPO (quién los hizo + pago) =====
   let totalServ = 0, totalPers = 0, totalProp = 0;
@@ -8495,8 +8798,8 @@ function descargarReporteDia() {
   const otrosHtml = otros.length ? `
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#16a34a;border-bottom:2px solid #16a34a;padding-bottom:1mm;margin:5mm 0 2mm;">OTROS INGRESOS</div>
     <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
-      <thead><tr style="background:#f0fdf4;"><th style="padding:1.5mm 3mm;text-align:left;">Concepto</th><th style="padding:1.5mm 3mm;text-align:left;">Cuenta</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th></tr></thead>
-      <tbody>${otros.map(g=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(g.titulo||'')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(g.destino||'')}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#16a34a;">$${(parseFloat(g.monto)||0).toFixed(2)}</td></tr>`).join('')}<tr style="background:#f0fdf4;"><td style="padding:1.2mm 3mm;font-weight:800;" colspan="2">TOTAL OTROS INGRESOS</td><td style="padding:1.2mm 3mm;text-align:right;font-weight:900;color:#16a34a;">$${totalOtros.toFixed(2)}</td></tr></tbody>
+      <thead><tr style="background:#f0fdf4;"><th style="padding:1.5mm 3mm;text-align:left;">Concepto</th><th style="padding:1.5mm 3mm;text-align:left;">Método</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th></tr></thead>
+      <tbody>${otros.map(g=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(g.titulo||'')}${g.desc?' — '+esc(g.desc):''}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(g.metodo ? metodoLabel(g.metodo) : (g.destino||''))}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:${(parseFloat(g.monto)||0)<0?'#d42b2b':'#16a34a'};">$${(parseFloat(g.monto)||0).toFixed(2)}</td></tr>`).join('')}<tr style="background:#f0fdf4;"><td style="padding:1.2mm 3mm;font-weight:800;" colspan="2">TOTAL OTROS INGRESOS</td><td style="padding:1.2mm 3mm;text-align:right;font-weight:900;color:#16a34a;">$${totalOtros.toFixed(2)}</td></tr></tbody>
     </table>` : '';
   const cobros = day.cobrosPendientes||[];
   const totalCobros = cobros.reduce((s,c)=>s+(parseFloat(c.monto)||0),0);
@@ -8534,7 +8837,7 @@ function descargarReporteDia() {
       <tbody>${cuentasRows}</tbody>
       <tfoot><tr style="background:#f0f4fa;font-weight:900;"><td style="padding:2mm 3mm;">TOTAL</td><td style="padding:2mm 3mm;text-align:right;">$${tAb.toFixed(2)}</td><td style="padding:2mm 3mm;text-align:right;">$${tCe.toFixed(2)}</td><td style="padding:2mm 3mm;text-align:right;color:#1a3a6b;">${hayReal?'$'+tReal.toFixed(2):'—'}</td><td style="padding:2mm 3mm;text-align:right;color:${!hayReal?'#999':(Math.abs(tDesc)<0.01?'#16a34a':'#d42b2b')};">${hayReal?((tDesc>0?'+':'')+'$'+tDesc.toFixed(2)):'—'}</td></tr></tfoot>
     </table>
-    ${linkPend>0?`<div style="margin-top:2mm;font-size:8pt;color:#6d28d9;font-weight:700;">⏳ LINK pendiente hoy: $${linkPend.toFixed(2)} — cae mañana en CUSCATLAN.</div>`:''}
+    ${linkPend>0?`<div style="margin-top:2mm;font-size:8pt;color:#6d28d9;font-weight:700;">⏳ TARJETA pendiente hoy: $${linkPend.toFixed(2)} — cae mañana en CUSCATLAN.</div>`:''}
     ${!hayReal?`<div style="margin-top:2mm;font-size:8pt;color:#d97706;font-style:italic;">No se ha ingresado el CONTEO REAL de este día.</div>`:''}`;
 
   // ===== Armado del documento (ventana de impresión → Guardar como PDF) =====
@@ -8821,7 +9124,7 @@ function renderConciliacion() {
       if (!c) return;
       const descLabel = resSlot ? `${col.nombre} — ${h} (${resSlot.nombre} ${resSlot.apellido})` : `${col.nombre} — ${h}`;
       if (slot.metodo === 'CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
-      if (slot.metodo === 'LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c * LINK_NETO, comision: c * LINK_COMISION });
+      if (slot.metodo === 'LINK')  ingresosLink.push({ desc: descLabel + ' (TARJETA bruto)', bruto: c, neto: c * LINK_NETO, comision: c * LINK_COMISION });
     });
   });
   // Servicios extra (fuera de cuota) por CUSCA/LINK
@@ -8837,7 +9140,7 @@ function renderConciliacion() {
       if (!c) return;
       const descLabel = `${col.nombre} — Extra (${r.nombre} ${r.apellido||''})`;
       if (m==='CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
-      if (m==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c* LINK_NETO, comision: c* LINK_COMISION });
+      if (m==='LINK')  ingresosLink.push({ desc: descLabel + ' (TARJETA bruto)', bruto: c, neto: c* LINK_NETO, comision: c* LINK_COMISION });
     });
   });
   // Cobros de pendientes registrados ESTE día por CUSCA/LINK
@@ -8847,12 +9150,16 @@ function renderConciliacion() {
     const r = reservas.find(rv=>rv.codigo===cb.codigo);
     const descLabel = `Cobro pendiente ${r ? (r.nombre+' '+(r.apellido||'')) : cb.codigo} (servicio ${cb.fechaOriginal||''})`;
     if (cb.metodo==='CUSCA') ingresosCusca.push({ desc: descLabel, monto: c });
-    if (cb.metodo==='LINK')  ingresosLink.push({ desc: descLabel + ' (LINK bruto)', bruto: c, neto: c* LINK_NETO, comision: c* LINK_COMISION });
+    if (cb.metodo==='LINK')  ingresosLink.push({ desc: descLabel + ' (TARJETA bruto)', bruto: c, neto: c* LINK_NETO, comision: c* LINK_COMISION });
   });
-  // Otros ingresos con destino CUSCATLAN
+  // Otros ingresos que tocan CUSCATLAN. v102 (CAMBIO 2): según MÉTODO (CUSCA directo / TARJETA
+  // neto diferido). Registros viejos sin metodo usan su destino CUSCATLAN (como antes).
   (pdDay.otrosIngresos || []).forEach(g => {
     const c = parseFloat(g.monto)||0;
-    if (c > 0 && (g.destino||'CAJA CHICA') === 'CUSCATLAN') ingresosCusca.push({ desc: `Otro ingreso: ${g.titulo||''}${g.desc?' — '+g.desc:''}`, monto: c });
+    if (!(c > 0)) return;
+    const met = g.metodo || (((g.destino||'CAJA CHICA')==='CUSCATLAN') ? 'CUSCA' : '');
+    if (met === 'CUSCA') ingresosCusca.push({ desc: `Otro ingreso: ${g.titulo||''}${g.desc?' — '+g.desc:''}`, monto: c });
+    else if (met === 'LINK') ingresosLink.push({ desc: `Otro ingreso: ${g.titulo||''} (TARJETA bruto)`, bruto: c, neto: c*LINK_NETO, comision: c*LINK_COMISION });
   });
 
   // Gastos desde CUSCATLAN
@@ -8891,7 +9198,7 @@ function renderConciliacion() {
   const elIL = document.getElementById('conc-ingresos-link');
   if (elIL) {
     if (ingresosLink.length === 0) {
-      elIL.innerHTML = '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin ingresos LINK registrados.</div>';
+      elIL.innerHTML = '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin ingresos por TARJETA registrados.</div>';
     } else {
       elIL.innerHTML = ingresosLink.map(i => `
         <div style="padding:6px 0;border-bottom:1px solid var(--gris1);">
@@ -8923,7 +9230,7 @@ function renderConciliacion() {
   if (elTS) elTS.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:12px;">
       <span>Ingresos CUSCA:</span><span style="font-weight:700;color:#1e4fa0;text-align:right;">+$${totalCusca.toFixed(2)}</span>
-      <span>Ingresos LINK (neto):</span><span style="font-weight:700;color:#7c3aed;text-align:right;">+$${totalLink.toFixed(2)}</span>
+      <span>Ingresos TARJETA (neto):</span><span style="font-weight:700;color:#7c3aed;text-align:right;">+$${totalLink.toFixed(2)}</span>
       <span style="color:#d42b2b;">Gastos CUSCATLAN:</span><span style="font-weight:700;color:#d42b2b;text-align:right;">-$${totalGastosCusca.toFixed(2)}</span>
       <div style="grid-column:1/-1;border-top:2px solid #1a2236;padding-top:6px;display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
         <span style="font-weight:800;font-size:13px;">SALDO ESPERADO CUSCA:</span>
@@ -9838,6 +10145,65 @@ function alertaPendientesUrgentes() {
 </div>
 </div>
 
+<!-- ===== MODAL AJUSTAR COBRO (v102, CAMBIO 1) ===== -->
+<div class="mo" id="mo-ajuste" onclick="if(event.target===this)cerrarAjusteCobro()">
+<div class="modal" style="width:470px;">
+  <div class="mh" style="background:#0891b2;">
+    <h2>💵 Ajustar cobro</h2>
+    <button class="mc" onclick="cerrarAjusteCobro()">✕</button>
+  </div>
+  <div class="mb">
+    <div style="font-size:11px;color:var(--gris2);margin-bottom:10px;">El <strong>costo original pactado</strong> con el cliente NO se toca. Este ajuste se registra como un ingreso/descuento aparte, vinculado a la reservación, y entra al cuaderno del día que elijás.</div>
+    <div id="aj-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px;"></div>
+    <div class="fg">
+      <label>Tipo de modificación *</label>
+      <select id="aj-tipo" onchange="_ajusteTipoChange()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+        <option value="Servicio adicional">Servicio adicional</option>
+        <option value="Venta de cajas">Venta de cajas</option>
+        <option value="Venta de plástico stretch">Venta de plástico stretch</option>
+        <option value="Recargo">Recargo</option>
+        <option value="Descuento">Descuento</option>
+        <option value="Ajuste administrativo">Ajuste administrativo</option>
+        <option value="Otro">Otro</option>
+      </select>
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>¿Aumenta o disminuye el cobro? *</label>
+      <div style="display:flex;gap:8px;">
+        <button type="button" id="aj-signo-mas" onclick="setAjusteSigno('+')" style="flex:1;border:2px solid #16a34a;border-radius:7px;padding:8px 0;font-size:13px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;background:#16a34a;color:#fff;">➕ Aumentar</button>
+        <button type="button" id="aj-signo-menos" onclick="setAjusteSigno('-')" style="flex:1;border:2px solid #d42b2b;border-radius:7px;padding:8px 0;font-size:13px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;background:#fff;color:#d42b2b;">➖ Disminuir</button>
+      </div>
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Monto (positivo) *</label>
+      <input type="number" id="aj-monto" min="0" step="0.01" placeholder="0.00" oninput="previewAjuste()" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Método de pago *</label>
+      <select id="aj-metodo" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+        <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
+        <option value="CUSCA">CUSCA → Cuscatlán</option>
+        <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
+        <option value="PENDIENTE">PENDIENTE (no suma aún)</option>
+      </select>
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Motivo / detalle</label>
+      <input type="text" id="aj-motivo" placeholder="Ej: 10 cajas medianas, descuento por cliente frecuente…" style="border:1.5px solid var(--gris1);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+    <div class="fg" style="margin-top:12px;">
+      <label>Día donde entra el ingreso *</label>
+      <input type="date" id="aj-fecha" style="border:1.5px solid var(--azul2);border-radius:7px;padding:8px 11px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;width:100%;">
+    </div>
+    <div id="aj-preview" style="margin-top:14px;padding:10px 14px;background:#ecfeff;border:1px solid #0891b2;border-radius:8px;font-size:13px;"></div>
+  </div>
+  <div class="mf">
+    <button class="btn btn-gh" onclick="cerrarAjusteCobro()">Cancelar</button>
+    <button class="btn btn-p" style="background:#0891b2;" onclick="confirmarAjusteCobro()">✅ Registrar ajuste</button>
+  </div>
+</div>
+</div>
+
 <div class="mo" id="mo-cobro" onclick="if(event.target===this)cerrarModalCobro()">
 <div class="modal" style="width:420px;">
   <div class="mh" style="background:#16a34a;">
@@ -9851,7 +10217,7 @@ function alertaPendientesUrgentes() {
       <select id="cob-metodo">
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
-        <option value="LINK">LINK → Cuscatlán mañana (96.228%)</option>
+        <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
       </select>
     </div>
     <div class="fg" style="margin-top:12px;">
