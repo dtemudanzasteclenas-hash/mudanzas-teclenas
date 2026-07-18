@@ -919,7 +919,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <!-- ===== PANEL DE AUDITORÍA DE MODIFICACIONES DE COSTO (v102, CAMBIO 1) ===== -->
     <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #0891b2;overflow:hidden;">
       <div style="background:#0e7490;color:#fff;padding:11px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;">🧾 AUDITORÍA DE MODIFICACIONES DE COSTO <span id="audit-costos-count" style="font-size:12px;font-weight:600;opacity:.85;"></span></span>
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;" title="Solo las modificaciones de los servicios del día que estás viendo.">🧾 AUDITORÍA DE MODIFICACIONES DE COSTO — SERVICIOS DEL DÍA <span id="audit-costos-count" style="font-size:12px;font-weight:600;opacity:.85;"></span></span>
         <input type="text" id="audit-costos-filtro" placeholder="🔍 Buscar código, cliente, vendedor, tipo…" oninput="_setAuditCostosFiltro(this.value)"
           style="border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;min-width:230px;">
       </div>
@@ -934,6 +934,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
               <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Aumento / Disminución</th>
               <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Precio original</th>
               <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:right;">Nuevo precio</th>
+              <th style="padding:8px;font-size:10px;text-transform:uppercase;letter-spacing:.04em;text-align:center;" title="Invalidar deja el registro visible pero devuelve el precio a la normalidad.">Acción</th>
             </tr>
           </thead>
           <tbody id="audit-costos-body"></tbody>
@@ -2629,7 +2630,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-17-v103';
+const APP_VERSION = '2026-07-18-v104';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3238,8 +3239,14 @@ function pdfBuildBloque(r) {
   const nombreCompleto = (r.nombre + ' ' + (r.apellido||'')).trim();
   const horas = r.horasOcupadas && r.horasOcupadas.length > 1 ? r.horasOcupadas.join(' + ') : r.hora;
   // Formatear costo y personal con fallback a 0 si están vacíos (evita "$" o " HOMBRES" huérfanos)
-  const costoNum = parseFloat(r.costo);
+  // v104: al IMPRIMIR se muestra el PRECIO TOTAL VIGENTE (costo pactado ± ajustes de cobro).
+  // Si se aumentó o descontó el precio, la tarjeta sale ya con el total que se le cobra al
+  // cliente — el costo original sigue intacto en los datos, solo cambia lo que se imprime.
+  const costoNum = _costoActual(r);
   const costoFmt = isNaN(costoNum) ? '0.00' : costoNum.toFixed(2);
+  // Marca discreta de precio ajustado + el original, para que en el papel se sepa que cambió.
+  const costoMod = _costoModificado(r.codigo);
+  const costoOrigFmt = (parseFloat(r.costo)||0).toFixed(2);
   const personalFmt = String(parseInt(r.personal) || 0);
   // Badge de tipo de cliente — pequeño, fijo (no se compacta), color según tipo
   const tipoCli = r.tipoCliente || 'Consumidor Final';
@@ -3302,7 +3309,7 @@ function pdfBuildBloque(r) {
       <tr><td class="lbl">Lugar de descarga:</td><td class="addr" colspan="3">${esc(r.descarga)}</td></tr>
       <tr>
         <td class="lbl">Camión:</td><td class="val-big">${esc(unidadFull)}</td>
-        <td class="lbl">Precio:</td><td class="val-big">$${esc(costoFmt)}</td>
+        <td class="lbl">Precio:</td><td class="val-big">$${esc(costoFmt)}${costoMod ? ` <span style="font-size:7pt;font-weight:700;color:#0e7490;">✏️</span>` : ''}</td>
       </tr>
       <tr>
         <td class="lbl">Hora:</td><td class="val-big">${esc(horas)}</td>
@@ -3319,7 +3326,7 @@ function pdfBuildBloque(r) {
     </div>
 
     <div class="costo-final">
-      <span class="costo-lbl">COSTO TOTAL</span>
+      <span class="costo-lbl">COSTO TOTAL${costoMod ? ` <span style="font-size:6.5pt;font-weight:700;opacity:.85;">✏️ AJUSTADO (antes $${esc(costoOrigFmt)})</span>` : ''}</span>
       <span class="costo-val">$${esc(costoFmt)}</span>
       <span class="hombres">${esc(personalFmt)} HOMBRES</span>
     </div>
@@ -3955,7 +3962,7 @@ function renderAgenda() {
               <div class="tv-nombre">${nombre}</div>
               <div class="tv-bottom">
                 ${hayHoraCustom ? `<div class="tv-hora">🕐 ${_displayHora}</div>` : '<div></div>'}
-                ${costoVal > 0 ? `<div class="tv-costo">$${costoVal.toFixed(2)}</div>` : ''}
+                ${costoVal > 0 ? `<div class="tv-costo" title="${_costoModificado(r.codigo) ? _notaCostoMod(r.codigo).trim() : ''}">$${_costoActual(r).toFixed(2)}${_costoModificado(r.codigo) ? ' <span style="font-size:.6em;">✏️</span>' : ''}</div>` : ''}
               </div>
             </div>`;
         } else {
@@ -4210,6 +4217,14 @@ async function limpiarDuplicados() {
     if (Array.isArray(day.cobrosPendientes)) {
       day.cobrosPendientes.forEach(cb => { if (reapuntar[cb.codigo]) cb.codigo = reapuntar[cb.codigo]; });
     }
+    // REGLA 8 (v104): los AJUSTES DE COBRO se vinculan por resCodigo. Sin reapuntarlos, la
+    // limpieza dejaba el ajuste colgando de un código borrado: se perdía la marca "costo
+    // modificado" y el total cobrado del servicio volvía al original.
+    if (Array.isArray(day.otrosIngresos)) {
+      day.otrosIngresos.forEach(g => {
+        if (g && g.ajuste && reapuntar[g.resCodigo]) g.resCodigo = reapuntar[g.resCodigo];
+      });
+    }
   });
   // Reapuntar comentarios (local) — sin esto los comentarios quedan huérfanos apuntando a códigos borrados
   if (typeof comentarios !== 'undefined' && comentarios) {
@@ -4336,7 +4351,7 @@ async function migrarTodosLosCodigosA6Digitos() {
       day.hidden = day.hidden.map(c => (mapping[c] && !fallidos.has(c)) ? mapping[c] : c);
     }
   });
-  // pdData: slots + cobrosPendientes
+  // pdData: slots + cobrosPendientes + ajustes de cobro
   Object.values(pdData||{}).forEach(day => {
     (day.columnas||[]).forEach(col => {
       Object.values(col.slots||{}).forEach(slot => {
@@ -4347,6 +4362,15 @@ async function migrarTodosLosCodigosA6Digitos() {
     if (Array.isArray(day.cobrosPendientes)) {
       day.cobrosPendientes.forEach(cb => {
         if (mapping[cb.codigo] && !fallidos.has(cb.codigo)) cb.codigo = mapping[cb.codigo];
+      });
+    }
+    // REGLA 8 (v104): los AJUSTES DE COBRO se vinculan por resCodigo. Sin migrarlos, al
+    // renumerar quedaban huérfanos: la reservación perdía su marca "costo modificado" y su
+    // historial de modificaciones aparecía bajo un código que ya no existe.
+    if (Array.isArray(day.otrosIngresos)) {
+      day.otrosIngresos.forEach(g => {
+        const v = g && g.ajuste && g.resCodigo;
+        if (v && mapping[v] && !fallidos.has(v)) g.resCodigo = mapping[v];
       });
     }
   });
@@ -4830,7 +4854,8 @@ function renderCli(qNombre='', qTel='') {
           ${r.camionEspecifico ? `<div style="font-size:10px;color:#6d28d9;font-weight:700;margin-top:3px;">🔑 ${NOMBRES_CAMION[r.camionEspecifico]||r.camionEspecifico}</div>` : ''}
         </td>
         <td style="padding:10px 14px;text-align:right;">
-          <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;color:#16a34a;">$${r.costo||'—'}</span>
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;color:${_costoModificado(r.codigo)?'#0891b2':'#16a34a'};" title="${_costoModificado(r.codigo)?_notaCostoMod(r.codigo).trim():''}">$${_costoActual(r).toFixed(2)}</span>
+          ${_costoModificado(r.codigo)?`<div style="font-size:10px;color:var(--gris2);font-weight:700;">✏️ antes <span style="text-decoration:line-through;">$${(parseFloat(r.costo)||0).toFixed(2)}</span></div>`:''}
         </td>
         <td style="padding:10px 14px;text-align:center;">
           <span class="est ${r.estado}" style="font-size:10px;">${r.estado}</span>
@@ -5404,11 +5429,18 @@ function verRes(idxOCodigo) {
   document.getElementById('p-carga').textContent = r.carga;
   document.getElementById('p-desc').textContent = r.descarga;
   // Costo: se muestra al lado del teléfono (arriba) y también en la sección de firma (abajo, para consistencia con impresión)
-  const costoNum = parseFloat(r.costo);
+  // v104: se muestra el PRECIO VIGENTE (pactado ± ajustes de cobro). Si fue modificado, el
+  // título lleva la nota con el original, para que se sepa que cambió y de cuánto venía.
+  const costoNum = _costoActual(r);
   const costoDisplay = isNaN(costoNum) ? '0.00' : costoNum.toFixed(2);
-  document.getElementById('p-costo').textContent = costoDisplay;
+  const _modR = _costoModificado(r.codigo);
+  const pCosto = document.getElementById('p-costo');
+  if (pCosto) { pCosto.textContent = costoDisplay; pCosto.title = _modR ? _notaCostoMod(r.codigo).trim() : ''; }
   const pCostoTop = document.getElementById('p-costo-top');
-  if (pCostoTop) pCostoTop.textContent = '$' + costoDisplay;
+  if (pCostoTop) {
+    pCostoTop.textContent = '$' + costoDisplay + (_modR ? ' ✏️' : '');
+    pCostoTop.title = _modR ? _notaCostoMod(r.codigo).trim() : '';
+  }
   document.getElementById('p-personal').textContent = (r.personal || '0') + ' hombres totalmente capacitados';
   
   // Servicios adicionales en PDF
@@ -5426,7 +5458,8 @@ function verRes(idxOCodigo) {
   // WhatsApp
   const unidadWA = r.unidad === 'grande' ? `Camión Grande (furgón de 7 metros / 10 toneladas${r.rampa==='con rampa hidráulica'?', con rampa hidráulica':''})` :
                    r.unidad === 'mediano' ? 'Camión Mediano (furgón de 5 metros / 5 toneladas)' : 'Camión Pequeño (furgón de 3 metros / 2 toneladas)';
-  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal} hombres totalmente capacitados* a su servicio por un costo de *$${r.costo}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.\n\n`;
+  // v104: al cliente se le manda el PRECIO VIGENTE (pactado ± ajustes de cobro), nunca el viejo.
+  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal} hombres totalmente capacitados* a su servicio por un costo de *$${_costoActual(r).toFixed(2)}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.\n\n`;
   msg += `📦 *Carga:* ${r.carga}\n🏠 *Descarga:* ${r.descarga}\n`;
   if (r.servicios.includes('embalaje')) msg += `\n📦 *Servicio de embalaje de muebles incluido.*`;
   if (r.servicios.includes('empaque')) {
@@ -5859,7 +5892,8 @@ function abrirWA() {
 function generarMensajeWhatsApp(r) {
   const unidadWA = r.unidad === 'grande' ? `Camión Grande (furgón de 7 metros / 10 toneladas${r.rampa==='con rampa hidráulica'?', con rampa hidráulica':''})` :
                    r.unidad === 'mediano' ? 'Camión Mediano (furgón de 5 metros / 5 toneladas)' : 'Camión Pequeño (furgón de 3 metros / 2 toneladas)';
-  const costoFmt = parseFloat(r.costo) ? parseFloat(r.costo).toFixed(2) : '0.00';
+  // v104: PRECIO VIGENTE (pactado ± ajustes de cobro).
+  const costoFmt = _costoActual(r).toFixed(2);
   let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal||5} hombres totalmente capacitados* a su servicio por un costo de *$${costoFmt}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.\n\n`;
   msg += `📦 *Carga:* ${r.carga}\n🏠 *Descarga:* ${r.descarga}\n`;
   if (r.servicios && r.servicios.includes('embalaje')) msg += `\n📦 *Servicio de embalaje de muebles incluido.*`;
@@ -6517,7 +6551,8 @@ function renderPDSinAsignar(f) {
         title="Clic para ver detalles. Asignalo a un equipo en la pizarra abajo.">
         <span>📦 ${esc(nombre)}</span>
         <span style="opacity:.85;font-size:11px;">${esc(horaTxt)}</span>
-        <span style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:10px;font-size:10px;">$${esc(r.costo||'0')}</span>
+        ${_costoModificado(r.codigo) ? `<span title="Costo modificado" style="font-size:10px;">✏️</span>` : ''}
+        <span style="background:rgba(0,0,0,.2);padding:1px 6px;border-radius:10px;font-size:10px;">$${_costoActual(r).toFixed(2)}</span>
       </div>`;
   }).join('');
   banner.innerHTML = `
@@ -6614,7 +6649,9 @@ function buildColumnaTV(col, idx, f) {
         <span class="tv-pz-nombre">${esc(r.nombre)} ${esc(r.apellido||'')}</span>
         <span class="tv-pz-tel">📞 ${esc(r.tel)}</span>
       </div>
-      ${!isSecondary && costoVal > 0 ? `<div class="tv-pz-costo">$${costoVal.toFixed(2)}</div>` : ''}
+      ${!isSecondary && costoVal > 0 ? `<div class="tv-pz-costo">${_costoModificado(r.codigo)
+        ? `$${_costoActual(r).toFixed(2)} <span style="font-size:.6em;font-weight:700;opacity:.6;text-decoration:line-through;">$${costoVal.toFixed(2)}</span> <span style="font-size:.5em;font-weight:900;background:#0891b2;color:#fff;border-radius:20px;padding:1px 6px;vertical-align:middle;">✏️ MODIF.</span>`
+        : `$${costoVal.toFixed(2)}`}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -6783,10 +6820,12 @@ function buildColumna2(col, idx, f) {
     const uTag = asignadaR ? `<span style="display:inline-block;background:${uBg};color:#fff;font-size:9px;font-weight:900;border-radius:5px;padding:2px 7px;letter-spacing:.4px;">${uLbl}</span>` : '';
     // Show custom hora label for non-standard times
     const customHoraLabel = asignadaR && !HORARIOS.includes(asignadaR.hora) ? asignadaR.hora : '';
+    // v104: ¿este servicio tiene el costo modificado? (borde lateral + badge + precio vigente)
+    const modAsig = asignadaR ? _costoModificado(asignadaR.codigo) : false;
 
     // Assigned card (green border = selected)
     const asignadaHtml = asignadaR ? `
-      <div style="background:${isSecondaryHora ? '#e8eef9' : '#d1fae5'};border:2px solid ${isSecondaryHora ? '#1e4fa0' : '#16a34a'};border-radius:8px;padding:8px 10px;margin-bottom:8px;position:relative;">
+      <div style="background:${isSecondaryHora ? '#e8eef9' : '#d1fae5'};border:2px solid ${isSecondaryHora ? '#1e4fa0' : '#16a34a'};${modAsig?'border-left:5px solid #0891b2;':''}border-radius:8px;padding:8px 10px;margin-bottom:8px;position:relative;">
         <div style="position:absolute;top:6px;right:6px;display:flex;gap:3px;">
           ${canExtend ? `<button onclick="extenderHorario('${f}',${idx},'${h}',${hi})"
             style="background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:700;color:#92400e;cursor:pointer;">⏰ +Horario</button>` : ''}
@@ -6796,10 +6835,10 @@ function buildColumna2(col, idx, f) {
         </div>
         <div style="font-size:10px;font-weight:800;color:${isSecondaryHora ? '#1e4fa0' : '#16a34a'};">${isSecondaryHora ? '⏰ CONTINÚA' : '✅ ASIGNADO'} · ${asignadaR.codigo}${asignadaR.vendedor ? ` <span style="color:#1e4fa0;font-weight:600;">· 👤 ${asignadaR.vendedor}</span>` : ''}</div>
         <div style="font-size:12px;font-weight:700;color:#1a2236;margin-top:2px;">${escHtml(asignadaR.nombre)} ${escHtml(asignadaR.apellido)} <span style="font-size:11px;font-weight:600;color:#6b7280;">· 📞 ${escHtml(asignadaR.tel)}</span></div>
-        <div style="margin-top:4px;">${uTag}</div>
+        <div style="margin-top:4px;">${uTag} ${_badgeCostoMod(asignadaR.codigo, false)}</div>
         <div style="font-size:11px;color:#6b7280;margin-top:3px;">📦 ${escHtml(asignadaR.carga)}</div>
         <div style="font-size:11px;color:#6b7280;">🏠 ${escHtml(asignadaR.descarga)}</div>
-        ${!isSecondaryHora ? `<div style="font-size:12px;font-weight:800;color:#16a34a;margin-top:4px;">$${asignadaR.costo}</div>` : `<div style="font-size:10px;color:#1e4fa0;font-weight:600;margin-top:4px;">Precio en horario principal</div>`}
+        ${!isSecondaryHora ? `<div style="margin-top:4px;">${_precioPizarra(asignadaR, 12, '#16a34a')}</div>` : `<div style="font-size:10px;color:#1e4fa0;font-weight:600;margin-top:4px;">Precio en horario principal</div>`}
         ${customHoraLabel ? `<div style="font-size:10px;color:#d97706;font-weight:700;margin-top:2px;">⏰ Hora real: ${customHoraLabel}</div>` : ''}
         ${asignadaR.obs?`<div style="font-size:10px;color:#d97706;margin-top:3px;font-style:italic;">📝 ${escHtml(asignadaR.obs)}</div>`:''}
         <!-- Actions row -->
@@ -6823,7 +6862,7 @@ function buildColumna2(col, idx, f) {
         <div style="font-size:12px;font-weight:700;color:#1a2236;margin-top:2px;">${escHtml(r.nombre)} ${escHtml(r.apellido)} <span style="font-size:11px;font-weight:600;color:#6b7280;">· 📞 ${escHtml(r.tel)}</span></div>
         <div style="font-size:11px;color:#6b7280;margin-top:2px;">📦 ${escHtml(r.carga)}</div>
         <div style="font-size:11px;color:#6b7280;">🏠 ${escHtml(r.descarga)}</div>
-        <div style="font-size:12px;font-weight:800;color:#16a34a;margin-top:3px;">$${r.costo}</div>
+        <div style="margin-top:3px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;">${_precioPizarra(r, 12, '#16a34a')}${_badgeCostoMod(r.codigo, true)}</div>
         ${r.obs?`<div style="font-size:10px;color:#d97706;margin-top:2px;font-style:italic;">📝 ${escHtml(r.obs)}</div>`:''}
       </div>`).join('');
 
@@ -6839,7 +6878,7 @@ function buildColumna2(col, idx, f) {
             <div style="font-size:12px;font-weight:700;color:#1a2236;margin-top:2px;">${escHtml(r.nombre)} ${escHtml(r.apellido)} <span style="font-size:11px;font-weight:600;color:#6b7280;">· 📞 ${escHtml(r.tel)}</span></div>
             <div style="font-size:11px;color:#6b7280;">📦 ${escHtml(r.carga)}</div>
             <div style="font-size:11px;color:#6b7280;">🏠 ${escHtml(r.descarga)}</div>
-            <div style="font-size:12px;font-weight:800;color:#d97706;margin-top:3px;">$${r.costo}</div>
+            <div style="margin-top:3px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;">${_precioPizarra(r, 12, '#d97706')}${_badgeCostoMod(r.codigo, true)}</div>
             ${r.obs?`<div style="font-size:10px;color:#d97706;margin-top:2px;font-style:italic;">📝 ${escHtml(r.obs)}</div>`:''}
           </div>`).join('')}
       </div>` : '';
@@ -6856,7 +6895,9 @@ function buildColumna2(col, idx, f) {
             <span style="font-size:12px;font-weight:900;color:${asignadaR?'#16a34a':color};text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">${asignadaR && !HORARIOS.includes(asignadaR.hora) && mapHoraToRow(asignadaR.hora)===h ? asignadaR.hora : h}</span>
             ${asignadaR ? `<span style="display:inline-flex;align-items:center;gap:5px;flex-shrink:0;">
               <span style="background:#16a34a;color:#fff;font-size:9px;font-weight:800;border-radius:20px;padding:1px 7px;">✓</span>
-              <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:900;color:#16a34a;">$${asignadaR.costo}</span>
+              ${_badgeCostoMod(asignadaR.codigo, true)}
+              <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:900;color:${modAsig?'#0891b2':'#16a34a'};">$${(modAsig?_costoActual(asignadaR):(parseFloat(asignadaR.costo)||0)).toFixed(2)}</span>
+              ${modAsig?`<span style="font-size:10px;font-weight:700;color:var(--gris2);text-decoration:line-through;">$${(parseFloat(asignadaR.costo)||0).toFixed(2)}</span>`:''}
             </span>` : (cnt>0 ? `<span style="background:${color};color:#fff;font-size:9px;font-weight:800;border-radius:20px;padding:1px 7px;flex-shrink:0;">${cnt}</span>` : '')}
           </div>
           ${asignadaR ? `
@@ -6905,6 +6946,14 @@ function buildColumna2(col, idx, f) {
     const r = reservas.find(rv => rv.codigo === cod);
     if (r && r.estado !== 'cancelado') totalCol += parseFloat(r.costo)||0;
   });
+  // v104: ajustes de cobro de los servicios de esta columna. El TOTAL se deja en costos
+  // ORIGINALES (es la base de comisiones y del cuadre de servicios; los ajustes entran al día
+  // como OTROS INGRESOS y sumarlos acá los contaría dos veces). Se muestran aparte, en una línea
+  // discreta, para que el total visible y las tarjetas no se contradigan.
+  let ajustesCol = 0;
+  contados.forEach(cod => { ajustesCol += _sumaAjustes(cod); });
+  const hayAjustesCol = Math.abs(ajustesCol) >= 0.005;
+
   const totalPagos = (col.miembros||[]).reduce((s,m)=>s+(parseFloat(m.pago)||0),0);
   const propinas = col.propinas || ['','',''];
   const propTotal = propinas.reduce((s,p) => s+(parseFloat(p)||0), 0);
@@ -6928,10 +6977,10 @@ function buildColumna2(col, idx, f) {
     <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d97706;">
       <div style="font-size:10px;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">⭐ Servicios extra (fuera de cuota)</div>
       ${extrasAsignados.map(x => `
-        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:6px 9px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
+        <div style="background:#fff7ed;border:1px solid #fed7aa;${_costoModificado(x.r.codigo)?'border-left:4px solid #0891b2;':''}border-radius:7px;padding:6px 9px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;gap:6px;">
           <div style="min-width:0;cursor:pointer;flex:1;" onclick="verRes('${x.r.codigo}')">
-            <div style="font-size:11px;font-weight:700;color:#92400e;">${escHtml(x.r.nombre)} ${escHtml(x.r.apellido||'')} · ${x.r.hora}</div>
-            <div style="font-size:10px;color:#6b7280;">📞 ${escHtml(x.r.tel)} · $${x.r.costo||'0'} · ${x.r.codigo}</div>
+            <div style="font-size:11px;font-weight:700;color:#92400e;">${escHtml(x.r.nombre)} ${escHtml(x.r.apellido||'')} · ${x.r.hora} ${_badgeCostoMod(x.r.codigo, true)}</div>
+            <div style="font-size:10px;color:#6b7280;">📞 ${escHtml(x.r.tel)} · ${_precioPizarra(x.r, 10, '#6b7280')} · ${x.r.codigo}</div>
           </div>
           <select onchange="updateServicioExtraMetodo('${f}',${idx},'${x.r.codigo}',this.value)" title="¿Cómo se recibió el dinero?"
             style="border:1.5px solid ${_colorMetodoExtra[x.metodo]||'#d97706'};border-radius:5px;padding:3px 4px;font-size:10px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:#fff;cursor:pointer;color:${_colorMetodoExtra[x.metodo]||'#d97706'};flex-shrink:0;">
@@ -6942,7 +6991,7 @@ function buildColumna2(col, idx, f) {
       <select onchange="if(this.value){addServicioExtra('${f}',${idx},this.value);this.value='';}"
         style="width:100%;border:1.5px solid #d97706;border-radius:6px;padding:6px 8px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;cursor:pointer;">
         <option value="">+ Agregar servicio extra…</option>
-        ${resDiaParaExtra.map(r => `<option value="${r.codigo}">${r.hora} · ${escHtml(r.nombre)} ${escHtml(r.apellido||'')} · $${r.costo||'0'}</option>`).join('')}
+        ${resDiaParaExtra.map(r => `<option value="${r.codigo}">${r.hora} · ${escHtml(r.nombre)} ${escHtml(r.apellido||'')} · $${_costoActual(r).toFixed(2)}${_costoModificado(r.codigo)?' ✏️':''}</option>`).join('')}
       </select>
     </div>`;
 
@@ -6976,6 +7025,7 @@ function buildColumna2(col, idx, f) {
         <span style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Total</span>
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:${color};">$${totalCol.toFixed(2)}</span>
       </div>
+      ${hayAjustesCol?`<div style="text-align:right;font-size:11px;color:#0891b2;font-weight:700;margin-top:2px;" title="Los ajustes de cobro entran al día como otros ingresos; el total de arriba es el costo pactado.">✏️ Ajustes: ${ajustesCol>0?'+':'−'}$${Math.abs(ajustesCol).toFixed(2)} → cobrado $${(totalCol+ajustesCol).toFixed(2)}</div>`:''}
       ${totalPagos>0?`<div style="text-align:right;font-size:11px;color:#d97706;font-weight:700;margin-top:2px;">Personal: $${totalPagos.toFixed(2)}</div>`:''}
       <button onclick="toggleFinalizarColumna(${idx})" style="width:100%;margin-top:10px;background:${finalizada?'#fef3c7':'#16a34a'};color:${finalizada?'#92400e':'#fff'};border:none;border-radius:7px;padding:8px 0;font-size:12px;font-weight:800;cursor:pointer;font-family:'Barlow',sans-serif;">${finalizada?'↩️ Reabrir grupo':'✅ Concluir grupo'}</button>
     </div>
@@ -8068,12 +8118,17 @@ function renderOtrosIngresos() {
       const metColor = COLOR_METODO[metSel] || '#16a34a';
       // v102 (CAMBIO 1): badge de vinculo cuando el ingreso proviene de un ajuste de cobro.
       const badge = g.ajuste ? `<span title="Ajuste de cobro vinculado a ${escHtml(g.resCodigo||'')}" style="display:inline-block;background:#ecfeff;color:#0891b2;border:1px solid #0891b2;border-radius:4px;font-size:9px;font-weight:800;padding:0 4px;margin-left:4px;">🔗 ${escHtml(g.resCodigo||'')}</span>` : '';
+      // v104: un ajuste ANULADO queda en $0.00 y de solo lectura. El registro sigue visible acá
+      // y en la auditoría (donde está el botón para reactivarlo), pero no se edita a mano.
+      const anul = !!g.anulado;
+      const badgeAnul = anul ? `<span title="Modificación invalidada${g.anuladoPor?' por '+escHtml(g.anuladoPor):''}. Reactivala desde la tabla de auditoría." style="display:inline-block;background:#fee2e2;color:#b91c1c;border:1px solid #d42b2b;border-radius:4px;font-size:9px;font-weight:800;padding:0 4px;margin-left:4px;">🚫 ANULADA</span>` : '';
+      const roAnul = anul ? 'readonly title="Modificación anulada — reactivala desde la auditoría"' : '';
       return `
-      <div style="display:grid;grid-template-columns:80px 1fr 1fr 100px 28px;gap:6px;align-items:center;margin-bottom:6px;">
-        <input type="number" value="${g.monto}" placeholder="0.00" step="0.01" oninput="updateOtroIngreso('${g._id}','monto',this.value)" ${dis}
-          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:${(parseFloat(g.monto)||0)<0?'#d42b2b':'#16a34a'};">
+      <div style="display:grid;grid-template-columns:80px 1fr 1fr 100px 28px;gap:6px;align-items:center;margin-bottom:6px;${anul?'opacity:.7;':''}">
+        <input type="number" value="${g.monto}" placeholder="0.00" step="0.01" oninput="updateOtroIngreso('${g._id}','monto',this.value)" ${roAnul} ${dis}
+          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:${(parseFloat(g.monto)||0)<0?'#d42b2b':'#16a34a'};${anul?'background:#f8fafc;':''}">
         <div style="min-width:0;"><input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso('${g._id}','titulo',this.value)" ${g.ajuste?'readonly title="Generado por un ajuste de cobro"':''} ${dis}
-          style="width:100%;border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;${g.ajuste?'background:#f8fafc;':''}">${badge}</div>
+          style="width:100%;border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;${g.ajuste?'background:#f8fafc;':''}${anul?'text-decoration:line-through;':''}">${badge}${badgeAnul}</div>
         <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateOtroIngreso('${g._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
         <select onchange="updateOtroIngreso('${g._id}','metodo',this.value)" ${dis} title="¿Cómo se recibió el dinero?"
@@ -8093,7 +8148,13 @@ function updateOtroIngreso(id, campo, val) {
   if (!day.otrosIngresos) day.otrosIngresos = [];
   const g = day.otrosIngresos.find(x=>x._id===id);
   if (!g) return;
+  // v104: un ajuste ANULADO no se edita a mano — hay que reactivarlo desde la auditoría.
+  // Sin este guard, escribirle un monto lo volvería a meter al dinero del día sin constancia.
+  if (g.anulado) return;
   g[campo]=val; g._ts=Date.now();
+  // v104: si es un AJUSTE de cobro, su monto alimenta la marca "costo modificado" de la pizarra
+  // y la auditoría. Refresco con debounce para no re-renderizar mientras se tipea.
+  if (g.ajuste) _refrescarMarcasCostoDebounced();
   // v102 (CAMBIO 2): al elegir metodo, derivar tambien 'destino' (cuenta) para lectores legacy.
   // EFECTIVO→CAJA CHICA, CUSCA/LINK→CUSCATLAN. PENDIENTE no cae en cuenta (queda en destino previo).
   if (campo==='metodo') { g.destino = (val==='EFECTIVO') ? 'CAJA CHICA' : (val==='CUSCA'||val==='LINK') ? 'CUSCATLAN' : (g.destino||'CAJA CHICA'); }
@@ -8111,12 +8172,16 @@ function delOtroIngreso(id) {
   if (!day.otrosIngresos) return;
   const idx=day.otrosIngresos.findIndex(x=>x._id===id);
   if (idx<0) return;
+  const eraAjuste = !!day.otrosIngresos[idx].ajuste;
   if (!day._tomb) day._tomb={}; if(!day._tomb.otrosIngresos) day._tomb.otrosIngresos={};
   day._tomb.otrosIngresos[id]=Date.now();
   day.otrosIngresos.splice(idx,1);
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderOtrosIngresos(); renderStats2(f);
+  // v104: al borrar un ajuste, la marca "costo modificado" debe caerse sola si el servicio
+  // volvió a su costo original.
+  if (eraAjuste) _refrescarMarcasCosto();
   _programarSyncFinanzas();
 }
 
@@ -8194,7 +8259,11 @@ function cobrarPendiente(codigo, fechaOriginal) {
   const r = reservas.find(rv => rv.codigo === codigo);
   _cobroCtx = { codigo, fechaOriginal };
   const info = document.getElementById('cob-info');
-  if (info) info.textContent = (r ? `${r.nombre} ${r.apellido||''} · $${r.costo||'0'} · ${fmtFecha(fechaOriginal)}` : codigo)
+  // v104: si el precio fue ajustado se avisa acá. OJO: el monto PENDIENTE sigue siendo el costo
+  // base — los ajustes ya entraron como OTROS INGRESOS el día que se registraron, así que
+  // cobrarlos otra vez acá duplicaría el dinero.
+  if (info) info.textContent = (r ? `${r.nombre} ${r.apellido||''} · A COBRAR $${_costoActual(r).toFixed(2)} · ${fmtFecha(fechaOriginal)}` : codigo)
+    + (r && _costoModificado(r.codigo) ? ` ·${_notaCostoMod(r.codigo)} — al sistema entra el monto base $${(parseFloat(r.costo)||0).toFixed(2)} porque el ajuste ya se registró aparte el día que lo hiciste (el neto cuadra igual)` : '')
     + (origCerrado ? ' · 🔒 día del servicio cerrado: el ingreso entra al día de cobro que elijás (el día cerrado no se toca)' : '');
   const fechaEl = document.getElementById('cob-fecha');
   if (fechaEl) fechaEl.value = getPDFecha();
@@ -8212,7 +8281,9 @@ function enviarRecordatorioCobroWA() {
   if (!r) { alert('No se encontró la reservación.'); return; }
   const tel = String(r.tel||'').split(/[\/,;]/)[0].replace(/\D/g,'');
   if (!tel) { alert('Sin teléfono.'); return; }
-  const msg = `Buen día, le saludamos de *Mudanzas Tecleñas*. Le recordamos amablemente que tiene pendiente el pago de la mudanza del *${fmtFecha(_cobroCtx.fechaOriginal)}* por un monto de *$${parseFloat(r.costo||0).toFixed(2)}*. Puede cancelar en efectivo, transferencia o link de pago. ¡Gracias!`;
+  // v104: al cliente se le pide el PRECIO VIGENTE (con sus aumentos o descuentos ya aplicados),
+  // que es lo que de verdad tiene que pagar.
+  const msg = `Buen día, le saludamos de *Mudanzas Tecleñas*. Le recordamos amablemente que tiene pendiente el pago de la mudanza del *${fmtFecha(_cobroCtx.fechaOriginal)}* por un monto de *$${_costoActual(r).toFixed(2)}*. Puede cancelar en efectivo, transferencia o link de pago. ¡Gracias!`;
   window.open(`https://wa.me/503${tel}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
@@ -8338,13 +8409,85 @@ function delCobroPendiente(id) {
 // completa (quién, cuándo, motivo, cuánto aumentó/descontó) y aparece en el panel de auditoría.
 let _ajusteCtx = null, _ajusteSigno = '+';
 
-// Suma de todos los ajustes (con signo) aplicados a una reservación, en todos los días.
-function _sumaAjustes(codigo){
-  let s = 0;
-  Object.values(pdData||{}).forEach(day => {
-    (day.otrosIngresos||[]).forEach(g => { if (g.ajuste && g.resCodigo === codigo) s += parseFloat(g.monto)||0; });
+// ---- COSTO MODIFICADO: helpers de lectura (v104) ----
+// FUENTE DE VERDAD ÚNICA: los "otros ingresos" con ajuste:true y resCodigo apuntando a la
+// reservación. Un ajuste VIVE en el día en que se registró (para el cuadre), pero PERTENECE al
+// servicio, cuya fecha es r.fecha. Todo lo que muestre "costo modificado" (pizarra, auditoría,
+// PDF) se deriva de acá, así nunca hay dos criterios distintos ni registros duplicados.
+
+// Ajustes VIGENTES (con signo) de una reservación, de cualquier día, en orden cronológico.
+// Los ANULADOS (g.anulado) quedan fuera: su registro se conserva para siempre en la auditoría,
+// pero ya no mueven el precio ni el dinero (su monto se pone en 0.00 al anular).
+function _ajustesDe(codigo){
+  if (!codigo) return [];
+  const out = [];
+  Object.keys(pdData||{}).forEach(fecha => {
+    const day = pdData[fecha];
+    ((day && day.otrosIngresos) || []).forEach(g => {
+      if (g && g.ajuste && !g.anulado && g.resCodigo === codigo) out.push({ fecha, g, monto: parseFloat(g.monto)||0 });
+    });
   });
-  return s;
+  out.sort((a,b) => String(a.g.en||'').localeCompare(String(b.g.en||'')) || ((a.g._ts||0)-(b.g._ts||0)));
+  return out;
+}
+
+// Suma de todos los ajustes (con signo) aplicados a una reservación, en todos los días.
+function _sumaAjustes(codigo){ return _ajustesDe(codigo).reduce((s,it)=>s+it.monto, 0); }
+
+// ¿Se marca como "COSTO MODIFICADO"? Solo si el NETO de los ajustes es distinto de cero: si un
+// aumento y un descuento se compensan, el precio volvió al original y la marca desaparece sola.
+function _costoModificado(codigo){ return Math.abs(_sumaAjustes(codigo)) >= 0.005; }
+
+// Costo vigente = costo original (que NUNCA se toca) + neto de ajustes.
+function _costoActual(r){ return r ? ((parseFloat(r.costo)||0) + _sumaAjustes(r.codigo)) : 0; }
+
+// Badge discreto para la pizarra. mini = versión compacta (encabezado colapsado / modo TV).
+function _badgeCostoMod(codigo, mini){
+  if (!_costoModificado(codigo)) return '';
+  const d = _sumaAjustes(codigo);
+  const t = (d>0?'+':'−') + '$' + Math.abs(d).toFixed(2);
+  const tip = `Costo modificado (${t}). El costo original queda intacto.`;
+  return mini
+    ? `<span title="${tip}" style="background:#0891b2;color:#fff;font-size:8px;font-weight:900;border-radius:20px;padding:1px 5px;letter-spacing:.3px;white-space:nowrap;">✏️ ${t}</span>`
+    : `<span title="${tip}" style="background:#0891b2;color:#fff;font-size:9px;font-weight:900;border-radius:20px;padding:2px 7px;letter-spacing:.3px;white-space:nowrap;">✏️ COSTO MODIFICADO ${t}</span>`;
+}
+
+// Marca en TEXTO PLANO (modales, alerts, títulos) — para superficies que no admiten HTML.
+// Ej: " ✏️ modificado (original $130.00, +$45.00)".
+function _notaCostoMod(codigo, corta){
+  if (!_costoModificado(codigo)) return '';
+  const r = reservas.find(rv => rv.codigo === codigo);
+  const orig = r ? (parseFloat(r.costo)||0) : 0;
+  const d = _sumaAjustes(codigo);
+  const signo = d > 0 ? '+' : '−';
+  return corta
+    ? ` ✏️ modificado`
+    : ` ✏️ PRECIO MODIFICADO (original $${orig.toFixed(2)} · ${signo}$${Math.abs(d).toFixed(2)})`;
+}
+
+// Refresca TODO lo que depende de los ajustes: marcas de "costo modificado" en la pizarra y
+// panel de auditoría. Se llama tras crear, editar o borrar un ajuste, para que la marca aparezca
+// (o desaparezca, si el costo volvió al original) sin recargar la página.
+function _refrescarMarcasCosto(){
+  try { if (typeof renderPD === 'function') renderPD(); } catch(e){ console.warn('renderPD (marcas costo):', e); }
+  try { renderAuditoriaCostos(); } catch(e){}
+}
+// Versión con debounce: para cuando el usuario está tipeando el monto de un ajuste en la lista
+// de otros ingresos (no re-renderizar en cada tecla).
+let _tMarcasCosto = null;
+function _refrescarMarcasCostoDebounced(){
+  clearTimeout(_tMarcasCosto);
+  _tMarcasCosto = setTimeout(_refrescarMarcasCosto, 600);
+}
+
+// Precio a mostrar en la pizarra: SIEMPRE el costo vigente; si cambió, el original va al lado,
+// tachado y pequeño (secundario, sin saturar).
+function _precioPizarra(r, px, color, colorTachado){
+  const orig = parseFloat(r.costo)||0;
+  if (!_costoModificado(r.codigo)) return `<span style="font-size:${px}px;font-weight:900;color:${color};">$${orig.toFixed(2)}</span>`;
+  const chico = Math.max(9, Math.round(px*0.62));
+  return `<span style="font-size:${px}px;font-weight:900;color:#0891b2;">$${_costoActual(r).toFixed(2)}</span>`
+       + `<span style="font-size:${chico}px;font-weight:700;color:${colorTachado||'#9aa3b2'};text-decoration:line-through;margin-left:4px;">$${orig.toFixed(2)}</span>`;
 }
 
 // Método de pago con el que se COBRÓ la reservación (para el ajuste "Automático").
@@ -8499,17 +8642,82 @@ function confirmarAjusteCobro(){
   // renderCuaderno omite la lista de otros ingresos si hubo edición reciente (evita pisar inputs);
   // como el ajuste acaba de crear una fila nueva, forzamos su refresco si es el día visible.
   try { if (getPDFecha() === fecha) { renderOtrosIngresos(); renderCuentas(fecha); } } catch(e){}
-  try { renderAuditoriaCostos(); } catch(e){}
+  // v104: refrescar las marcas de "costo modificado" en la pizarra + el panel de auditoría.
+  _refrescarMarcasCosto();
   alert(`✅ Ajuste registrado: ${signo<0?'−':'+'}$${montoAbs.toFixed(2)} (${tipo}) en ${fmtFecha(fecha)}.\n\nCosto original intacto: $${(parseFloat(r.costo)||0).toFixed(2)}\nNuevo total cobrado: $${((parseFloat(r.costo)||0) + _sumaAjustes(r.codigo)).toFixed(2)}`);
+}
+
+// ==================== ANULAR / REACTIVAR UN AJUSTE (v104) ====================
+// "Invalidar" NO borra: el registro queda para siempre en la auditoría con constancia de quién
+// lo anuló y cuándo. Para que deje de mover dinero, el monto se pone en 0.00 y el importe real
+// se guarda en `montoAnulado` — así TODOS los cálculos financieros del programa (cuadre,
+// cerramos, totales, reportes) lo excluyen solos, sin tocar ni una fórmula. Al reactivar se
+// restaura el monto original. El precio del servicio vuelve a la normalidad porque _ajustesDe()
+// ignora los anulados.
+function toggleAnularAjuste(fecha, id){
+  const day = pdData && pdData[fecha];
+  if (!day || !Array.isArray(day.otrosIngresos)) { alert('No se encontró la modificación.'); return; }
+  const g = day.otrosIngresos.find(x => x._id === id);
+  if (!g || !g.ajuste) { alert('No se encontró la modificación.'); return; }
+  // El dinero se mueve en el día donde vive el ajuste: si ese día está cerrado, no se toca.
+  if (isDiaCerrado(fecha)){
+    alert('🔒 El día ' + fmtFecha(fecha) + ' está cerrado.\n\nDesbloquealo en Programación para invalidar o reactivar esta modificación.');
+    return;
+  }
+  const r = reservas.find(rv => rv.codigo === g.resCodigo);
+  const cliente = g.resCliente || (r ? `${r.nombre} ${r.apellido||''}`.trim() : (g.resCodigo||''));
+  const orig = r ? (parseFloat(r.costo)||0) : 0;
+
+  if (!g.anulado){
+    const importe = parseFloat(g.monto)||0;
+    const nuevoTotal = orig + _sumaAjustes(g.resCodigo) - importe;
+    if (!confirm(`¿Invalidar esta modificación?\n\n${cliente} · ${g.tipoMod||''}\nImporte: ${importe<0?'−':'+'}$${Math.abs(importe).toFixed(2)}\n\n• El precio vuelve a $${nuevoTotal.toFixed(2)}\n• Deja de contar en el dinero del día\n• EL REGISTRO NO SE BORRA: queda en la auditoría marcado como ANULADA`)) return;
+    const motivo = prompt('Motivo de la invalidación (opcional):', '') || '';
+    g.montoAnulado = g.monto;      // se conserva el importe real para mostrarlo
+    g.monto = '0.00';              // deja de sumar en todo el programa
+    g.anulado = true;
+    g.anuladoPor = _quienSoy();
+    g.anuladoEn = new Date().toISOString();
+    g.anuladoMotivo = motivo;
+    _logAudit(g.resCodigo, 'ajuste_anulado', `${importe<0?'−':'+'}$${Math.abs(importe).toFixed(2)} · ${g.tipoMod||''}${motivo?' ('+_auditTrunc(motivo)+')':''} · precio vuelve a $${nuevoTotal.toFixed(2)}`);
+  } else {
+    const importe = parseFloat(g.montoAnulado)||0;
+    if (!confirm(`¿Reactivar esta modificación?\n\n${cliente} · ${g.tipoMod||''}\nImporte: ${importe<0?'−':'+'}$${Math.abs(importe).toFixed(2)}\n\nVuelve a aplicarse al precio y al dinero del día.`)) return;
+    g.monto = g.montoAnulado != null ? String(g.montoAnulado) : g.monto;
+    delete g.montoAnulado;
+    g.anulado = false;
+    g.reactivadoPor = _quienSoy();
+    g.reactivadoEn = new Date().toISOString();
+    _logAudit(g.resCodigo, 'ajuste_reactivado', `${importe<0?'−':'+'}$${Math.abs(importe).toFixed(2)} · ${g.tipoMod||''}`);
+  }
+  g._ts = Date.now();
+  _ultimaEdicionFinanzas = Date.now();
+  safeSetLS('mt_pd3', JSON.stringify(pdData));
+  if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); else savePD();
+  try { if (getPDFecha() === fecha) recalcCerramos(); } catch(e){}
+  try { if (getPDFecha() === fecha) { renderOtrosIngresos(); renderCuentas(fecha); } } catch(e){}
+  _refrescarMarcasCosto();
 }
 
 // ==================== PANEL DE AUDITORÍA DE AJUSTES DE COBRO (v102, CAMBIO 1) ====================
 let _auditCostosFiltro = '';
 function _setAuditCostosFiltro(v){ _auditCostosFiltro = String(v||'').toLowerCase().trim(); renderAuditoriaCostos(); }
 
+// Día al que PERTENECE un ajuste: el del SERVICIO (r.fecha). Si la reservación ya no existe,
+// cae al día en que se registró el ajuste, para que ningún registro quede huérfano/invisible.
+function _diaDelAjuste(g, fechaRegistro){
+  const r = reservas.find(rv => rv.codigo === g.resCodigo);
+  return (r && r.fecha) ? r.fecha : fechaRegistro;
+}
+
 function renderAuditoriaCostos(){
   const cont = document.getElementById('audit-costos-body'); if (!cont) return;
-  // Recolectar TODOS los ajustes de todos los días.
+  // FIX v104: el panel muestra SOLO las modificaciones de los servicios del DÍA SELECCIONADO en
+  // Programación. Antes listaba todos los ajustes de todos los días, así que el registro del día
+  // nunca cuadraba con lo que se veía en la pizarra ni con el reporte.
+  const fSel = getPDFecha();
+  // 1) Recolectar TODOS los ajustes (de todos los días) para poder acumular bien el histórico
+  //    de cada reservación; el filtrado por día se aplica DESPUÉS, al armar la vista.
   const items = [];
   Object.entries(pdData||{}).forEach(([fecha,day]) => {
     (day.otrosIngresos||[]).forEach(g => {
@@ -8526,27 +8734,40 @@ function renderAuditoriaCostos(){
     if (acum[cod] === undefined) acum[cod] = orig;
     it.orig = orig;
     it.anterior = acum[cod];
-    it.monto = parseFloat(it.g.monto)||0;
-    acum[cod] += it.monto;
+    // Una modificación ANULADA conserva su importe real (montoAnulado) solo para mostrarlo:
+    // no acumula, así el "nuevo precio" de las filas siguientes refleja el precio de verdad.
+    it.anulado = !!it.g.anulado;
+    it.monto = it.anulado ? (parseFloat(it.g.montoAnulado)||0) : (parseFloat(it.g.monto)||0);
+    if (!it.anulado) acum[cod] += it.monto;
     it.nuevo = acum[cod];
     it.cliente = it.g.resCliente || (r ? `${r.nombre} ${r.apellido||''}`.trim() : cod);
     it.vendedor = it.g.resVendedor || (r ? (r.vendedor||'') : '') || '—';
+    it.diaServicio = _diaDelAjuste(it.g, it.fecha);
   });
-  // Filtro de búsqueda.
-  let vista = items.slice().reverse(); // más reciente primero
+  // 2) Solo los del día seleccionado, más reciente primero.
+  let vista = items.filter(it => it.diaServicio === fSel).reverse();
+  const delDia = vista.length;
+  // 3) Filtro de búsqueda (dentro del día).
   if (_auditCostosFiltro){
     vista = vista.filter(it => (`${it.g.resCodigo||''} ${it.cliente||''} ${it.vendedor||''} ${it.g.tipoMod||''} ${it.g.motivo||''} ${it.g.por||''}`).toLowerCase().includes(_auditCostosFiltro));
   }
-  const totalCount = items.length;
   const TOPE = 300;
   const recortado = vista.length > TOPE;
   const vistaFinal = vista.slice(0, TOPE);
 
+  // El contador SIEMPRE refleja los registros visibles (con y sin búsqueda activa).
   const countEl = document.getElementById('audit-costos-count');
-  if (countEl) countEl.textContent = totalCount + (totalCount===1?' modificación':' modificaciones');
+  if (countEl){
+    const n = vista.length;
+    const base = n + (n===1?' modificación':' modificaciones');
+    countEl.textContent = (_auditCostosFiltro ? `${base} de ${delDia} · ` : `${base} · `) + fmtFecha(fSel);
+  }
 
   if (vistaFinal.length === 0){
-    cont.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--gris2);padding:22px;font-size:13px;">${_auditCostosFiltro ? 'Sin resultados para la búsqueda.' : 'Sin modificaciones de costo registradas todavía.'}</td></tr>`;
+    const msg = _auditCostosFiltro
+      ? 'Sin resultados para la búsqueda en este día.'
+      : `Sin modificaciones de costo en los servicios del ${fmtFecha(fSel)}.`;
+    cont.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--gris2);padding:22px;font-size:13px;">${escHtml(msg)}</td></tr>`;
     return;
   }
   cont.innerHTML = vistaFinal.map(it => {
@@ -8558,19 +8779,31 @@ function renderAuditoriaCostos(){
       ? `<span onclick="verRes('${cod}')" title="Abrir reservación" style="display:inline-block;background:#0891b2;color:#fff;font-weight:800;font-size:11px;padding:2px 8px;border-radius:11px;cursor:pointer;">${escHtml(cod)}</span>`
       : '—';
     const movCell = it.monto >= 0
-      ? `<span style="font-weight:800;color:#16a34a;">▲ Aumento +$${it.monto.toFixed(2)}</span>`
-      : `<span style="font-weight:800;color:#d42b2b;">▼ Disminución -$${Math.abs(it.monto).toFixed(2)}</span>`;
+      ? `<span style="font-weight:800;color:${it.anulado?'var(--gris2)':'#16a34a'};${it.anulado?'text-decoration:line-through;':''}">▲ Aumento +$${it.monto.toFixed(2)}</span>`
+      : `<span style="font-weight:800;color:${it.anulado?'var(--gris2)':'#d42b2b'};${it.anulado?'text-decoration:line-through;':''}">▼ Disminución -$${Math.abs(it.monto).toFixed(2)}</span>`;
     const detalle = `${escHtml(it.g.tipoMod||'')}${it.g.motivo?' · '+escHtml(it.g.motivo):''}`;
-    return `<tr style="border-bottom:1px solid var(--gris1);">
+    // Constancia de la anulación: nunca se borra la fila, se marca.
+    const selloAnulada = it.anulado
+      ? `<div style="font-size:10px;font-weight:800;color:#b91c1c;margin-top:2px;">🚫 ANULADA por ${escHtml(it.g.anuladoPor||'—')}${it.g.anuladoEn?' · '+escHtml(new Date(it.g.anuladoEn).toLocaleDateString('es-SV',{day:'2-digit',month:'short',year:'numeric'})):''}${it.g.anuladoMotivo?' · '+escHtml(it.g.anuladoMotivo):''}</div>`
+      : '';
+    const _f = String(it.fecha||'').replace(/'/g,'');
+    const _id = String(it.g._id||'').replace(/'/g,'');
+    const accionCell = _id
+      ? `<button onclick="toggleAnularAjuste('${_f}','${_id}')"
+           title="${it.anulado ? 'Volver a aplicar esta modificación al precio' : 'Invalidar: el precio vuelve a la normalidad, pero el registro se conserva'}"
+           style="background:${it.anulado?'#dcfce7':'#fee2e2'};border:1px solid ${it.anulado?'#16a34a':'#d42b2b'};color:${it.anulado?'#15803d':'#b91c1c'};border-radius:6px;padding:3px 9px;font-size:10px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;white-space:nowrap;">${it.anulado?'↩️ Reactivar':'🚫 Invalidar'}</button>`
+      : '—';
+    return `<tr style="border-bottom:1px solid var(--gris1);${it.anulado?'background:#fafafa;opacity:.75;':''}">
       <td style="padding:6px 8px;white-space:nowrap;">${escHtml(fechaTxt)}</td>
       <td style="padding:6px 8px;white-space:nowrap;color:var(--gris2);">${escHtml(horaTxt)}</td>
       <td style="padding:6px 8px;white-space:nowrap;">${codCell}</td>
       <td style="padding:6px 8px;white-space:nowrap;"><strong style="color:var(--azul2);">${escHtml(it.g.por||'—')}</strong></td>
-      <td style="padding:6px 8px;">${movCell}<div style="font-size:10px;color:var(--gris2);">${detalle}</div></td>
+      <td style="padding:6px 8px;">${movCell}<div style="font-size:10px;color:var(--gris2);">${detalle}</div>${selloAnulada}</td>
       <td style="padding:6px 8px;text-align:right;white-space:nowrap;color:var(--gris2);">$${(it.orig||0).toFixed(2)}</td>
-      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:#0891b2;">$${it.nuevo.toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap;font-weight:800;color:${it.anulado?'var(--gris2)':'#0891b2'};">$${it.nuevo.toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:center;">${accionCell}</td>
     </tr>`;
-  }).join('') + (recortado ? `<tr><td colspan="7" style="text-align:center;color:var(--gris2);padding:8px;font-size:11px;">Mostrando ${TOPE} de ${vista.length} coincidencias — refiná la búsqueda para ver el resto.</td></tr>` : '');
+  }).join('') + (recortado ? `<tr><td colspan="8" style="text-align:center;color:var(--gris2);padding:8px;font-size:11px;">Mostrando ${TOPE} de ${vista.length} coincidencias — refiná la búsqueda para ver el resto.</td></tr>` : '');
 }
 
 // ==================== AUTOCOMPLETAR TÍTULOS ====================
@@ -8788,6 +9021,11 @@ function descargarReporteDia() {
       const slot = col.slots ? col.slots[h] : null; const codigo = slot && slot.reservaCodigo;
       if (!codigo || vistos.has(codigo)) return ''; vistos.add(codigo);
       const r = reservas.find(rv=>rv.codigo===codigo); if (!r) return '';
+      // Criterio A1: costo de la celda si tiene (>0), si no el de la reserva. NUNCA la suma.
+      // OJO (v104): acá el precio se queda en la BASE, sin sumarle los ajustes de cobro. Este es
+      // el reporte FINANCIERO del día y los ajustes ya aparecen abajo como OTROS INGRESOS —
+      // sumarlos también al servicio contaría el mismo dinero dos veces y rompería el cuadre.
+      // El total cobrado de cada servicio se ve en su badge y en la sección MODIFICACIONES.
       pos++; const cSlot = parseFloat(slot.costo)||0; const costo = cSlot>0 ? cSlot : (parseFloat(r.costo)||0); servEq += costo;
       const horaLabel = (h==='otra') ? (r.hora||'—') : h;
       return `<div style="border-bottom:0.4pt dotted #aaa;padding:1.2mm 0;">
@@ -8795,7 +9033,7 @@ function descargarReporteDia() {
         <div style="font-size:8.5pt;font-weight:700;line-height:1.4;"><span style="color:#16a34a;">▲</span> ${esc(r.carga)}</div>
         <div style="font-size:8.5pt;font-weight:700;line-height:1.4;"><span style="color:#d42b2b;">▼</span> ${esc(r.descarga)}</div>
         <div style="font-size:7.5pt;color:#444;margin-top:0.5mm;">${esc(r.nombre)} ${esc(r.apellido)} &nbsp;|&nbsp; ${esc(r.tel)}</div>
-        <div style="margin-top:0.5mm;display:flex;gap:1.5mm;align-items:center;">${metBadge(slot.metodo)}<span style="font-size:7pt;color:#666;text-transform:uppercase;">${esc(r.estado||'')}</span></div>
+        <div style="margin-top:0.5mm;display:flex;gap:1.5mm;align-items:center;">${metBadge(slot.metodo)}<span style="font-size:7pt;color:#666;text-transform:uppercase;">${esc(r.estado||'')}</span>${_costoModificado(r.codigo)?`<span style="font-size:7.5pt;font-weight:800;padding:0.3mm 1.5mm;border-radius:3px;background:#0891b2;color:#fff;">✏️ TOTAL COBRADO $${_costoActual(r).toFixed(2)}</span>`:''}</div>
         ${r.obs?`<div style="font-size:7.5pt;font-style:italic;border-left:2px solid #1a3a6b;padding-left:1.5mm;margin-top:0.5mm;">${esc(r.obs)}</div>`:''}
       </div>`;
     }).join('') || '<div style="font-size:8pt;color:#888;font-style:italic;padding:1mm 0;">Sin servicios asignados</div>';
@@ -8866,6 +9104,39 @@ function descargarReporteDia() {
       <td style="padding:1.5mm 3mm;border-bottom:1px solid #e0e0e0;text-align:right;font-weight:700;color:${desc===null?'#999':(Math.abs(desc)<0.01?'#16a34a':'#d42b2b')};">${desc===null?'—':((desc>0?'+':'')+'$'+desc.toFixed(2))}</td>
     </tr>`;
   }).join('');
+  // ===== Sección 3-bis (v104): MODIFICACIONES DE COSTO de los servicios de ESTE día =====
+  // Mismo criterio que el panel de auditoría en pantalla: pertenecen al día del SERVICIO.
+  const modsDia = [];
+  Object.entries(pdData||{}).forEach(([fReg, d]) => {
+    ((d && d.otrosIngresos) || []).forEach(g => {
+      if (g && g.ajuste && _diaDelAjuste(g, fReg) === f) modsDia.push({ fReg, g });
+    });
+  });
+  modsDia.sort((a,b) => String(a.g.en||'').localeCompare(String(b.g.en||'')) || ((a.g._ts||0)-(b.g._ts||0)));
+  const totalMods = modsDia.reduce((s,it)=>s+(parseFloat(it.g.monto)||0),0);
+  const modsHtml = modsDia.length ? `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#0e7490;border-bottom:2px solid #0e7490;padding-bottom:1mm;margin:5mm 0 2mm;">MODIFICACIONES DE COSTO (servicios de este día)</div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
+      <thead><tr style="background:#ecfeff;"><th style="padding:1.5mm 3mm;text-align:left;">Reservación</th><th style="padding:1.5mm 3mm;text-align:left;">Detalle</th><th style="padding:1.5mm 3mm;text-align:left;">Usuario</th><th style="padding:1.5mm 3mm;text-align:right;">Original</th><th style="padding:1.5mm 3mm;text-align:right;">Ajuste</th><th style="padding:1.5mm 3mm;text-align:right;">Cobrado</th></tr></thead>
+      <tbody>${modsDia.map(it => {
+        const r = reservas.find(rv => rv.codigo === it.g.resCodigo);
+        const orig = r ? (parseFloat(r.costo)||0) : 0;
+        const anul = !!it.g.anulado;
+        // Anulada: se imprime su importe REAL tachado, para que quede constancia en el papel.
+        const m = anul ? (parseFloat(it.g.montoAnulado)||0) : (parseFloat(it.g.monto)||0);
+        const cli = it.g.resCliente || (r ? `${r.nombre} ${r.apellido||''}`.trim() : (it.g.resCodigo||'—'));
+        return `<tr${anul?' style="color:#888;"':''}>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(cli)}<br><span style="font-size:7pt;color:#555;">${esc(it.g.resCodigo||'')}</span></td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(it.g.tipoMod||'')}${it.g.motivo?' — '+esc(it.g.motivo):''}${anul?`<br><span style="font-size:7pt;font-weight:800;color:#b91c1c;">🚫 ANULADA por ${esc(it.g.anuladoPor||'—')}${it.g.anuladoMotivo?' — '+esc(it.g.anuladoMotivo):''}</span>`:''}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(it.g.por||'—')}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;color:#555;">$${orig.toFixed(2)}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:${anul?'#888':(m<0?'#d42b2b':'#16a34a')};${anul?'text-decoration:line-through;':''}">${m<0?'−':'+'}$${Math.abs(m).toFixed(2)}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:800;color:${anul?'#888':'#0891b2'};">$${(r ? _costoActual(r) : orig+(anul?0:m)).toFixed(2)}</td>
+        </tr>`;
+      }).join('')}<tr style="background:#ecfeff;"><td style="padding:1.2mm 3mm;font-weight:800;" colspan="4">NETO DE MODIFICACIONES${modsDia.some(it=>it.g.anulado)?' <span style="font-weight:600;font-size:7pt;">(las anuladas no cuentan)</span>':''}</td><td style="padding:1.2mm 3mm;text-align:right;font-weight:900;color:${totalMods<0?'#d42b2b':'#16a34a'};" colspan="2">${totalMods<0?'−':'+'}$${Math.abs(totalMods).toFixed(2)}</td></tr></tbody>
+    </table>
+    <div style="margin-top:1.5mm;font-size:7.5pt;color:#555;font-style:italic;">El costo original nunca se modifica: los ajustes se registran como otros ingresos vinculados a la reservación.</div>` : '';
+
   const linkPend = parseFloat(cu._linkPendiente)||0;
   const cuentasHtml = `
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:12pt;font-weight:900;color:#1a3a6b;border-bottom:2.5px solid #1a3a6b;padding-bottom:1mm;margin:6mm 0 2mm;">CIERRE DE CUENTAS — ${esc(fechaLegible)} ${cu.diaCerrado?'<span style="font-size:8pt;color:#16a34a;">(DÍA CERRADO)</span>':'<span style="font-size:8pt;color:#d97706;">(día abierto)</span>'}</div>
@@ -8898,6 +9169,7 @@ function descargarReporteDia() {
     ${movHtml}
     ${otrosHtml}
     ${cobrosHtml}
+    ${modsHtml}
     ${cuentasHtml}
   </div>`;
 
@@ -8934,7 +9206,9 @@ function imprimirPD() {
       if (codigo && !contadosPrint.has(codigo)) {
         contadosPrint.add(codigo);
         const r = reservas.find(rv=>rv.codigo===codigo);
-        if (r) totalServ += parseFloat(r.costo)||0;
+        // v104: la hoja impresa lleva el PRECIO VIGENTE (pactado ± ajustes) — es lo que el
+        // equipo cobra en la calle. El total del día impreso cuadra con los precios de arriba.
+        if (r) totalServ += _costoActual(r);
       }
     });
   });
@@ -8965,7 +9239,7 @@ function imprimirPD() {
       const r = col.slots[h]?.reservaCodigo ? reservas.find(rv=>rv.codigo===col.slots[h].reservaCodigo) : null;
       if (!r) return '';
       posicion++;
-      const costo = parseFloat(r.costo)||0;
+      const costo = _costoActual(r);
       colTotal += costo;
       const metodo = col.slots[h]?.metodo || 'EFECTIVO';
       const horaLabel = h==='otra' ? r.hora : h;
@@ -8973,8 +9247,9 @@ function imprimirPD() {
         <div class="slot-header">
           <span class="pos">#${posicion}</span>
           <span class="hora">${horaLabel}</span>
-          <span class="precio">$${costo.toFixed(2)}</span>
+          <span class="precio">$${costo.toFixed(2)}${_costoModificado(r.codigo)?` <span style="font-size:.65em;font-weight:700;">✏️</span>`:''}</span>
         </div>
+        ${_costoModificado(r.codigo)?`<div style="font-size:7pt;font-weight:700;color:#0e7490;">✏️ Precio ajustado — antes $${(parseFloat(r.costo)||0).toFixed(2)}</div>`:''}
         <div class="dirs">
           <div class="dir"><span class="dir-icon">&#9650;</span>${r.carga}</div>
           <div class="dir"><span class="dir-icon">&#9660;</span>${r.descarga}</div>
@@ -9902,7 +10177,7 @@ function renderNotificaciones() {
     html += pasadosSinCerrar.slice(0,30).map(r => {
       return `<div style="background:#fff;border-radius:7px;padding:8px 12px;margin-bottom:6px;border-left:4px solid #d97706;">
         <div style="font-size:12px;font-weight:700;color:#92400e;">${escHtml(r.nombre)} ${escHtml(r.apellido||'')}</div>
-        <div style="font-size:11px;color:#6b7280;">📞 ${escHtml(r.tel)} · ${fmtFecha(r.fecha)} · ${r.hora} · $${r.costo||'0'}</div>
+        <div style="font-size:11px;color:#6b7280;">📞 ${escHtml(r.tel)} · ${fmtFecha(r.fecha)} · ${r.hora} · <span title="${_costoModificado(r.codigo)?_notaCostoMod(r.codigo).trim():''}" style="${_costoModificado(r.codigo)?'color:#0891b2;font-weight:800;':''}">$${_costoActual(r).toFixed(2)}${_costoModificado(r.codigo)?' ✏️':''}</span></div>
         <div style="display:flex;gap:5px;margin-top:6px;">
           <button onclick="cambiarEstRapido('${r.codigo}','completado')" class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">✅ Se hizo</button>
           <button onclick="eliminar('${r.codigo}')" class="btn btn-sm" style="background:#fee2e2;color:#d42b2b;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">✕ Se canceló</button>
@@ -10024,7 +10299,7 @@ function alertaPendientesUrgentes() {
       const fechaSrv = new Date(r.fecha + 'T12:00:00');
       const diffDias = Math.ceil((fechaSrv - hoy) / (1000*60*60*24));
       const cuando = diffDias === 0 ? 'HOY' : diffDias === 1 ? 'MAÑANA' : `en ${diffDias} días`;
-      return `• ${r.nombre} ${r.apellido} — ${cuando} (${fmtFecha(r.fecha)} ${r.hora}) — $${r.costo}`;
+      return `• ${r.nombre} ${r.apellido} — ${cuando} (${fmtFecha(r.fecha)} ${r.hora}) — $${_costoActual(r).toFixed(2)}${_notaCostoMod(r.codigo, true)}`;
     }).join('\n');
     alert('🔔 SERVICIOS PENDIENTES POR CONFIRMAR:\n\n' + msgs + '\n\n¡Reconfirma estos servicios lo antes posible!');
   }
