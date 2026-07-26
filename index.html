@@ -942,6 +942,15 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       </div>
     </div>
 
+    <!-- ===== PANEL PROPINAS: ENTRARON AL BANCO ↔ PAGADAS EN EFECTIVO (v108) ===== -->
+    <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #7c3aed;overflow:hidden;">
+      <div style="background:#6d28d9;color:#fff;padding:11px 16px;">
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;" title="Propinas que el cliente transfirió al banco y que se le pagan al personal en efectivo desde Caja Chica.">🪙 PROPINAS — ENTRARON AL BANCO ↔ PAGADAS EN EFECTIVO</span>
+        <div style="font-size:10px;opacity:.85;margin-top:2px;">Justificación del efectivo de Caja Chica: cada propina pagada al personal debe estar respaldada por el dinero que ingresó a la cuenta bancaria.</div>
+      </div>
+      <div id="propinas-banco-body" style="padding:12px 16px;font-size:12px;"></div>
+    </div>
+
     <!-- Resumen mensual -->
     <div style="margin-top:18px;text-align:center;">
       <button onclick="descargarReporteDia()" style="background:#1e4fa0;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:800;font-family:'Barlow',sans-serif;cursor:pointer;letter-spacing:.03em;">📋 Descargar Reporte del Día (PDF)</button>
@@ -2630,7 +2639,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-19-v106';
+const APP_VERSION = '2026-07-26-v109';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3485,7 +3494,9 @@ const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', react
   // confirmación, cambio de estado genérico y reasignación de vendedor (solo admin).
   cambio_nombre:'👤 Cambio de nombre del cliente', cambio_camion:'🚚 Cambio de camión', cambio_personal:'👷 Cambio de personal', cambio_tipocliente:'🧾 Cambio tipo de cliente', confirmada:'✅ Confirmada', cambio_estado:'🔄 Cambio de estado', cambio_vendedor:'🤝 Vendedor reasignado (admin)',
   // v102 (2026-07-17): ajuste de cobro (cargo/descuento aparte, sin tocar el costo original).
-  ajuste_cobro:'💵 Ajuste de cobro' };
+  ajuste_cobro:'💵 Ajuste de cobro',
+  // v104/v107: anulación/reactivación de ajustes y migración de ajustes al mover la fecha del servicio.
+  ajuste_anulado:'🚫 Ajuste invalidado', ajuste_reactivado:'↩️ Ajuste reactivado', ajuste_movido:'📅 Ajustes movidos con el servicio' };
 // Recorta valores largos (direcciones/obs) para que la bitácora no crezca sin control.
 function _auditTrunc(s) { s = String(s == null ? '' : s).trim(); return s ? (s.length > 45 ? s.slice(0, 45) + '…' : s) : '—'; }
 function _fmtAuditFechaHora(iso) {
@@ -5711,6 +5722,25 @@ function guardarEdicion() {
   // GUARD día cerrado: no editar una reserva cuyo día (viejo o nuevo) ya está cerrado/cuadrado.
   if (isDiaCerrado(oldFecha)) { alert(`🔒 El día ${fmtFecha(oldFecha)} ya está cerrado.\n\nPara editar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   if (fechaCambio && isDiaCerrado(newFecha)) { alert(`🔒 No podés mover el servicio al ${fmtFecha(newFecha)} porque ese día ya está cerrado.\n\nDesbloqueá ese día en Programación primero.`); return; }
+  // GUARD v109 (anti-H1, mismo criterio que confirmarAjusteCobro): si la reservación tiene
+  // modificaciones de cobro con TARJETA, su neto (96.228%) entra al banco el día SIGUIENTE al del
+  // servicio. Al mover la fecha, ese neto cambia de día: sale del día siguiente al VIEJO y entra al
+  // día siguiente al NUEVO. Si cualquiera de esos dos días ya está cerrado su cuadre está congelado
+  // y el dinero quedaría sobrando de un lado o faltando del otro, sin forma de corregirlo.
+  if (fechaCambio) {
+    const _ajLink = ((pdData[oldFecha] && pdData[oldFecha].otrosIngresos) || [])
+      .filter(g => g && g.ajuste && g.resCodigo === r.codigo && g.metodo === 'LINK' && (parseFloat(g.monto)||0) !== 0);
+    if (_ajLink.length) {
+      const _sigViejo = getFechaSiguiente(oldFecha), _sigNuevo = getFechaSiguiente(newFecha);
+      const _bloq = [];
+      if (isDiaCerrado(_sigViejo)) _bloq.push(fmtFecha(_sigViejo));
+      if (isDiaCerrado(_sigNuevo) && _sigNuevo !== _sigViejo) _bloq.push(fmtFecha(_sigNuevo));
+      if (_bloq.length) {
+        alert('🔒 Esta reservación tiene ' + _ajLink.length + ' modificación(es) de cobro con TARJETA.\n\nEse dinero entra al banco al día siguiente del servicio, y ya está cerrado: ' + _bloq.join(', ') + '.\n\nDesbloqueá ese día en Programación antes de mover la fecha del servicio.');
+        return;
+      }
+    }
+  }
 
   r.nombre = nombre;
   r.apellido = document.getElementById('e-apellido').value.trim();
@@ -5800,6 +5830,36 @@ function guardarEdicion() {
         if (pdOld.cobrosPendientes.length !== antes) cambioPD = true;
       }
       if (cambioPD) { savePD(); flushSyncToSupabase('mt_pd3', pdData); }
+    }
+    // v107: los AJUSTES DE COBRO viven en el día del SERVICIO. Si el servicio se mueve de fecha,
+    // sus ajustes (y su dinero) se mudan con él al día nuevo. Ambos días están abiertos (los guards
+    // de día cerrado de arriba ya lo garantizan). Se deja tumba en el día viejo para que el merge
+    // multi-dispositivo no los resucite allí. Ajustes que vivan en OTROS días (registrados antes de
+    // v107) no se tocan: mover dinero de un día ya cuadrado/cerrado rompería su cierre auditado.
+    const pdOldAj = pdData[oldFecha];
+    if (pdOldAj && Array.isArray(pdOldAj.otrosIngresos)) {
+      const aMover = pdOldAj.otrosIngresos.filter(g => g && g.ajuste && g.resCodigo === r.codigo);
+      if (aMover.length) {
+        if (!pdOldAj._tomb) pdOldAj._tomb = {}; if (!pdOldAj._tomb.otrosIngresos) pdOldAj._tomb.otrosIngresos = {};
+        // v109: si algún ajuste viejo no tiene `_id` (no debería: se asignan desde v101/v102, pero
+        // podría venir de un import JSON), se le da uno ANTES de la tumba. Sin `_id` el merge fino
+        // lo descarta en el día nuevo (pierde el dinero) y lo resucita en el viejo (lo duplica).
+        aMover.forEach(g => { if (!g._id) g._id = _itemId(); pdOldAj._tomb.otrosIngresos[g._id] = Date.now(); });
+        pdOldAj.otrosIngresos = pdOldAj.otrosIngresos.filter(g => !(g && g.ajuste && g.resCodigo === r.codigo));
+        const dayNueva = getDayData(newFecha);
+        if (!dayNueva.otrosIngresos) dayNueva.otrosIngresos = [];
+        aMover.forEach(g => { g._ts = Date.now(); dayNueva.otrosIngresos.push(g); });
+        _logAudit(r.codigo, 'ajuste_movido', `${aMover.length} modificación(es) de cobro movida(s) de ${fmtFecha(oldFecha)} a ${fmtFecha(newFecha)} junto con el servicio`);
+        savePD(); flushSyncToSupabase('mt_pd3', pdData);
+        // v109: el dinero cambió de día en AMBOS extremos. Rehacer el cuadre de los dos y encadenar
+        // hacia adelante (empezando por el más viejo, para que la propagación de saldos quede bien).
+        try {
+          const _d1 = (oldFecha < newFecha) ? oldFecha : newFecha;
+          const _d2 = (oldFecha < newFecha) ? newFecha : oldFecha;
+          _recalcDesde(_d1);
+          _recalcDesde(_d2); // si el día más nuevo es FUTURO, la cadena de _d1 se detiene en hoy y no lo alcanza
+        } catch(e){ console.warn('_recalcDesde (migración de ajustes):', e); }
+      }
     }
   } else if (horasCambiaron) {
     const agDay = agGrid[r.fecha];
@@ -6009,6 +6069,51 @@ function _limpiarPDDataYCobrosPorCancelacion(r) {
   delete r._cobrado;
   delete r._fechaCobro;
   delete r._metodoCobro;
+  // 4) v109: las MODIFICACIONES DE COBRO (ajustes) del servicio siguen moviendo dinero aunque el
+  //    servicio ya no se haga. Con v107 ese dinero vive en el día del SERVICIO, así que un servicio
+  //    cancelado dejaba un ingreso (o un descuento) en un día sin trabajo. NO se borran nunca: se
+  //    INVALIDAN (monto 0.00 + montoAnulado), que es reversible desde la auditoría y queda en la
+  //    bitácora. Se pregunta antes, porque a veces el cargo SÍ se cobró (p. ej. cajas ya entregadas).
+  _anularAjustesPorCancelacion(r);
+}
+
+// Invalida los ajustes de cobro VIVOS de una reserva cancelada, previa confirmación. Respeta el día
+// cerrado: si el ajuste vive en un día ya cerrado (o su neto de TARJETA cae en uno cerrado) no se
+// toca y se avisa, porque mover dinero de un día cuadrado rompería su cierre auditado.
+function _anularAjustesPorCancelacion(r){
+  if (!r || !r.codigo) return;
+  const vivos = [];
+  Object.keys(pdData||{}).forEach(f => {
+    const day = pdData[f];
+    ((day && day.otrosIngresos) || []).forEach(g => {
+      if (g && g.ajuste && g.resCodigo === r.codigo && !g.anulado && (parseFloat(g.monto)||0) !== 0) vivos.push({ f, g });
+    });
+  });
+  if (!vivos.length) return;
+  const total = vivos.reduce((s,it)=>s+(parseFloat(it.g.monto)||0), 0);
+  const detalle = vivos.map(it => `   • ${it.g.tipoMod||'Ajuste'} ${(parseFloat(it.g.monto)||0)<0?'−':'+'}$${Math.abs(parseFloat(it.g.monto)||0).toFixed(2)} (${fmtFecha(it.f)})`).join('\n');
+  if (!confirm(`Esta reservación tiene ${vivos.length} modificación(es) de cobro que siguen contando dinero:\n\n${detalle}\n\nTotal: ${total<0?'−':'+'}$${Math.abs(total).toFixed(2)}\n\n¿Invalidarlas junto con la cancelación?\n\n• SÍ: dejan de contar en el dinero del día (se pueden reactivar desde la auditoría).\n• NO: el dinero se queda como está.`)) return;
+  const bloqueadas = [];
+  let anuladas = 0;
+  vivos.forEach(({f,g}) => {
+    const met = g.metodo || (((g.destino||'') === 'CUSCATLAN') ? 'CUSCA' : '');
+    if (isDiaCerrado(f) || (met === 'LINK' && isDiaCerrado(getFechaSiguiente(f)))) { bloqueadas.push(fmtFecha(f)); return; }
+    const importe = parseFloat(g.monto)||0;
+    g.montoAnulado = g.monto;
+    g.monto = '0.00';
+    g.anulado = true;
+    g.anuladoPor = _quienSoy();
+    g.anuladoEn = new Date().toISOString();
+    g.anuladoMotivo = 'Reservación cancelada';
+    g._ts = Date.now();
+    anuladas++;
+    _logAudit(r.codigo, 'ajuste_anulado', `${importe<0?'−':'+'}$${Math.abs(importe).toFixed(2)} · ${g.tipoMod||''} · invalidado por cancelación del servicio`);
+    try { _recalcDesde(f); } catch(e){}
+  });
+  if (bloqueadas.length) {
+    alert('⚠️ Quedaron sin invalidar ' + bloqueadas.length + ' modificación(es) porque su día ya está cerrado: ' + [...new Set(bloqueadas)].join(', ') + '.\n\nDesbloqueá ese día en Programación y usá el botón "Invalidar" del cuadro de auditoría.');
+  }
+  if (anuladas) { _ultimaEdicionFinanzas = Date.now(); savePD(); }
 }
 
 // Agrega una nota de cancelación a r.obs SIN borrar las observaciones existentes.
@@ -7741,6 +7846,8 @@ function renderCuaderno() {
 
   // v102 (CAMBIO 1): panel de auditoría de modificaciones de costo (debajo de CUENTAS).
   try { renderAuditoriaCostos(); } catch(e) { console.warn('renderAuditoriaCostos:', e); }
+  // v108: panel de propinas banco ↔ efectivo (debajo de la auditoría).
+  try { renderPropinasBanco(); } catch(e) { console.warn('renderPropinasBanco:', e); }
 }
 
 function getFechaAnterior(f) {
@@ -8467,12 +8574,106 @@ function _notaCostoMod(codigo, corta){
     : ` ✏️ PRECIO MODIFICADO (original $${orig.toFixed(2)} · ${signo}$${Math.abs(d).toFixed(2)})`;
 }
 
+// ==================== PROPINAS: BANCO ↔ EFECTIVO (v108) ====================
+// Caso real: el cliente TRANSFIERE la propina del personal a la cuenta del banco (se registra
+// como ajuste de cobro tipo "Propina", método CUSCA/TARJETA) y la empresa le PAGA esa propina
+// al personal en EFECTIVO desde Caja Chica (casilla de propinas de la pizarra). Este panel
+// cruza ambos lados del día para JUSTIFICAR el efectivo que salió: muestra qué ingresó al
+// banco, qué se pagó en efectivo, y la diferencia.
+// ¿Qué cuenta como "propina que entró al banco"? Un OTRO INGRESO del día (vivo, no anulado)
+// cuyo tipo/título/motivo diga "propina" y cuyo método sea CUSCA o TARJETA (o destino
+// CUSCATLAN en registros viejos sin método). EFECTIVO no entra acá: esa propina no pasó por
+// el banco. TARJETA se muestra en bruto con la aclaración del neto diferido.
+// v109: SOLO se mira el TIPO (`tipoMod`, el que elige el selector del modal) y el `titulo` que arma
+// el programa (`"<tipo> · <código>"`). El `motivo`/`desc` es TEXTO LIBRE del usuario y se guarda en
+// los dos campos: escanearlo metía al panel cualquier gasto o ingreso cuya nota mencionara la
+// palabra "propina" (p. ej. "adelanto, ya se le pagó la propina"), inflando el lado del banco con
+// dinero que no es propina y dando un semáforo equivocado.
+function _esPropinaTexto(g){
+  return /propina/i.test(String(g.tipoMod||'')) || /propina/i.test(String(g.titulo||''));
+}
+function _propinasBancoDelDia(f){
+  const day = pdData && pdData[f];
+  const out = [];
+  ((day && day.otrosIngresos) || []).forEach(g => {
+    if (!g || g.anulado || !_esPropinaTexto(g)) return;
+    const met = g.metodo || '';
+    const alBanco = (met === 'CUSCA' || met === 'LINK') || (!met && g.destino === 'CUSCATLAN');
+    if (!alBanco) return;
+    out.push({ g, monto: parseFloat(g.monto)||0, metodo: met || 'CUSCA' });
+  });
+  return out;
+}
+function _propinasEfectivoDelDia(f){
+  const day = pdData && pdData[f];
+  const out = [];
+  ((day && day.columnas) || []).forEach(col => {
+    const tot = (col.propinas||[]).reduce((s,p)=>s+(parseFloat(p)||0),0);
+    if (tot > 0) out.push({ equipo: col.nombre || 'Equipo', monto: tot });
+  });
+  return out;
+}
+function renderPropinasBanco(){
+  const cont = document.getElementById('propinas-banco-body'); if (!cont) return;
+  const f = getPDFecha();
+  const banco = _propinasBancoDelDia(f);
+  const efectivo = _propinasEfectivoDelDia(f);
+  const totBanco = banco.reduce((s,it)=>s+it.monto,0);
+  const totEfectivo = efectivo.reduce((s,it)=>s+it.monto,0);
+  const hayTarjeta = banco.some(it=>it.metodo==='LINK');
+  // Acumulado del MES de la fecha seleccionada (todos los días del mismo YYYY-MM).
+  const mes = f.slice(0,7);
+  let mesBanco = 0, mesEfectivo = 0;
+  Object.keys(pdData||{}).forEach(d => {
+    if (d.slice(0,7) !== mes) return;
+    mesBanco += _propinasBancoDelDia(d).reduce((s,it)=>s+it.monto,0);
+    mesEfectivo += _propinasEfectivoDelDia(d).reduce((s,it)=>s+it.monto,0);
+  });
+  if (!banco.length && !efectivo.length){
+    cont.innerHTML = `<div style="color:var(--gris2);text-align:center;padding:6px 0;">Sin propinas registradas el ${fmtFecha(f)}.` +
+      (mesBanco||mesEfectivo ? `<div style="font-size:11px;margin-top:4px;">Mes: al banco $${mesBanco.toFixed(2)} · en efectivo $${mesEfectivo.toFixed(2)}</div>` : '') + `</div>`;
+    return;
+  }
+  const filaBanco = banco.map(it => {
+    const cod = it.g.resCodigo ? `<a href="javascript:void(0)" onclick="verRes('${escHtml(it.g.resCodigo)}')" style="color:#6d28d9;font-weight:800;">${escHtml(it.g.resCodigo)}</a>` : '—';
+    const quien = escHtml(it.g.resCliente || it.g.titulo || '');
+    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #ede9fe;">
+      <span>${cod} ${quien}${it.metodo==='LINK'?' <span style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 4px;font-weight:800;">TARJETA</span>':''}</span>
+      <strong style="color:#16a34a;">+$${it.monto.toFixed(2)}</strong></div>`;
+  }).join('');
+  const filaEfe = efectivo.map(it =>
+    `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #fee2e2;">
+      <span>🪙 ${escHtml(it.equipo)}</span><strong style="color:#d42b2b;">−$${it.monto.toFixed(2)}</strong></div>`).join('');
+  const dif = totBanco - totEfectivo;
+  let sem;
+  if (Math.abs(dif) < 0.005) sem = `<div style="background:#dcfce7;color:#166534;border-radius:8px;padding:8px 12px;font-weight:800;">✔ CUADRA: lo pagado en efectivo ($${totEfectivo.toFixed(2)}) está respaldado por lo que ingresó al banco.</div>`;
+  else if (dif > 0) sem = `<div style="background:#fef9c3;color:#854d0e;border-radius:8px;padding:8px 12px;font-weight:800;">⚠ Ingresó al banco $${dif.toFixed(2)} MÁS de lo pagado en efectivo (propina aún no entregada al personal o pagada otro día).</div>`;
+  else sem = `<div style="background:#fee2e2;color:#991b1b;border-radius:8px;padding:8px 12px;font-weight:800;">⚠ Se pagó en efectivo $${Math.abs(dif).toFixed(2)} MÁS de lo que ingresó al banco (propina recibida en efectivo o transferencia de otro día).</div>`;
+  cont.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div>
+        <div style="font-size:10px;font-weight:800;color:#6d28d9;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">🏦 Ingresó al banco (Cuscatlán)</div>
+        ${filaBanco || '<div style="color:var(--gris2);">Nada registrado.</div>'}
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-weight:900;"><span>Total</span><span style="color:#16a34a;">$${totBanco.toFixed(2)}</span></div>
+        ${hayTarjeta ? '<div style="font-size:9px;color:var(--gris2);margin-top:2px;">Las de TARJETA se muestran en bruto; el neto (96.228%) entra al banco al día siguiente.</div>' : ''}
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:800;color:#d42b2b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">💵 Pagado en efectivo (Caja Chica, pizarra)</div>
+        ${filaEfe || '<div style="color:var(--gris2);">Nada pagado.</div>'}
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-weight:900;"><span>Total</span><span style="color:#d42b2b;">$${totEfectivo.toFixed(2)}</span></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;">${sem}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--gris2);text-align:right;">Mes ${mes}: al banco $${mesBanco.toFixed(2)} · en efectivo $${mesEfectivo.toFixed(2)}</div>`;
+}
+
 // Refresca TODO lo que depende de los ajustes: marcas de "costo modificado" en la pizarra y
 // panel de auditoría. Se llama tras crear, editar o borrar un ajuste, para que la marca aparezca
 // (o desaparezca, si el costo volvió al original) sin recargar la página.
 function _refrescarMarcasCosto(){
   try { if (typeof renderPD === 'function') renderPD(); } catch(e){ console.warn('renderPD (marcas costo):', e); }
   try { renderAuditoriaCostos(); } catch(e){}
+  try { renderPropinasBanco(); } catch(e){}
 }
 // Versión con debounce: para cuando el usuario está tipeando el monto de un ajuste en la lista
 // de otros ingresos (no re-renderizar en cada tecla).
@@ -8555,7 +8756,7 @@ function setAjusteSigno(sig){
 function _ajusteTipoChange(){
   const t = document.getElementById('aj-tipo');
   if (t && t.value === 'Descuento') setAjusteSigno('-');
-  else if (t && _ajusteSigno === '-' && (t.value==='Servicio adicional'||t.value==='Venta de cajas'||t.value==='Venta de plástico stretch'||t.value==='Recargo')) setAjusteSigno('+');
+  else if (t && _ajusteSigno === '-' && (t.value==='Servicio adicional'||t.value==='Venta de cajas'||t.value==='Venta de plástico stretch'||t.value==='Recargo'||t.value==='Propina')) setAjusteSigno('+');
   previewAjuste();
 }
 
@@ -8576,7 +8777,7 @@ function previewAjuste(){
   el.innerHTML = `<div style="display:flex;justify-content:space-between;"><span>Este ajuste:</span><strong style="color:${delta<0?'#d42b2b':'#16a34a'};">${delta>=0?'+':''}$${delta.toFixed(2)}</strong></div>
     <div style="display:flex;justify-content:space-between;margin-top:2px;"><span style="font-weight:800;">Nuevo total cobrado:</span><strong style="color:#0891b2;font-size:15px;">$${nuevoTotal.toFixed(2)}</strong></div>
     <div style="display:flex;justify-content:space-between;margin-top:2px;"><span>Método de pago:</span><strong>${metNota}</strong></div>
-    <div style="display:flex;justify-content:space-between;margin-top:2px;"><span>Entra en el cuaderno del:</span><strong>${fmtFecha(getPDFecha())}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-top:2px;"><span>Entra en el cuaderno del:</span><strong>${fmtFecha(r.fecha||getPDFecha())} · día del servicio</strong></div>
     <div style="font-size:10px;color:var(--gris2);margin-top:4px;">El costo original ($${orig.toFixed(2)}) y la comisión del vendedor no cambian.</div>`;
 }
 
@@ -8605,18 +8806,26 @@ function confirmarAjusteCobro(){
   const tipo = document.getElementById('aj-tipo').value;
   let metodo = document.getElementById('aj-metodo').value;
   const motivo = document.getElementById('aj-motivo').value.trim();
-  // El ajuste entra en el DÍA DE TRABAJO ACTUAL del cuaderno (igual que gastos, otros ingresos y
-  // movimientos), que en el flujo normal es el mismo día del servicio. Así el ingreso/descuento cae
-  // siempre en un día ABIERTO y su cuadre (recalcCerramos) se recomputa al instante en el día visible;
-  // nunca se toca un día pasado cerrado ni se difiere TARJETA a un día congelado. Queda VINCULADO a la
-  // reservación por resCodigo, así que el "total cobrado" del servicio suma sus ajustes de cualquier día.
-  const fecha = getPDFecha();
+  // v107 (REGLA DE ORO): el ajuste entra SIEMPRE en el DÍA DEL SERVICIO (r.fecha), nunca en el día
+  // en que se registra ni en el día visible del cuaderno. El dinero pertenece al día en que se hace
+  // la mudanza: modificar hoy una reserva de mañana NO toca la caja de hoy. El cierre de caja solo
+  // bloquea si el DÍA DEL SERVICIO ya está cerrado; el día donde se CREÓ la reserva o el día en que
+  // se REGISTRA la modificación no importan. Queda VINCULADO por resCodigo; si la reserva cambia de
+  // fecha, guardarEdicion migra sus ajustes al día nuevo (los días viejos cerrados no se tocan).
+  const fecha = (r.fecha && /^\d{4}-\d{2}-\d{2}$/.test(r.fecha)) ? r.fecha : getPDFecha();
   const montoAbs = parseFloat(document.getElementById('aj-monto').value);
   // Método AUTOMÁTICO: mismo método de pago con que se cobró la reservación (nunca PENDIENTE/CANCELADO).
   if (metodo === 'AUTO') metodo = _metodoDeReserva(r.codigo);
   if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
-  // CIERRE DE DÍA: no se puede agregar un ajuste económico a un día cerrado.
-  if (isDiaCerrado(fecha)){ alert('🔒 El día '+fmtFecha(fecha)+' está cerrado. Desbloquealo en Programación para ajustar el cobro.'); return; }
+  // CIERRE DE DÍA: solo bloquea si el DÍA DEL SERVICIO ya está cerrado (v107).
+  if (isDiaCerrado(fecha)){ alert('🔒 El día del servicio ('+fmtFecha(fecha)+') ya está cerrado.\n\nDesbloquealo en Programación para ajustar el cobro de esta reservación.'); return; }
+  // TARJETA se difiere al día SIGUIENTE al del servicio (96.228% a CUSCATLAN). Si ese día ya está
+  // cerrado, el neto caería en un día congelado y se perdería del cuadre (hallazgo H1 de v103):
+  // mejor pedir otro método que perder el dinero.
+  if (metodo === 'LINK' && isDiaCerrado(getFechaSiguiente(fecha))){
+    alert('🔒 Un ajuste con TARJETA del '+fmtFecha(fecha)+' entra al banco el día siguiente, y ese día ya está cerrado.\n\nElegí otro método de pago o desbloqueá el día siguiente en Programación.');
+    return;
+  }
   const signo = (_ajusteSigno === '-') ? -1 : 1;
   const monto = signo * montoAbs;
   const cliente = `${r.nombre||''} ${r.apellido||''}`.trim();
@@ -8638,7 +8847,10 @@ function confirmarAjusteCobro(){
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); else savePD();
-  try { if (getPDFecha() === fecha) recalcCerramos(); } catch(e){}
+  // v109: el dinero cayó en el DÍA DEL SERVICIO, que puede no ser el día visible. Hay que rehacer
+  // el cuadre de ESE día y encadenar hasta hoy; si no, el saldo del cuaderno queda corto/largo por
+  // el monto del ajuste hasta que alguien visite los días uno por uno en orden.
+  try { _recalcDesde(fecha); } catch(e){ console.warn('_recalcDesde:', e); }
   cerrarAjusteCobro();
   try { if (pdTabActual === 'cuaderno') renderCuaderno(); } catch(e){}
   // renderCuaderno omite la lista de otros ingresos si hubo edición reciente (evita pisar inputs);
@@ -8646,7 +8858,7 @@ function confirmarAjusteCobro(){
   try { if (getPDFecha() === fecha) { renderOtrosIngresos(); renderCuentas(fecha); } } catch(e){}
   // v104: refrescar las marcas de "costo modificado" en la pizarra + el panel de auditoría.
   _refrescarMarcasCosto();
-  alert(`✅ Ajuste registrado: ${signo<0?'−':'+'}$${montoAbs.toFixed(2)} (${tipo}) en ${fmtFecha(fecha)}.\n\nCosto original intacto: $${(parseFloat(r.costo)||0).toFixed(2)}\nNuevo total cobrado: $${((parseFloat(r.costo)||0) + _sumaAjustes(r.codigo)).toFixed(2)}`);
+  alert(`✅ Ajuste registrado: ${signo<0?'−':'+'}$${montoAbs.toFixed(2)} (${tipo}) en ${fmtFecha(fecha)} (día del servicio).\n\nCosto original intacto: $${(parseFloat(r.costo)||0).toFixed(2)}\nNuevo total cobrado: $${((parseFloat(r.costo)||0) + _sumaAjustes(r.codigo)).toFixed(2)}`);
 }
 
 // ==================== ANULAR / REACTIVAR UN AJUSTE (v104) ====================
@@ -8664,6 +8876,14 @@ function toggleAnularAjuste(fecha, id){
   // El dinero se mueve en el día donde vive el ajuste: si ese día está cerrado, no se toca.
   if (isDiaCerrado(fecha)){
     alert('🔒 El día ' + fmtFecha(fecha) + ' está cerrado.\n\nDesbloquealo en Programación para invalidar o reactivar esta modificación.');
+    return;
+  }
+  // v109: mismo guard anti-H1 que confirmarAjusteCobro. Un ajuste con TARJETA entra al banco al día
+  // SIGUIENTE (96.228%); si ese día ya está cerrado, su cuadre está congelado y anular (o reactivar)
+  // el ajuste dejaría ese neto fantasma para siempre — sin forma de corregirlo.
+  const _metAj = g.metodo || (((g.destino||'') === 'CUSCATLAN') ? 'CUSCA' : '');
+  if (_metAj === 'LINK' && isDiaCerrado(getFechaSiguiente(fecha))){
+    alert('🔒 Esta modificación se cobró con TARJETA, así que su neto entró al banco el ' + fmtFecha(getFechaSiguiente(fecha)) + ', y ese día ya está cerrado.\n\nDesbloqueá ese día en Programación antes de invalidarla o reactivarla.');
     return;
   }
   const r = reservas.find(rv => rv.codigo === g.resCodigo);
@@ -8696,7 +8916,8 @@ function toggleAnularAjuste(fecha, id){
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); else savePD();
-  try { if (getPDFecha() === fecha) recalcCerramos(); } catch(e){}
+  // v109: el ajuste puede vivir en un día que no es el visible → recalcular ESE día y encadenar.
+  try { _recalcDesde(fecha); } catch(e){ console.warn('_recalcDesde:', e); }
   try { if (getPDFecha() === fecha) { renderOtrosIngresos(); renderCuentas(fecha); } } catch(e){}
   _refrescarMarcasCosto();
 }
@@ -8885,8 +9106,12 @@ function _linkOtrosDelDia(dayObj){
   return s;
 }
 
-function recalcCerramos() {
-  const f = getPDFecha();
+// v109: `fArg` OPCIONAL. Sin argumento se comporta EXACTAMENTE igual que siempre (recalcula el día
+// visible del cuaderno). Con argumento recalcula ESE día — necesario desde v107, porque el dinero de
+// un ajuste de cobro cae en el día del SERVICIO, que puede no ser el día visible; sin esto su
+// `cerramos` quedaba viejo y el `abrimos` del día siguiente nunca se refrescaba.
+function recalcCerramos(fArg) {
+  const f = (typeof fArg === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fArg)) ? fArg : getPDFecha();
   const day = getDayData(f);
 
   // Si el día está CERRADO, su "cerramos" es el cuadre auditado y queda CONGELADO: no se
@@ -8984,8 +9209,28 @@ function recalcCerramos() {
     console.log('ℹ️ Día siguiente ' + fManana + ' está cerrado — no se propaga para no descuadrar el historial.');
   }
 
-  // Actualizar UI
-  renderCuentas(f);
+  // Actualizar UI — SOLO si lo que se recalculó es el día que el usuario está viendo.
+  // (v109: con `fArg` se puede recalcular un día que no está en pantalla; pintar sus cuentas
+  // en el cuaderno mostraría los números de OTRO día.)
+  if (f === getPDFecha()) renderCuentas(f);
+}
+
+// v109: recálculo EN CADENA desde un día hacia adelante. Cada día recalculado propaga su cierre
+// al `abrimos` del siguiente, así que tocar el dinero de un día pasado obliga a rehacer la cadena
+// hasta hoy; si no, el saldo del cuaderno de hoy queda corto/largo por ese monto hasta que alguien
+// visita los días uno por uno EN ORDEN. Los días CERRADOS no se recalculan (recalcCerramos los
+// respeta) pero sí propagan su conteo real, igual que siempre. Tope de 120 días por seguridad.
+function _recalcDesde(fecha){
+  if (typeof fecha !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
+  const hoy = new Date().toISOString().slice(0,10);
+  let f = fecha, n = 0;
+  while (n < 120) {
+    try { recalcCerramos(f); } catch(e) { console.warn('recalcCerramos('+f+'):', e); break; }
+    if (f >= hoy) break;          // ya alcanzamos el presente (o el ajuste era a futuro)
+    f = getFechaSiguiente(f); n++;
+    if (!pdData[f] && f > hoy) break;  // días futuros sin datos: nada que encadenar
+  }
+  if (getPDFecha()) { try { renderCuentas(getPDFecha()); } catch(e){} }
 }
 
 // CODIGO MUERTO ELIMINADO (2026-07-02): funcion sin ningun caller (descargarResumenMensual, sin boton desde v83).
@@ -9139,6 +9384,29 @@ function descargarReporteDia() {
     </table>
     <div style="margin-top:1.5mm;font-size:7.5pt;color:#555;font-style:italic;">El costo original nunca se modifica: los ajustes se registran como otros ingresos vinculados a la reservación.</div>` : '';
 
+  // v108: PROPINAS — entraron al banco ↔ pagadas en efectivo (justificación del efectivo de Caja Chica).
+  const propBanco = _propinasBancoDelDia(f);
+  const propEfe = _propinasEfectivoDelDia(f);
+  const propTotB = propBanco.reduce((s,it)=>s+it.monto,0);
+  const propTotE = propEfe.reduce((s,it)=>s+it.monto,0);
+  const propDif = propTotB - propTotE;
+  const propsBancoHtml = (propBanco.length || propEfe.length) ? `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#6d28d9;border-bottom:2px solid #6d28d9;padding-bottom:1mm;margin:5mm 0 2mm;">PROPINAS — ENTRARON AL BANCO ↔ PAGADAS EN EFECTIVO</div>
+    <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
+      <thead><tr style="background:#f5f3ff;"><th style="padding:1.5mm 3mm;text-align:left;">Ingresó al banco (Cuscatlán)</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th><th style="padding:1.5mm 3mm;text-align:left;">Pagado en efectivo (Caja Chica)</th><th style="padding:1.5mm 3mm;text-align:right;">Monto</th></tr></thead>
+      <tbody>${Array.from({length: Math.max(propBanco.length, propEfe.length, 1)}).map((_,i) => {
+        const b = propBanco[i], e = propEfe[i];
+        return `<tr>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${b ? esc((b.g.resCodigo?b.g.resCodigo+' · ':'')+(b.g.resCliente||b.g.titulo||'')) + (b.metodo==='LINK'?' (TARJETA)':'') : ''}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#16a34a;">${b ? '+$'+b.monto.toFixed(2) : ''}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${e ? esc(e.equipo) : ''}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#d42b2b;">${e ? '−$'+e.monto.toFixed(2) : ''}</td>
+        </tr>`;
+      }).join('')}
+      <tr style="background:#f5f3ff;font-weight:900;"><td style="padding:1.2mm 3mm;">TOTAL AL BANCO</td><td style="padding:1.2mm 3mm;text-align:right;color:#16a34a;">$${propTotB.toFixed(2)}</td><td style="padding:1.2mm 3mm;">TOTAL EN EFECTIVO</td><td style="padding:1.2mm 3mm;text-align:right;color:#d42b2b;">$${propTotE.toFixed(2)}</td></tr></tbody>
+    </table>
+    <div style="margin-top:1.5mm;font-size:8pt;font-weight:800;color:${Math.abs(propDif)<0.005?'#166534':'#854d0e'};">${Math.abs(propDif)<0.005 ? '✔ CUADRA: el efectivo pagado está respaldado por lo que ingresó a la cuenta bancaria.' : (propDif>0 ? '⚠ Ingresó al banco $'+propDif.toFixed(2)+' más de lo pagado en efectivo.' : '⚠ Se pagó en efectivo $'+Math.abs(propDif).toFixed(2)+' más de lo que ingresó al banco.')}</div>` : '';
+
   const linkPend = parseFloat(cu._linkPendiente)||0;
   const cuentasHtml = `
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:12pt;font-weight:900;color:#1a3a6b;border-bottom:2.5px solid #1a3a6b;padding-bottom:1mm;margin:6mm 0 2mm;">CIERRE DE CUENTAS — ${esc(fechaLegible)} ${cu.diaCerrado?'<span style="font-size:8pt;color:#16a34a;">(DÍA CERRADO)</span>':'<span style="font-size:8pt;color:#d97706;">(día abierto)</span>'}</div>
@@ -9172,6 +9440,7 @@ function descargarReporteDia() {
     ${otrosHtml}
     ${cobrosHtml}
     ${modsHtml}
+    ${propsBancoHtml}
     ${cuentasHtml}
   </div>`;
 
@@ -10490,7 +10759,7 @@ function alertaPendientesUrgentes() {
     <button class="mc" onclick="cerrarAjusteCobro()">✕</button>
   </div>
   <div class="mb">
-    <div style="font-size:11px;color:var(--gris2);margin-bottom:10px;">El <strong>costo original pactado</strong> con el cliente NO se toca. Este ajuste se registra como un ingreso/descuento aparte, vinculado a la reservación, y entra al cuaderno del <strong>día que tenés abierto</strong> en Programación.</div>
+    <div style="font-size:11px;color:var(--gris2);margin-bottom:10px;">El <strong>costo original pactado</strong> con el cliente NO se toca. Este ajuste se registra como un ingreso/descuento aparte, vinculado a la reservación, y entra al cuaderno del <strong>día del servicio</strong> (el día programado para la mudanza), sin importar qué día lo registrés.</div>
     <div id="aj-info" style="background:var(--gris0);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px;"></div>
     <div class="fg">
       <label>Tipo de modificación *</label>
@@ -10499,6 +10768,7 @@ function alertaPendientesUrgentes() {
         <option value="Venta de cajas">Venta de cajas</option>
         <option value="Venta de plástico stretch">Venta de plástico stretch</option>
         <option value="Recargo">Recargo</option>
+        <option value="Propina">Propina (para el personal)</option>
         <option value="Descuento">Descuento</option>
         <option value="Ajuste administrativo">Ajuste administrativo</option>
         <option value="Otro">Otro</option>
