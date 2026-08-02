@@ -1275,6 +1275,15 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <button id="tb-ajuste" onclick="abrirModificarCosto()" style="background:#0891b2;color:#fff;">💵 Ajustar cobro</button>
     </div>
 
+    <!-- v110: avisos del encabezado (cancelada inmutable / cliente que cancela seguido) -->
+    <div id="ver-aviso-cancelada" style="display:none;background:#fee2e2;border:1.5px solid #fca5a5;border-left:5px solid #991b1b;border-radius:8px;padding:10px 14px;margin:10px 0;font-size:12.5px;color:#7f1d1d;line-height:1.5;">
+      <strong>🚫 RESERVACIÓN CANCELADA — registro histórico.</strong><br>
+      Queda tal como estaba al cancelarse: no se puede editar, cambiar de estado, reactivar ni eliminar.
+      Sí se puede ver, imprimir y <strong>duplicar</strong>.<br>
+      ➡️ Para reagendar al cliente usá el botón <strong>“📋 Duplicar”</strong>: crea una reservación NUEVA e independiente.
+    </div>
+    <div id="ver-aviso-cancelador" style="display:none;background:#fef3c7;border:1.5px solid #fcd34d;border-left:5px solid #d97706;border-radius:8px;padding:10px 14px;margin:10px 0;font-size:12.5px;color:#92400e;line-height:1.5;"></div>
+
     <!-- PDF -->
     <div id="tab-pdf">
       <div class="pdf-wrap" id="pdf-content">
@@ -1392,8 +1401,11 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       <div class="fg"><label>Lugar de carga *</label><input type="text" id="e-carga"></div>
       <div class="fg"><label>Lugar de descarga *</label><input type="text" id="e-descarga"></div>
       <div class="fg"><label>Observaciones</label><textarea id="e-obs" rows="3"></textarea></div>
-      <div class="flex gap2 mt3" style="justify-content:flex-end;">
+      <div class="flex gap2 mt3" id="edit-guardar-wrap" style="justify-content:flex-end;">
         <button class="btn btn-g" onclick="guardarEdicion()">💾 Guardar cambios</button>
+      </div>
+      <div id="edit-bloqueada-nota" style="display:none;background:#fee2e2;border:1.5px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-top:12px;font-size:12.5px;color:#7f1d1d;font-weight:700;">
+        🚫 Reservación CANCELADA: los datos quedaron congelados como registro histórico. Usá “📋 Duplicar” para reagendar.
       </div>
     </div>
 
@@ -1423,8 +1435,11 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 
     <!-- ESTADO -->
     <div id="tab-est" style="display:none;">
-      <p style="margin-bottom:12px;font-size:14px;">Cambiar estado de esta reservación:</p>
-      <div class="flex gap2">
+      <p style="margin-bottom:12px;font-size:14px;" id="est-titulo">Cambiar estado de esta reservación:</p>
+      <div id="est-bloqueada-nota" style="display:none;background:#fee2e2;border:1.5px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:#7f1d1d;font-weight:700;">
+        🚫 Reservación CANCELADA: no puede cambiar de estado ni reactivarse. Es un registro histórico permanente. Para reagendar usá “📋 Duplicar”.
+      </div>
+      <div class="flex gap2" id="est-botones">
         <button class="btn btn-gh" onclick="cambiarEst('pendiente')">⏳ Pendiente</button>
         <button class="btn btn-g" onclick="cambiarEst('confirmado')">✅ Confirmado</button>
         <button class="btn btn-p" onclick="cambiarEst('completado')">🏁 Completado</button>
@@ -2639,7 +2654,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-07-26-v109';
+const APP_VERSION = '2026-08-02-v110';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3545,6 +3560,8 @@ function adminCambiarVendedor() {
   if (!_esAdmin()) { alert('🔒 Solo Pedro (admin) puede reasignar el vendedor de una reservación.'); return; }
   const r = _resolveVerR();
   if (!r) { alert('⚠️ No se pudo identificar la reservación.'); return; }
+  // GUARD v110: la cancelada conserva EXACTAMENTE como quedó al cancelarse, vendedor incluido.
+  if (_bloquearSiCancelada(r, 'reasignar el vendedor')) return;
   const nombres = USUARIOS.map(u => u.nombre);
   const resp = prompt(`Vendedor actual: ${r.vendedor || '—'}\n\nEscribí el nombre del nuevo vendedor:\n(${nombres.join(', ')})`, r.vendedor || '');
   if (resp === null) return;
@@ -3827,16 +3844,11 @@ function renderAgenda() {
           // GUARD día cerrado: no reubicar/reactivar en un día ya cuadrado (descuadra el arqueo).
           if (isDiaCerrado(f)) { alert(`🔒 El día ${fmtFecha(f)} ya está cerrado.\n\nDesbloqueálo en Programación para mover o reactivar reservaciones.`); agDragSource = null; return; }
 
-          // Si la reservación está cancelada, confirmar reactivación antes de ubicarla
-          if (resDrag.estado === 'cancelado') {
-            const nombre = `${resDrag.nombre} ${resDrag.apellido||''}`.trim();
-            if (!confirm(`⚠️ "${nombre}" está CANCELADA.\n\n¿Reactivarla y ubicarla en esta columna?`)) {
-              agDragSource = null; return;
-            }
-            resDrag.estado = 'confirmado';
-            _quitarNotaCancelacion(resDrag);
-            saveSingle(resDrag);
-            _logAudit(resDrag.codigo, 'reactivada', 'desde la agenda');
+          // GUARD v110: una cancelada NO se reactiva arrastrándola. Queda como registro histórico
+          // permanente; para reagendar al cliente se DUPLICA (reservación nueva e independiente).
+          if (_esCancelada(resDrag)) {
+            _bloquearSiCancelada(resDrag, 'reactivar ni volver a ubicar en la agenda');
+            agDragSource = null; return;
           }
 
           if (!agGrid[f]) agGrid[f] = { numCols: (getAgDay(f).numCols), cells: {}, hidden: [] };
@@ -4064,12 +4076,14 @@ function renderSinUbicar(f) {
     const etiquetaCancelada = esCancelada
       ? '<span style="background:#991b1b;color:#fff;font-size:10px;font-weight:900;padding:1px 6px;border-radius:10px;letter-spacing:.5px;text-decoration:none;margin-left:4px;">CANCELADA</span>'
       : '';
-    return `<div draggable="true"
+    // v110: las canceladas ya NO se arrastran (no se reactivan). Son registro histórico:
+    // se ven y se duplican desde el modal. Solo las activas quedan draggable.
+    return `<div draggable="${esCancelada ? 'false' : 'true'}"
         data-codigo="${r.codigo}"
         onclick="verRes('${r.codigo}')"
-        ondragstart="agSinUbicarDragStart(event,'${r.codigo}')"
-        style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:grab;margin:3px;${opacity}"
-        title="${esCancelada ? 'Cancelada. Arrastrá a una celda para reactivarla.' : 'Arrastrá a una celda vacía.'}">
+        ${esCancelada ? '' : `ondragstart="agSinUbicarDragStart(event,'${r.codigo}')"`}
+        style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:${esCancelada ? 'pointer' : 'grab'};margin:3px;${opacity}"
+        title="${esCancelada ? 'Cancelada — registro histórico. Clic para verla o duplicarla.' : 'Arrastrá a una celda vacía.'}">
         <span style="${textDecor}">📦 ${nombre}</span>
         <span style="opacity:.85;font-size:11px;${textDecor}">${r.hora}</span>
         ${etiquetaCancelada}
@@ -4087,7 +4101,7 @@ function renderSinUbicar(f) {
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <div style="font-size:13px;font-weight:800;color:#92400e;">${encabezado}</div>
       <div style="flex:1;">${chips}</div>
-      <div style="font-size:11px;color:#92400e;font-style:italic;">Arrastrá a celda vacía</div>
+      <div style="font-size:11px;color:#92400e;font-style:italic;">${nActivas > 0 ? 'Arrastrá a celda vacía' : 'Las canceladas son registro histórico'}</div>
     </div>`;
 }
 
@@ -4685,13 +4699,15 @@ function removeFromGrid(f, key) {
   if (!agGrid[f]?.cells) return;
   const codigo = agGrid[f].cells[key];
   const r = codigo ? reservas.find(rv => rv.codigo === codigo) : null;
+  // GUARD v110: si ya está cancelada, es registro histórico congelado — no se vuelve a tocar.
+  if (_esCancelada(r)) { alert('🚫 Esta reservación ya está CANCELADA.\n\nQueda como registro histórico permanente. Para reagendar al cliente, abrila y usá "📋 Duplicar".'); return; }
   // GUARD día cerrado: no cancelar reservas de un día ya cuadrado.
   if (r && isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const nombre = r ? `${r.nombre} ${r.apellido||''}`.trim() : 'esta reservación';
   // Pedro pidió: el botón X debe CANCELAR la reservación (no solo quitar del grid)
   // para que no aparezca en "Sin asignar" de pizarra ni cuente en totales.
   // Si solo querés mover sin cancelar → arrastrá la celda a otra columna.
-  if (!confirm(`¿CANCELAR la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Saldrá de la pizarra y no contará en totales\n• Quedará tachada en "Sin ubicar" hasta que la reactives o la borres\n\n💡 Si solo querés MOVERLA, arrastrala a otra celda en vez de tocar la X.\n\n¿Cancelar?`)) return;
+  if (!confirm(`¿CANCELAR la reservación de ${nombre}?\n\n• Se marcará como CANCELADA\n• Saldrá de la pizarra y no contará en totales\n• Quedará como REGISTRO HISTÓRICO: ya no se podrá editar, reactivar ni borrar\n• Para reagendar al cliente se usa "📋 Duplicar" (crea una reservación nueva)\n\n💡 Si solo querés MOVERLA, arrastrala a otra celda en vez de tocar la X.\n\n¿Cancelar?`)) return;
   // AUDITORIA v99: motivo de cancelación (opcional) — queda en la bitácora y en las obs.
   const _motivoCancel = (prompt('Motivo de la cancelación (opcional):', '') || '').trim();
 
@@ -5032,6 +5048,8 @@ function openNueva() {
 
   // Ocultar match de cliente
   const match = document.getElementById('cliente-match'); if(match) match.style.display = 'none';
+  // v110: cada formulario nuevo vuelve a avisar (una vez) si el cliente cancela seguido.
+  try { _avisoCanceladorVisto.clear(); } catch(e) {}
 
   updateHoraLabels();
   updateSrvTabs();
@@ -5140,6 +5158,14 @@ function _buscarClienteReal() {
     }
     if (coms.length > 0 && !alerta) {
       html += `<br><span style="color:#1e40af;">💬 ${coms.length} comentario(s)</span>`;
+    }
+    // v110: cliente con MÁS DE DOS canceladas en un mismo mes calendario. Solo informativo:
+    // no bloquea la creación de la reservación ni al vendedor.
+    const _infoCanc = _clienteCanceladorFrecuente(found.tel);
+    if (_infoCanc) {
+      html += `<br><span style="color:#92400e;font-weight:800;">⚠️ Cliente ha cancelado mudanzas en repetidas ocasiones (${_infoCanc.cant} en ${escHtml(_mesLargo(_infoCanc.mes))}). Se recomienda solicitar anticipo antes de confirmar este servicio.</span>`;
+      if (!alerta) { match.style.background = '#fef3c7'; match.style.color = '#92400e'; }
+      _avisarCanceladorFrecuente(found.tel);
     }
     match.style.display = 'block';
     match.innerHTML = html;
@@ -5488,8 +5514,46 @@ function verRes(idxOCodigo) {
   msg += `${firmaWA}\n\n*Mudanzas Tecleñas* | 📞 2229-8822 | 📱 6198-4772`;
   document.getElementById('wa-msg').textContent = msg;
 
+  // v110: avisos del encabezado — cancelada inmutable y cliente que cancela seguido.
+  _pintarAvisosVer(r);
+
   showTab('pdf');
   document.getElementById('mo-ver').classList.add('open');
+}
+
+// v110: pinta (o esconde) los dos avisos del modal Ver y bloquea los botones que no aplican
+// cuando la reservación está CANCELADA. Solo UI: no toca datos, finanzas ni sync.
+function _pintarAvisosVer(r) {
+  const canc = _esCancelada(r);
+  const banner = document.getElementById('ver-aviso-cancelada');
+  if (banner) banner.style.display = canc ? 'block' : 'none';
+  // "Ajustar cobro" no aplica a una cancelada: se esconde (el guard igual la bloquea).
+  const btnAj = document.getElementById('tb-ajuste');
+  if (btnAj) btnAj.style.display = canc ? 'none' : '';
+  // Pestaña Estado: botones inutilizables + nota. El historial y la propiedad siguen visibles.
+  const estBtns = document.getElementById('est-botones');
+  if (estBtns) {
+    estBtns.style.opacity = canc ? '.4' : '';
+    estBtns.style.pointerEvents = canc ? 'none' : '';
+    estBtns.querySelectorAll('button').forEach(b => { b.disabled = canc; });
+  }
+  const estNota = document.getElementById('est-bloqueada-nota');
+  if (estNota) estNota.style.display = canc ? 'block' : 'none';
+  const estTit = document.getElementById('est-titulo');
+  if (estTit) estTit.style.display = canc ? 'none' : '';
+  // Aviso de cliente con más de 2 cancelaciones en un mismo mes (informativo, nunca bloquea).
+  const avisoC = document.getElementById('ver-aviso-cancelador');
+  const info = _clienteCanceladorFrecuente(r.tel);
+  if (avisoC) {
+    if (info) {
+      avisoC.style.display = 'block';
+      avisoC.innerHTML = '<strong>⚠️ Cliente ha cancelado mudanzas en repetidas ocasiones.</strong><br>' +
+        'Se recomienda solicitar anticipo antes de confirmar este servicio.<br>' +
+        '<span style="opacity:.85;">' + info.cant + ' cancelaciones en ' + escHtml(_mesLargo(info.mes)) + ' · ' + info.total + ' en total.</span>';
+    } else { avisoC.style.display = 'none'; avisoC.innerHTML = ''; }
+  }
+  // Popup automático (una vez por cliente por sesión) al abrir una reservación ACTIVA.
+  if (!canc) _avisarCanceladorFrecuente(r.tel);
 }
 
 function closeVer() { document.getElementById('mo-ver').classList.remove('open'); verIdx = null; verCodigo = null; }
@@ -5631,6 +5695,19 @@ function cargarEdicion() {
   const customHoras = horas.filter(h => !['8:00 AM','11:00 AM','2:30 PM'].includes(h));
   customHoras.forEach(h => addEditHoraExtra(h));
   updateEditHoraLabels();
+  // v110: si está CANCELADA, la pestaña Editar queda de SOLO LECTURA (campos deshabilitados,
+  // sin botón de guardar). El guard de guardarEdicion es la defensa real; esto evita que
+  // alguien tipee cambios que nunca se van a guardar.
+  const canc = _esCancelada(r);
+  const tabEdit = document.getElementById('tab-edit');
+  if (tabEdit) tabEdit.querySelectorAll('input, select, textarea, button').forEach(el => {
+    if (el.closest('#edit-guardar-wrap')) return; // el wrapper se esconde entero
+    el.disabled = canc;
+  });
+  const wrap = document.getElementById('edit-guardar-wrap');
+  if (wrap) wrap.style.display = canc ? 'none' : '';
+  const nota = document.getElementById('edit-bloqueada-nota');
+  if (nota) nota.style.display = canc ? 'block' : 'none';
 }
 
 function getEditSelectedHoras() {
@@ -5679,6 +5756,9 @@ function addEditHoraExtra(valor) {
 function guardarEdicion() {
   const r = _resolveVerR();
   if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
+  // GUARD v110: una cancelada es histórico inmutable — no se edita NINGÚN dato (fecha, hora,
+  // cliente, teléfono, direcciones, precio, obs, personal, camión). Reagendar = Duplicar.
+  if (_bloquearSiCancelada(r, 'editar')) return;
   const nombre = document.getElementById('e-nombre').value.trim();
   const tel = _recolectarTelefonos('e-tel','e-tels-extra');
   const carga = document.getElementById('e-carga').value.trim();
@@ -6145,12 +6225,78 @@ function _quitarNotaCancelacion(r) {
   r.obs = lineas.join('\n').trim();
 }
 
+// ==================== v110: CANCELADA = REGISTRO HISTÓRICO INMUTABLE ====================
+// Regla de negocio (2026-08-02): una reservación CANCELADA queda congelada para siempre.
+// No se edita, no cambia de estado, no se reactiva, no se le ajusta el cobro, no se borra.
+// Sí se ve, se imprime y se DUPLICA (única vía de reagendar: crea una reserva nueva e
+// independiente, con código propio). Sin esto, cancelar + cambiar la fecha borraba el
+// historial real de cancelaciones y los reportes históricos quedaban falseados.
+function _esCancelada(r) { return !!(r && r.estado === 'cancelado'); }
+
+// Guard único. Devuelve true (y avisa) si hay que ABORTAR la acción.
+function _bloquearSiCancelada(r, accion) {
+  if (!_esCancelada(r)) return false;
+  alert('🚫 Esta reservación está CANCELADA.\n\n' +
+        'Las canceladas quedan como registro histórico permanente: no se pueden ' + (accion || 'modificar') + '.\n\n' +
+        '➡️ Si el cliente quiere una fecha nueva, abrí la reservación y usá el botón "📋 Duplicar".\n' +
+        'Se crea una reservación NUEVA e independiente, y la cancelada queda intacta en el historial.');
+  return true;
+}
+
+// Números de teléfono normalizados de una reserva (puede traer varios separados por / , ; o "y").
+function _numsTel(tel) {
+  return String(tel || '').split(/[\/,;]|\s+y\s+/i)
+    .map(t => t.replace(/[^0-9]/g, ''))
+    .filter(t => t.length >= 7);
+}
+
+// v110: ¿este cliente acumuló MÁS DE DOS canceladas dentro de un mismo mes calendario?
+// Devuelve {mes,cant,total} del peor mes, o null. Solo lectura: no toca datos ni finanzas.
+function _clienteCanceladorFrecuente(tel) {
+  const nums = _numsTel(tel);
+  if (!nums.length) return null;
+  const canceladas = (reservas || []).filter(r =>
+    r && r.estado === 'cancelado' &&
+    _numsTel(r.tel).some(n => nums.includes(n))
+  );
+  const porMes = {};
+  canceladas.forEach(r => {
+    const m = String(r.fecha || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(m)) return;
+    porMes[m] = (porMes[m] || 0) + 1;
+  });
+  let mes = null, cant = 0;
+  Object.keys(porMes).forEach(m => { if (porMes[m] > cant) { cant = porMes[m]; mes = m; } });
+  return cant > 2 ? { mes, cant, total: canceladas.length } : null;
+}
+
+const _AVISO_CANCELADOR_TXT = '⚠️ Cliente ha cancelado mudanzas en repetidas ocasiones.\n\nSe recomienda solicitar anticipo antes de confirmar este servicio.';
+function _mesLargo(m) {
+  if (!/^\d{4}-\d{2}$/.test(m || '')) return '';
+  try { return new Date(m + '-15T12:00:00').toLocaleDateString('es-SV', { month: 'long', year: 'numeric' }); }
+  catch (e) { return m; }
+}
+// El popup sale UNA vez por cliente por sesión (informativo, nunca bloquea).
+var _avisoCanceladorVisto = new Set();
+function _avisarCanceladorFrecuente(tel) {
+  const info = _clienteCanceladorFrecuente(tel);
+  if (!info) return null;
+  const clave = _numsTel(tel).sort().join('|');
+  if (!_avisoCanceladorVisto.has(clave)) {
+    _avisoCanceladorVisto.add(clave);
+    setTimeout(() => alert(_AVISO_CANCELADOR_TXT + '\n\n(' + info.cant + ' cancelaciones en ' + _mesLargo(info.mes) + ')'), 60);
+  }
+  return info;
+}
+
 function cambiarEst(est) {
   // CRÍTICO: resolver por código, no por índice. Si reservas[] se reordenó por sync mientras
   // el modal estaba abierto, reservas[verIdx] podría apuntar a OTRA reservación → cancelaríamos
   // la equivocada. Por eso buscamos por código (verCodigo).
   const r = _resolveVerR();
   if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
+  // GUARD v110: una cancelada es histórico inmutable — NO cambia de estado (ni se reactiva).
+  if (_bloquearSiCancelada(r, 'cambiar de estado ni reactivar')) return;
   // GUARD día cerrado: no tocar reservaciones de un día ya cuadrado/cerrado (corrompe el arqueo).
   if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cambiar o cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const _estadoAntes = r.estado;
@@ -6160,7 +6306,7 @@ function cambiarEst(est) {
   let _motivoCancel = '';
   // Si se cancela desde este botón, pedir confirmación y mover a "Sin ubicar"
   if (est === 'cancelado') {
-    if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+    if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Quedará como REGISTRO HISTÓRICO: ya no se podrá editar, reactivar ni borrar\n• Para reagendar al cliente se usa "📋 Duplicar" (crea una reservación nueva)\n\n¿Continuar?`)) return;
     // AUDITORIA v99: motivo de cancelación (opcional) — queda en la bitácora y en las obs.
     _motivoCancel = (prompt('Motivo de la cancelación (opcional):', '') || '').trim();
     _agregarNotaCancelacion(r, _motivoCancel);
@@ -6214,7 +6360,12 @@ function duplicarReserva() {
       set('f-personal', orig.personal || '5');
       set('f-carga', orig.carga);
       set('f-descarga', orig.descarga);
-      set('f-obs', orig.obs);
+      // v110: la copia NO hereda la nota "Servicio cancelado por el cliente…" del original
+      // (esa nota pertenece al registro histórico de la cancelada, no al servicio nuevo).
+      // Se calcula sobre una copia del texto: el original NUNCA se modifica.
+      const _obsLimpia = String(orig.obs || '').split('\n')
+        .filter(l => !/^Servicio cancelado por el cliente/i.test(l.trim())).join('\n').trim();
+      set('f-obs', _obsLimpia);
       set('f-fecha', orig.fecha); // misma fecha; el usuario la cambia si reagenda a otro día
       const fEst = document.getElementById('f-estado'); if (fEst) fEst.value = (orig.estado === 'cancelado' || orig.estado === 'completado') ? 'confirmado' : (orig.estado || 'confirmado');
 
@@ -6269,8 +6420,12 @@ function duplicarReserva() {
         set('m-pilot-emp', orig.empaque.pilot); set('m-espuma-emp', orig.empaque.espuma); set('m-guantes', orig.empaque.guantes);
         set('m-percheros', orig.empaque.percheros); set('m-obs-emp', orig.empaque.obs);
       }
-      // Mensaje guía
-      alert('📋 Formulario precargado con los datos del servicio. Modificá lo que necesites (ej. la fecha) y guardá — se creará una reservación NUEVA sin tocar la original.');
+      // Mensaje guía (v110: si el original está cancelado, este ES el flujo de reagendar)
+      alert(_esCancelada(orig)
+        ? '📋 Reagendando un servicio CANCELADO.\n\nEl formulario quedó precargado con los datos del cliente. Cambiá la fecha (y lo que necesites) y guardá: se crea una reservación NUEVA con código propio.\n\nLa cancelada original queda intacta en el historial.'
+        : '📋 Formulario precargado con los datos del servicio. Modificá lo que necesites (ej. la fecha) y guardá — se creará una reservación NUEVA sin tocar la original.');
+      // v110: aviso si el cliente acumula más de 2 canceladas en un mismo mes.
+      _avisarCanceladorFrecuente(orig.tel);
     } catch(e) { console.warn('duplicarReserva error:', e); }
   }, 180);
 }
@@ -6286,10 +6441,12 @@ function eliminar(idxOCodigo) {
     r = reservas[idxOCodigo];
   }
   if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  // GUARD v110: ya cancelada = registro histórico congelado. No se vuelve a tocar ni se elimina.
+  if (_esCancelada(r)) { alert('🚫 Esta reservación ya está CANCELADA.\n\nQueda como registro histórico permanente y no se puede modificar ni eliminar.\n\n➡️ Para reagendar al cliente, abrila y usá el botón "📋 Duplicar".'); return; }
   // GUARD día cerrado: cancelar una reserva de un día cuadrado corrompe el arqueo.
   if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado.\n\nPara cancelar esta reservación, primero desbloqueá ese día en Programación.`); return; }
   const nombre = `${r.nombre} ${r.apellido || ''}`.trim();
-  if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Podés reactivarla arrastrándola de vuelta a una celda\n\n¿Continuar?`)) return;
+  if (!confirm(`¿Cancelar la reservación de ${nombre}?\n\n• Código: ${r.codigo}\n• Fecha: ${r.fecha}\n\n• Se marcará como CANCELADA\n• Aparecerá en la barra "Sin ubicar" de la agenda\n• Quedará como REGISTRO HISTÓRICO: ya no se podrá editar, reactivar ni borrar\n• Para reagendar al cliente se usa "📋 Duplicar" (crea una reservación nueva)\n\n¿Continuar?`)) return;
   // AUDITORIA v99: motivo de cancelación (opcional) — queda en la bitácora y en las obs.
   const _motivoCancel = (prompt('Motivo de la cancelación (opcional):', '') || '').trim();
   r.estado = 'cancelado';
@@ -8784,6 +8941,8 @@ function previewAjuste(){
 function abrirModificarCosto(){
   const r = _resolveVerR();
   if (!r){ alert('⚠️ No se pudo identificar la reservación.'); return; }
+  // GUARD v110: una cancelada no mueve dinero ni cambia de precio (histórico inmutable).
+  if (_bloquearSiCancelada(r, 'ajustar el cobro ni cambiarles el precio')) return;
   _ajusteCtx = { codigo: r.codigo };
   _ajusteSigno = '+';
   const set = (id,val)=>{ const e=document.getElementById(id); if(e) e.value=val; };
@@ -8803,6 +8962,8 @@ function confirmarAjusteCobro(){
   if (!_ajusteCtx) return;
   const r = reservas.find(rv => rv.codigo === _ajusteCtx.codigo);
   if (!r){ alert('⚠️ No se encontró la reservación.'); return; }
+  // GUARD v110 (defensa en profundidad: la reserva pudo cancelarse desde otra compu con el modal abierto).
+  if (_bloquearSiCancelada(r, 'ajustar el cobro')) { cerrarAjusteCobro(); return; }
   const tipo = document.getElementById('aj-tipo').value;
   let metodo = document.getElementById('aj-metodo').value;
   const motivo = document.getElementById('aj-motivo').value.trim();
@@ -10558,6 +10719,8 @@ function cambiarEstRapido(idxOCodigo, est) {
     r = reservas[idxOCodigo];
   }
   if (!r) { alert('⚠️ No se encontró la reservación. Refrescá la lista.'); return; }
+  // GUARD v110: una cancelada es histórico inmutable — no cambia de estado desde ningún atajo.
+  if (_bloquearSiCancelada(r, 'cambiar de estado ni reactivar')) return;
   // GUARD día cerrado: no cambiar estado de reservas de un día ya cuadrado.
   if (isDiaCerrado(r.fecha)) { alert(`🔒 El día ${fmtFecha(r.fecha)} ya está cerrado. Desbloqueá ese día en Programación para cambiarla.`); return; }
   const _estadoAntes = r.estado;
