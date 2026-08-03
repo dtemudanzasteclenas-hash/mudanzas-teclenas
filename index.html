@@ -1063,6 +1063,13 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <div id="com-pago1" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;"></div>
   </div>
 
+  <!-- COMISIONES POR DÍA DE DESCANSO (DOMINGOS TRABAJADOS) — v111 -->
+  <div class="card" style="margin-bottom:22px;border:2px solid #d97706;">
+    <div class="card-head"><h3>🗓️ Comisiones por día de descanso — domingos trabajados</h3></div>
+    <p style="font-size:12px;color:var(--gris2);margin:2px 0 14px;">El único día de descanso es el <strong>domingo</strong>. Se cuentan los domingos en que la persona aparece en algún equipo de la <strong>programación diaria</strong>, contados <strong>desde su último pago</strong>. El contador solo se mueve cuando se registra un pago; los domingos ya pagados nunca vuelven a contar.</p>
+    <div id="com-descanso" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;"></div>
+  </div>
+
   <div class="sec-div" style="margin:6px 0 14px;">Volumen por vendedor (según fecha del servicio)</div>
   <div id="com-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:22px;"></div>
   <div class="card">
@@ -1660,7 +1667,10 @@ function _contarItemsFinancieros(day) {
   // gasto sin subir podía pisar en la nube un cobro registrado desde otra computadora — el cobro
   // desaparecía de notificaciones y ese dinero no entraba a ninguna cuenta (pérdida silenciosa).
   const cb = (day.cobrosPendientes||[]).filter(x => parseFloat(x.monto)>0).length;
-  return g + oi + mv + cb;
+  // v111: los pagos de comisión por día de descanso también pesan al elegir el lado base del
+  // merge. Sin esto, un día local sin comisiones podía imponerse sobre la nube que sí las tenía.
+  const cd = (day.comisionesDescanso||[]).filter(x => parseFloat(x.monto)>0).length;
+  return g + oi + mv + cb + cd;
 }
 // ==================== MERGE FINO POR ÍTEM (v101, 2026-07-09) ====================
 // PROBLEMA que resuelve (pendiente P2): el merge viejo elegía el DÍA COMPLETO de un solo lado
@@ -1670,7 +1680,10 @@ function _contarItemsFinancieros(day) {
 // con identidad propia (`_id`), marca de tiempo (`_ts`) y, al borrarlo, una "tumba" (`_tomb`).
 // El merge UNE los ítems de ambos lados: si un id existe en los dos, gana el de `_ts` más nuevo;
 // si fue borrado (tumba con ts >= a la última edición), queda borrado y no "resucita".
-const _LISTAS_FIN = ['gastos','otrosIngresos','movimientos','cobrosPendientes'];
+// v111 (2026-08-02): se suma 'comisionesDescanso' — el historial PERMANENTE de comisiones por
+// domingos (día de descanso) trabajados. Al entrar en _LISTAS_FIN hereda gratis _id/_ts, tumbas
+// de borrado y merge fino ítem-por-ítem entre dispositivos, igual que gastos.
+const _LISTAS_FIN = ['gastos','otrosIngresos','movimientos','cobrosPendientes','comisionesDescanso'];
 
 function _hashStr(s) { let h = 5381; s = String(s); for (let i=0;i<s.length;i++) h = ((h<<5)+h + s.charCodeAt(i)) >>> 0; return h.toString(36); }
 // id para ítems NUEVOS (único por dispositivo/tiempo).
@@ -2654,7 +2667,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-02-v110';
+const APP_VERSION = '2026-08-03-v111';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6510,6 +6523,327 @@ const MOTORISTAS = new Set([
   'Fabio Jose González Coto',
 ]);
 
+// ==================== COMISIONES POR DÍA DE DESCANSO (DOMINGOS) — v111 (2026-08-02) ====================
+// REGLA DE NEGOCIO: en Mudanzas Tecleñas el ÚNICO día de descanso es el DOMINGO. Cuando uno de los
+// empleados configurados abajo trabaja un domingo, acumula un "domingo trabajado". Al juntar N
+// domingos trabajados DESDE SU ÚLTIMO PAGO, corresponde pagarle una comisión fija.
+//
+// FUENTE DE VERDAD (no se inventan estructuras nuevas; se reusa lo que el programa ya guarda):
+//  • Domingos trabajados -> pdData[fecha].columnas[].miembros[].nombre. La programación diaria ya
+//    registra quién trabajó cada día: si un domingo el empleado aparece en CUALQUIER equipo, ese
+//    domingo lo trabajó. Solo cuentan domingos HASTA HOY (un domingo futuro pre-armado no cuenta).
+//  • Pagos de comisión   -> pdData[fecha].comisionesDescanso[]. Lista permanente que entra en
+//    _LISTAS_FIN, así hereda _id/_ts, tumbas y merge fino multi-dispositivo, y viaja en mt_pd3.
+//  • Salida de dinero    -> además se crea un GASTO normal (CAJA CHICA) enlazado por _comId, para
+//    que recalcCerramos descuente la comisión como cualquier otro gasto. Cero cambios al cuadre.
+//
+// ANTI-DUPLICADO (clave): cada pago guarda las FECHAS EXACTAS de los domingos que cubrió
+// (domingos[]). Un domingo cubierto NUNCA vuelve a contar, aunque los pagos se registren fuera de
+// orden, pasen meses sin pagar o cambie el año. El contador NO se reinicia a mano: solo lo mueve
+// un pago registrado, y solo consume los domingos que ese pago cubrió.
+//
+// AMPLIABLE: para sumar un empleado nuevo basta agregarlo a COMISIONES_DESCANSO (nombre EXACTO
+// como aparece en EMPLEADOS/PERSONAL_ROSTER, su monto y cada cuántos domingos). Nada más.
+const COMISION_DESCANSO_DIA = 0;   // Date.getDay(): 0 = domingo
+
+const COMISIONES_DESCANSO = [
+  { id:'joel-barrientos', alias:'Joel Hernández',        nombre:'Jose Joel Hernandez Barrientos',
+    monto:50, cada:4, variantes:['Joel Hernandez Barrientos','Jose Joel Hernandez Barrientos'] },
+  { id:'jorge-ramirez',   alias:'Jorge Alberto Ramírez', nombre:'Jorge Alberto Ramirez Alvarado',
+    monto:50, cada:4, variantes:['Jorge Alberto Ramirez','Jorge Ramirez Alvarado','Koky'] },
+  { id:'joelito',         alias:'Joelito',               nombre:'Joel de Jesus Hernandez Martinez',
+    monto:30, cada:4, variantes:['Joelito','Joel de Jesus Hernandez','Joel Hernandez Martinez'] },
+];
+
+// Normaliza un nombre para comparar sin depender de acentos, mayúsculas ni dobles espacios
+// ("José Joel Hernández Barrientos" === "Jose Joel Hernandez Barrientos").
+function _normNombrePersona(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Índice nombre-normalizado -> id de empleado. Si una misma grafía apunta a DOS empleados
+// (ej. un "Joel Hernandez" ambiguo entre el papá y el hijo) se DESCARTA: preferimos no contar
+// un domingo antes que asignárselo a la persona equivocada.
+var _idxComDesc = null, _idxComDescN = -1;
+function _indiceComisionDescanso() {
+  // Cache invalidada si cambia la cantidad de empleados configurados (al agregar uno nuevo
+  // no hay que acordarse de limpiar nada a mano).
+  if (_idxComDesc && _idxComDescN === COMISIONES_DESCANSO.length) return _idxComDesc;
+  const m = new Map(), ambiguos = new Set();
+  COMISIONES_DESCANSO.forEach(cfg => {
+    [cfg.nombre, cfg.alias].concat(cfg.variantes || []).forEach(n => {
+      const k = _normNombrePersona(n);
+      if (!k) return;
+      if (m.has(k) && m.get(k) !== cfg.id) ambiguos.add(k); else m.set(k, cfg.id);
+    });
+  });
+  ambiguos.forEach(k => m.delete(k));
+  _idxComDesc = m; _idxComDescN = COMISIONES_DESCANSO.length;
+  return m;
+}
+function _cfgComisionDescanso(id) { return COMISIONES_DESCANSO.find(c => c.id === id) || null; }
+function _empIdComisionDeNombre(nombre) { return _indiceComisionDescanso().get(_normNombrePersona(nombre)) || null; }
+
+function _esDiaDescanso(f) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f || ''))) return false;
+  const d = new Date(f + 'T12:00:00');          // mediodía: inmune a zona horaria / DST
+  return !isNaN(d.getTime()) && d.getDay() === COMISION_DESCANSO_DIA;
+}
+// Fecha de HOY en hora LOCAL (no UTC: en El Salvador, UTC-6, toISOString() ya es "mañana" a las 6pm).
+function _hoyISOLocal() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _fchCorta(f) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f || ''))) return String(f || '');
+  const p = f.split('-');
+  return p[2] + '/' + p[1] + '/' + p[0];
+}
+
+// Domingos que el empleado TRABAJÓ (aparece en algún equipo de la programación de ese domingo),
+// hasta `hoy` inclusive. Devuelve fechas ISO ordenadas ascendente, sin repetidos.
+function _domingosTrabajadosEmp(empId, hoy) {
+  if (!_cfgComisionDescanso(empId)) return [];
+  const tope = hoy || _hoyISOLocal();
+  const out = [];
+  const data = (typeof pdData !== 'undefined' && pdData) ? pdData : {};
+  Object.keys(data).forEach(f => {
+    if (!_esDiaDescanso(f) || f > tope) return;
+    const day = data[f];
+    if (!day || !Array.isArray(day.columnas)) return;
+    const trabajo = day.columnas.some(col =>
+      col && Array.isArray(col.miembros) &&
+      col.miembros.some(m => m && _empIdComisionDeNombre(m.nombre) === empId)
+    );
+    if (trabajo) out.push(f);
+  });
+  return out.sort();
+}
+
+// Historial COMPLETO de pagos de comisión de un empleado (todas las fechas de pdData).
+function _historialComisionesEmp(empId) {
+  const out = [];
+  const data = (typeof pdData !== 'undefined' && pdData) ? pdData : {};
+  Object.keys(data).forEach(f => {
+    const arr = data[f] && data[f].comisionesDescanso;
+    if (!Array.isArray(arr)) return;
+    arr.forEach(it => {
+      if (it && it.empId === empId) out.push(Object.assign({}, it, { fecha: it.fecha || f, _dia: f }));
+    });
+  });
+  out.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : ((+a._ts || 0) - (+b._ts || 0))));
+  return out;
+}
+
+// ESTADO ACTUAL del empleado. Nunca reinicia nada: solo lee historial + domingos trabajados.
+function _estadoComisionDescanso(empId, hoy) {
+  const cfg = _cfgComisionDescanso(empId);
+  if (!cfg) return null;
+  const cada = Math.max(1, parseInt(cfg.cada, 10) || 4);
+  const hist = _historialComisionesEmp(empId);
+
+  // Domingos ya pagados. Un pago moderno trae el detalle exacto (domingos[]); uno legacy sin
+  // detalle solo puede cortar por su fecha (se ignora todo domingo <= la fecha de ese pago).
+  const cubiertos = new Set();
+  let corte = '';
+  hist.forEach(p => {
+    if (Array.isArray(p.domingos) && p.domingos.length) p.domingos.forEach(d => cubiertos.add(d));
+    else if (p.fecha && p.fecha > corte) corte = p.fecha;
+  });
+
+  const trabajados = _domingosTrabajadosEmp(empId, hoy);
+  const pendientes = trabajados.filter(d => !cubiertos.has(d) && (!corte || d > corte));
+  const ciclos = Math.floor(pendientes.length / cada);
+  const ultimo = hist.length ? hist[hist.length - 1] : null;
+
+  return {
+    empId, cfg, cada,
+    historial: hist,
+    ultimoPago:   ultimo ? ultimo.fecha : null,
+    montoUltimo:  ultimo ? (parseFloat(ultimo.monto) || 0) : 0,
+    domingosUltimoPago: ultimo && Array.isArray(ultimo.domingos) ? ultimo.domingos.slice() : [],
+    trabajados,
+    pendientes,                                  // domingos que aún no ha pagado nadie
+    acumulados: pendientes.length,
+    enCiclo: pendientes.length % cada,           // avance dentro del ciclo en curso
+    faltan: ciclos > 0 ? 0 : (cada - (pendientes.length % cada)),
+    ciclos,                                      // cuántas comisiones completas se deben
+    montoDebido: ciclos * (parseFloat(cfg.monto) || 0),
+    debe: ciclos > 0
+  };
+}
+
+// Registra el/los pago(s) de comisión que correspondan HOY. Consume los domingos MÁS ANTIGUOS
+// primero y deja el sobrante para el siguiente ciclo. Idempotente: recalcula el estado justo
+// antes de escribir, así dos clics seguidos no generan un pago de más.
+function registrarComisionDescanso(empId) {
+  const est = _estadoComisionDescanso(empId);
+  if (!est) { alert('Ese empleado no está configurado para comisión por día de descanso.'); return; }
+  if (!est.debe) {
+    alert('Todavía no corresponde pagar.\n\n' + est.cfg.alias + ': ' + est.acumulados + ' de ' + est.cada +
+          ' domingos trabajados. Falta' + (est.faltan === 1 ? '' : 'n') + ' ' + est.faltan + ' domingo' + (est.faltan === 1 ? '' : 's') + '.');
+    return;
+  }
+  const f = _hoyISOLocal();
+  if (isDiaCerrado(f)) {
+    alert('🔒 El día de hoy (' + _fchCorta(f) + ') está cerrado.\n\nDesbloquéalo en Programación para registrar el pago.');
+    return;
+  }
+  const n = est.ciclos;
+  const detalle = [];
+  for (let k = 0; k < n; k++) detalle.push(est.pendientes.slice(k * est.cada, (k + 1) * est.cada).map(_fchCorta).join(', '));
+  if (!confirm('¿Registrar pago de comisión por día de descanso?\n\n' + est.cfg.alias + '\n' +
+               n + ' comisión(es) × $' + (parseFloat(est.cfg.monto) || 0).toFixed(2) + ' = $' + est.montoDebido.toFixed(2) + '\n' +
+               'Domingos que se pagan:\n• ' + detalle.join('\n• ') + '\n\n' +
+               'Se anota como gasto de CAJA CHICA con fecha ' + _fchCorta(f) + '.')) return;
+
+  const day = getDayData(f);
+  if (!Array.isArray(day.comisionesDescanso)) day.comisionesDescanso = [];
+  if (!Array.isArray(day.gastos)) day.gastos = [];
+  const ahora = Date.now();
+  const usuario = (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '';
+
+  for (let k = 0; k < n; k++) {
+    const cubre = est.pendientes.slice(k * est.cada, (k + 1) * est.cada);
+    const comId = _itemId();
+    const gastoId = _itemId();
+    day.comisionesDescanso.push({
+      _id: comId, _ts: ahora + k,
+      empId: empId, nombre: est.cfg.nombre, alias: est.cfg.alias,
+      monto: parseFloat(est.cfg.monto) || 0, cada: est.cada,
+      domingos: cubre, fecha: f, usuario: usuario, gastoId: gastoId
+    });
+    day.gastos.push({
+      _id: gastoId, _ts: ahora + k,
+      monto: (parseFloat(est.cfg.monto) || 0).toFixed(2),
+      titulo: 'COMISIÓN DÍA DE DESCANSO',
+      desc: est.cfg.alias + ' — ' + cubre.length + ' domingos: ' + cubre.map(_fchCorta).join(', '),
+      fondo: 'CAJA CHICA', _comId: comId
+    });
+  }
+
+  savePD();
+  try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); } catch (e) {}
+  // v111: el gasto cae en `f` (hoy), que puede NO ser el día visible del cuaderno — el botón vive
+  // en Comisiones, independiente del selector de fecha. recalcCerramos() sin argumento recalculaba
+  // el día visible, así que el cerramos de `f` quedaba sin descontar el pago. Mismo criterio v109.
+  try { if (typeof _recalcDesde === 'function') _recalcDesde(f); else recalcCerramos(); } catch (e) {}
+  try { renderComisionesDescanso(); } catch (e) {}
+  try { if (typeof getPDFecha === 'function' && document.getElementById('pd-fecha') && getPDFecha() === f) { renderGastos(); renderCuaderno(); } } catch (e) {}
+  alert('✅ Pago registrado: ' + est.cfg.alias + ' — $' + est.montoDebido.toFixed(2) +
+        '\n\nSe anotó como gasto de CAJA CHICA del ' + _fchCorta(f) + '. El contador arranca de nuevo desde el domingo siguiente.');
+}
+
+// Anular un pago mal registrado. NO es un "reinicio manual": elimina el pago y su gasto enlazado,
+// devolviendo esos domingos al contador. Solo admin y solo si el día del pago no está cerrado.
+function anularComisionDescanso(diaISO, comId) {
+  if (!(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.rol === 'admin')) {
+    alert('Solo el administrador puede anular un pago de comisión.'); return;
+  }
+  const day = pdData && pdData[diaISO];
+  const arr = day && day.comisionesDescanso;
+  const idx = Array.isArray(arr) ? arr.findIndex(x => x && x._id === comId) : -1;
+  if (idx < 0) { alert('No se encontró ese pago.'); return; }
+  if (isDiaCerrado(diaISO)) { alert('🔒 El día ' + _fchCorta(diaISO) + ' está cerrado. Desbloquéalo para anular el pago.'); return; }
+  const it = arr[idx];
+  if (!confirm('¿Anular este pago de comisión?\n\n' + (it.alias || it.nombre) + ' — $' + (parseFloat(it.monto) || 0).toFixed(2) +
+               ' del ' + _fchCorta(it.fecha || diaISO) + '\n\nLos ' + ((it.domingos || []).length) +
+               ' domingos que cubría vuelven a contar y se borra su gasto de CAJA CHICA.')) return;
+
+  if (!day._tomb) day._tomb = {};
+  if (!day._tomb.comisionesDescanso) day._tomb.comisionesDescanso = {};
+  day._tomb.comisionesDescanso[comId] = Date.now();
+  arr.splice(idx, 1);
+
+  if (it.gastoId && Array.isArray(day.gastos)) {
+    const gi = day.gastos.findIndex(g => g && (g._id === it.gastoId || g._comId === comId));
+    if (gi >= 0) {
+      if (!day._tomb.gastos) day._tomb.gastos = {};
+      day._tomb.gastos[day.gastos[gi]._id] = Date.now();
+      day.gastos.splice(gi, 1);
+    }
+  }
+  savePD();
+  try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); } catch (e) {}
+  // v111: el gasto anulado vive en `diaISO`, que suele ser un día PASADO. recalcCerramos() sin
+  // argumento recalculaba solo el día visible: el cerramos de diaISO seguía con el monto restado y
+  // el abrimos del día siguiente nunca se refrescaba (renderCuentas solo autocompleta si está
+  // VACÍO) → la cadena quedaba corta hasta visitar los días uno por uno EN ORDEN. Fix v109 (F4).
+  try { if (typeof _recalcDesde === 'function') _recalcDesde(diaISO); else recalcCerramos(); } catch (e) {}
+  try { renderComisionesDescanso(); } catch (e) {}
+  try { if (typeof getPDFecha === 'function' && document.getElementById('pd-fecha') && getPDFecha() === diaISO) { renderGastos(); renderCuaderno(); } } catch (e) {}
+}
+
+// Aviso compacto para el Cuaderno (bloque PAGOS AL PERSONAL).
+function _avisoComisionesDescansoHTML() {
+  let pend = [];
+  try { pend = COMISIONES_DESCANSO.map(c => _estadoComisionDescanso(c.id)).filter(e => e && e.debe); } catch (e) { return ''; }
+  if (!pend.length) return '';
+  return '<div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:8px;padding:8px 10px;margin-bottom:10px;">' +
+    '<div style="font-size:12px;font-weight:800;color:#92400e;">⚠ Comisión por día de descanso pendiente</div>' +
+    pend.map(e => '<div style="font-size:12px;color:#92400e;margin-top:2px;">' + escHtml(e.cfg.alias) +
+      ' — <strong>$' + e.montoDebido.toFixed(2) + '</strong> (' + e.acumulados + ' domingos acumulados)</div>').join('') +
+    '<div style="font-size:10px;color:#b45309;font-style:italic;margin-top:4px;">Regístrala en la sección 💰 Comisiones.</div></div>';
+}
+
+function renderComisionesDescanso() {
+  const cont = document.getElementById('com-descanso');
+  if (!cont) return;
+  const esAdmin = !!(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.rol === 'admin');
+  cont.innerHTML = COMISIONES_DESCANSO.map(cfg => {
+    const e = _estadoComisionDescanso(cfg.id);
+    if (!e) return '';
+    const monto = parseFloat(cfg.monto) || 0;
+    const color = e.debe ? '#d97706' : '#1a3a6b';
+    const estadoHtml = e.debe
+      ? '<div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:7px;padding:8px 10px;margin-top:10px;">' +
+          '<div style="font-size:13px;font-weight:900;color:#92400e;">⚠ Comisión pendiente de pago</div>' +
+          '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:26px;font-weight:900;color:#b45309;line-height:1.1;">$' + e.montoDebido.toFixed(2) + '</div>' +
+          (e.ciclos > 1 ? '<div style="font-size:11px;color:#92400e;">' + e.ciclos + ' comisiones acumuladas × $' + monto.toFixed(2) + '</div>' : '') +
+          (e.enCiclo > 0 ? '<div style="font-size:11px;color:#92400e;">+' + e.enCiclo + ' domingo(s) ya avanzan el siguiente ciclo.</div>' : '') +
+        '</div>'
+      : '<div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:7px;padding:8px 10px;margin-top:10px;">' +
+          '<div style="font-size:12px;font-weight:700;color:#166534;">Falta' + (e.faltan === 1 ? '' : 'n') + ' <strong>' + e.faltan +
+          ' domingo' + (e.faltan === 1 ? '' : 's') + '</strong> para generar comisión de $' + monto.toFixed(2) + '.</div>' +
+        '</div>';
+
+    const listaPend = e.pendientes.length
+      ? '<div style="font-size:10px;color:var(--gris2);margin-top:8px;line-height:1.5;"><strong>Domingos contados:</strong> ' +
+        e.pendientes.map(_fchCorta).join(' · ') + '</div>'
+      : '<div style="font-size:10px;color:var(--gris2);margin-top:8px;">Sin domingos trabajados desde el último pago.</div>';
+
+    const hist = e.historial.slice().reverse();
+    const histHtml = hist.length
+      ? '<details style="margin-top:10px;"><summary style="font-size:11px;font-weight:700;color:var(--gris2);cursor:pointer;">📜 Historial de pagos (' + hist.length + ')</summary>' +
+        '<div style="margin-top:6px;">' + hist.map(p =>
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;padding:5px 0;border-bottom:1px solid #f0f0f0;">' +
+            '<div style="min-width:0;"><div style="font-size:12px;font-weight:700;">' + _fchCorta(p.fecha) +
+              ' — $' + (parseFloat(p.monto) || 0).toFixed(2) + '</div>' +
+              '<div style="font-size:10px;color:var(--gris2);word-break:break-word;">' +
+                ((p.domingos && p.domingos.length) ? 'Domingos: ' + p.domingos.map(_fchCorta).join(', ') : 'Sin detalle de domingos (registro previo)') +
+                (p.usuario ? ' · ' + escHtml(p.usuario) : '') + '</div></div>' +
+            (esAdmin ? '<button onclick="anularComisionDescanso(\'' + p._dia + '\',\'' + p._id + '\')" title="Anular pago mal registrado" style="flex:0 0 auto;background:#fee2e2;border:none;border-radius:5px;padding:3px 7px;color:#d42b2b;font-size:10px;font-weight:700;cursor:pointer;font-family:\'Barlow\',sans-serif;">Anular</button>' : '') +
+          '</div>').join('') + '</div></details>'
+      : '<div style="font-size:11px;color:var(--gris2);margin-top:10px;">Sin pagos registrados todavía.</div>';
+
+    return '<div style="background:#fff;border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow);border-left:4px solid ' + color + ';">' +
+      '<div style="font-size:14px;font-weight:800;">' + escHtml(cfg.alias) + '</div>' +
+      '<div style="font-size:10px;color:var(--gris2);margin-bottom:8px;">' + escHtml(cfg.nombre) + ' · $' + monto.toFixed(2) + ' cada ' + e.cada + ' domingos</div>' +
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;">' +
+        '<div><div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Último pago</div>' +
+          '<div style="font-size:13px;font-weight:700;">' + (e.ultimoPago ? _fchCorta(e.ultimoPago) : '—') + '</div>' +
+          '<div style="font-size:10px;color:var(--gris2);">' + (e.ultimoPago ? '$' + e.montoUltimo.toFixed(2) : 'nunca') + '</div></div>' +
+        '<div><div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Domingos acumulados</div>' +
+          '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:26px;font-weight:900;color:' + color + ';line-height:1.1;">' +
+            (e.debe ? e.acumulados : e.acumulados + ' de ' + e.cada) + '</div></div>' +
+      '</div>' + estadoHtml + listaPend +
+      (e.debe ? '<button onclick="registrarComisionDescanso(\'' + cfg.id + '\')" style="width:100%;margin-top:10px;background:#16a34a;border:none;border-radius:7px;padding:9px;color:#fff;font-size:13px;font-weight:800;cursor:pointer;font-family:\'Barlow\',sans-serif;">💵 Registrar pago de $' + e.montoDebido.toFixed(2) + '</button>' : '') +
+      histHtml + '</div>';
+  }).join('');
+}
+
 // ==================== ROSTER OFICIAL DE APOYO (28) ====================
 // Fuente de verdad: CEREBRO/03-operaciones/recursos-humanos/personal-completo-apoyo.md (8-jul-2026).
 // Nombre + N° de DUI. Los primeros 25 nombres coinciden EXACTO con EMPLEADOS (misma grafia)
@@ -6548,7 +6882,14 @@ const METODOS_OI = ['EFECTIVO','CUSCA','LINK','PENDIENTE'];
 const COLOR_METODO = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', LINK:'#7c3aed', PENDIENTE:'#d97706', CANCELADO:'#991b1b' };
 // Deriva un metodo de pago a partir del 'destino' (cuenta) de registros VIEJOS sin metodo.
 function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : 'EFECTIVO'; }
-const FONDOS = ['CAJA CHICA','CUSCATLAN'];
+// De qué bolsa sale el dinero de un GASTO. v111: se agregó GUARDADO (efectivo de la caja
+// fuerte), tercera fuente real igual que las otras dos: el gasto se descuenta ÚNICAMENTE de la
+// cuenta elegida (recalcCerramos ya trabajaba con las 3 cuentas, solo faltaba poder elegirla).
+// Mantener el mismo orden y los mismos nombres exactos que CUENTAS: los saldos se cruzan por
+// nombre (gastosPorFondo[c]) y un rótulo distinto dejaría el gasto sin descontar de nada.
+const FONDOS = ['CAJA CHICA','GUARDADO','CUSCATLAN'];
+// Color por fondo — solo ayuda visual para no equivocarse de bolsa al anotar un gasto.
+const COLOR_FONDO = { 'CAJA CHICA':'#16a34a', 'GUARDADO':'#7c3aed', 'CUSCATLAN':'#1e4fa0' };
 const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN'];
 
 // Data structure: { fecha: { columnas:[{nombre,camion,tipo,miembros:[{nombre,pago}], slots:{hora:{carga,descarga,costo,metodo}}}], gastos:[{monto,titulo,desc,fondo}], cuentas:{abrimos:{},cerramos:{}} } }
@@ -6622,6 +6963,8 @@ function getDayData(f) {
   if (!pdData[f].otrosIngresos) pdData[f].otrosIngresos = [];
   if (!pdData[f].movimientos) pdData[f].movimientos = [];
   if (!pdData[f].cobrosPendientes) pdData[f].cobrosPendientes = [];
+  // v111: historial de comisiones por día de descanso (domingos trabajados). Permanente.
+  if (!pdData[f].comisionesDescanso) pdData[f].comisionesDescanso = [];
   // v101: identidad estable (_id) + timestamps + tumbas para el merge fino multi-dispositivo.
   _asegurarIdsItems(pdData[f]);
   // init slots
@@ -6670,78 +7013,11 @@ function renderPD() {
   if (lbl) lbl.textContent = fechaLabel.charAt(0).toUpperCase()+fechaLabel.slice(1);
 
 
-  // Totals — use reservation costs for the day, not manual slot fields
-  const resDiaTotals = reservas.filter(r => r.fecha === f);
-  let totalServicios = 0, totalEfectivo = 0, totalCusca = 0, totalLink = 0, totalPendiente = 0;
-
-  // For each columna, find its assigned reservations (1 per horario slot)
-  // Since reservations aren't yet assigned to specific columnas, sum ALL reservations for the day
-  // The method of payment is tracked in the slot (col.slots[h].metodo)
-  // So: reservation cost goes to the method selected in the corresponding slot
-  day.columnas.forEach(col => {
-    const contadosCol = new Set();
-    HORARIOS.forEach(h => {
-      const codigo = col.slots[h]?.reservaCodigo;
-      const resAsig = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-      // Skip if already counted this reservation in another hora
-      const resC = (resAsig && !contadosCol.has(codigo)) ? (parseFloat(resAsig.costo)||0) : 0;
-      if (codigo) contadosCol.add(codigo);
-      // Manual cost
-      const manC = parseFloat(col.slots[h]?.costo)||0;
-      // FIX A1-residual (2026-07-02): criterio unificado "celda O reserva", NUNCA la suma de ambos.
-      // Antes: const c = resC + manC; → doble conteo en las tarjetas de stats si el slot tenía costo manual Y la reserva costo.
-      const c = manC > 0 ? manC : resC;
-      // Skip CANCELADO from totals
-      const m = col.slots[h]?.metodo || 'EFECTIVO';
-      if (m === 'CANCELADO') return;
-      totalServicios += c;
-      if (m==='EFECTIVO') totalEfectivo += c;
-      else if (m==='CUSCA') totalCusca += c;
-      else if (m==='LINK') totalLink += c;
-      else if (m==='PENDIENTE') totalPendiente += c;
-    });
-    // Otra hora reservations
-    const otraAsig = col.slots['otra']?.reservaCodigo ? reservas.find(rv=>rv.codigo===col.slots['otra'].reservaCodigo) : null;
-    if (otraAsig && !contadosCol.has(otraAsig.codigo)) {
-      // FIX A1-residual (2026-07-02): también en 'otra' respetar "celda O reserva".
-      const cOtraSlot = parseFloat(col.slots['otra']?.costo)||0;
-      const c = cOtraSlot > 0 ? cOtraSlot : (parseFloat(otraAsig.costo)||0);
-      const m = col.slots['otra']?.metodo || 'EFECTIVO';
-      if (m !== 'CANCELADO') {
-        totalServicios += c;
-        if (m==='EFECTIVO') totalEfectivo += c;
-        else if (m==='CUSCA') totalCusca += c;
-        else if (m==='LINK') totalLink += c;
-        else if (m==='PENDIENTE') totalPendiente += c;
-      }
-    }
-  });
-
-  // If no columnas yet, still show totals from reservations
-  if (day.columnas.length === 0) {
-    resDiaTotals.forEach(r => {
-      if (r.estado === 'cancelado') return;
-      totalServicios += parseFloat(r.costo)||0;
-    });
-  }
-
-  const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
-  const totalPersonal = day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
-  const linkNeto = totalLink * LINK_NETO;
-  const neto = totalServicios - totalGastos - totalPersonal;
-
-  const statsEl = document.getElementById('pd-stats');
-  // El render de stats va aislado: si algo falla acá NO debe impedir que se vea la pizarra.
-  try {
-    if (statsEl) statsEl.innerHTML = `
-      <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
-      <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
-      <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
-      <div class="sc a"><div class="sc-lbl">TARJETA CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
-      <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
-      <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>
-    `;
-  } catch(e) { console.warn('render stats pd error:', e); }
+  // Tarjetas de estadísticas — v111: una sola implementación (renderStats2). Antes había acá una
+  // copia casi idéntica que además contaba distinto, y el mismo día mostraba dos totales según si
+  // venías de recargar la pizarra o de editar un slot. El render de stats va aislado: si algo
+  // falla adentro NO debe impedir que se vea la pizarra.
+  try { renderStats2(f); } catch(e) { console.warn('render stats pd error:', e); }
 
   // Pizarra
   const piz = document.getElementById('pd-pizarra');
@@ -6759,14 +7035,12 @@ function renderPD() {
     piz.innerHTML = day.columnas.map((col,i)=>buildColumna2(col,i,f)).join('');
   }
 
-  // Total global — sum all reservations for this day
-  // Total global excluye CANCELADAS (no son ingresos reales) y reservaciones con método CANCELADO
-  const totalResDia = resDiaTotals.reduce((s,r) => {
-    if (r.estado === 'cancelado') return s;
-    return s + (parseFloat(r.costo) || 0);
-  }, 0);
+  // Total global del día — todas las reservaciones de la fecha (asignadas o no), una sola vez por
+  // reserva, sin las canceladas, en PRECIO VIGENTE (pactado ± ajustes de cobro). v111: helper
+  // único _totalResDiaVigente, el mismo que usa updateSlot al editar un slot (antes cada uno
+  // calculaba distinto y el número cambiaba de significado al tocar la pizarra).
   const tv = document.getElementById('piz-total-val');
-  if (tv) tv.textContent = '$'+totalResDia.toFixed(2);
+  if (tv) tv.textContent = '$'+_totalResDiaVigente(f).toFixed(2);
 
   if (pdTabActual==='cuaderno') renderCuaderno();
 
@@ -6919,26 +7193,11 @@ function buildColumnaTV(col, idx, f) {
     </div>`;
   }).join('');
 
-  // Total del equipo (suma de reservaciones asignadas, sin doble conteo multi-hora)
-  // FIX A1-TV (2026-07-08): criterio unificado A1 — costo de la celda si tiene (>0),
-  // si no el de la reserva. Antes sumaba slot.costo + reserva.costo (badge inflado).
-  const contados = new Set();
-  let total = 0;
-  HORARIOS.forEach(h => {
-    const s = col.slots?.[h];
-    if (!s) return;
-    const m = s.metodo || 'EFECTIVO';
-    if (m === 'CANCELADO') return;
-    const codigo = s.reservaCodigo;
-    const cSlot = parseFloat(s.costo) || 0;
-    let cRes = 0;
-    if (codigo && !contados.has(codigo)) {
-      const r = reservas.find(rv => rv.codigo === codigo);
-      if (r) cRes = parseFloat(r.costo) || 0;
-      contados.add(codigo);
-    }
-    total += cSlot > 0 ? cSlot : cRes;
-  });
+  // Total del equipo — misma FUENTE ÚNICA que la pizarra normal (v111): sin doble conteo
+  // multi-hora, incluye la hora 'otra' y los servicios extra, y va en PRECIO VIGENTE
+  // (pactado ± ajustes), igual que el precio que se ve en cada tarjeta de esta misma columna.
+  const _tTV = _totalizarServicios(_serviciosColumna(col));
+  const total = _tTV.vigente;
 
   return `<div class="tv-pz-col" style="border-top:4px solid ${col.finalizada?'#16a34a':borderColor};${col.finalizada?'opacity:.55;':''}">
     ${col.finalizada?`<div style="background:#16a34a;color:#fff;font-size:13px;font-weight:900;text-align:center;padding:2px 0;">✅ FINALIZADO</div>`:''}
@@ -7184,38 +7443,16 @@ function buildColumna2(col, idx, f) {
     </div>`;
   }).join('');
 
-  // Also show assigned "otra hora" if any
-  const otraAsignadaR = col.slots['otra']?.reservaCodigo ? reservas.find(r=>r.codigo===col.slots['otra'].reservaCodigo) : null;
-
-  // Total from assigned reservations (avoid double-counting multi-hora)
-  let totalCol = 0;
-  const contados = new Set();
-  HORARIOS.forEach(h => {
-    const codigo = col.slots[h]?.reservaCodigo;
-    if (codigo && !contados.has(codigo)) {
-      contados.add(codigo);
-      const r = reservas.find(rv=>rv.codigo===codigo);
-      if (r) totalCol += parseFloat(r.costo)||0;
-    }
-  });
-  if (otraAsignadaR && !contados.has(otraAsignadaR.codigo)) totalCol += parseFloat(otraAsignadaR.costo)||0;
-  // Servicios extra (4to, 5to servicio fuera de cuota): SUMAN al total que produjo el equipo.
-  // El total del día (piz-total-val) cuenta cada mudanza una sola vez por reserva, así que
-  // esto NO lo duplica.
-  const _extrasCol = Array.isArray(col.serviciosExtra) ? col.serviciosExtra : [];
-  _extrasCol.forEach(item => {
-    const cod = (typeof item === 'string') ? item : (item && item.codigo);
-    if (!cod || contados.has(cod)) return;
-    contados.add(cod);
-    const r = reservas.find(rv => rv.codigo === cod);
-    if (r && r.estado !== 'cancelado') totalCol += parseFloat(r.costo)||0;
-  });
-  // v104: ajustes de cobro de los servicios de esta columna. El TOTAL se deja en costos
-  // ORIGINALES (es la base de comisiones y del cuadre de servicios; los ajustes entran al día
-  // como OTROS INGRESOS y sumarlos acá los contaría dos veces). Se muestran aparte, en una línea
-  // discreta, para que el total visible y las tarjetas no se contradigan.
-  let ajustesCol = 0;
-  contados.forEach(cod => { ajustesCol += _sumaAjustes(cod); });
+  // Total del equipo — FUENTE ÚNICA (_serviciosColumna + _totalizarServicios): incluye la hora
+  // 'otra' y los servicios extra, cuenta UNA sola vez una mudanza multi-horario y deja fuera las
+  // canceladas. v111: el TOTAL va en PRECIO VIGENTE (pactado ± ajustes de cobro) — es lo que el
+  // equipo cobra en la calle y lo que muestran las tarjetas de arriba; antes iba en costo
+  // pactado y se contradecía con ellas. El costo pactado se sigue viendo en la línea de abajo.
+  // El CUADERNO sigue en base (los ajustes ya entran ahí como OTROS INGRESOS): ver la frontera
+  // contable documentada en _serviciosColumna.
+  const _tCol = _totalizarServicios(_serviciosColumna(col));
+  const totalCol = _tCol.vigente;
+  const ajustesCol = _tCol.ajustes;
   const hayAjustesCol = Math.abs(ajustesCol) >= 0.005;
 
   const totalPagos = (col.miembros||[]).reduce((s,m)=>s+(parseFloat(m.pago)||0),0);
@@ -7286,10 +7523,10 @@ function buildColumna2(col, idx, f) {
       ${slotsHtml}
       ${serviciosExtraHtml}
       <div style="margin-top:8px;padding-top:8px;border-top:2px solid ${color};display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Total</span>
-        <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:${color};">$${totalCol.toFixed(2)}</span>
+        <span style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Total${hayAjustesCol?' cobrado':''}</span>
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:${hayAjustesCol?'#0891b2':color};">$${totalCol.toFixed(2)}</span>
       </div>
-      ${hayAjustesCol?`<div style="text-align:right;font-size:11px;color:#0891b2;font-weight:700;margin-top:2px;" title="Los ajustes de cobro entran al día como otros ingresos; el total de arriba es el costo pactado.">✏️ Ajustes: ${ajustesCol>0?'+':'−'}$${Math.abs(ajustesCol).toFixed(2)} → cobrado $${(totalCol+ajustesCol).toFixed(2)}</div>`:''}
+      ${hayAjustesCol?`<div style="text-align:right;font-size:11px;color:#0891b2;font-weight:700;margin-top:2px;" title="El total ya incluye los ajustes de cobro. En el cuaderno los ajustes aparecen aparte, como otros ingresos, para no contar el mismo dinero dos veces.">✏️ Pactado $${_tCol.base.toFixed(2)} · Ajustes ${ajustesCol>0?'+':'−'}$${Math.abs(ajustesCol).toFixed(2)}</div>`:''}
       ${totalPagos>0?`<div style="text-align:right;font-size:11px;color:#d97706;font-weight:700;margin-top:2px;">Personal: $${totalPagos.toFixed(2)}</div>`:''}
       <button onclick="toggleFinalizarColumna(${idx})" style="width:100%;margin-top:10px;background:${finalizada?'#fef3c7':'#16a34a'};color:${finalizada?'#92400e':'#fff'};border:none;border-radius:7px;padding:8px 0;font-size:12px;font-weight:800;cursor:pointer;font-family:'Barlow',sans-serif;">${finalizada?'↩️ Reabrir grupo':'✅ Concluir grupo'}</button>
     </div>
@@ -7536,21 +7773,10 @@ function updateSlot2(f, idx, hora, campo, valor) {
   }
   day.columnas[idx].slots[hora][campo] = valor;
   savePD();
-  const contadosGlobal = new Set();
-  const totalServicios = day.columnas.reduce((s,col)=>s+HORARIOS.reduce((ss,h)=>{
-    const m = col.slots[h]?.metodo||'EFECTIVO';
-    if (m === 'CANCELADO') return ss;
-    const codigo = col.slots[h]?.reservaCodigo;
-    if (codigo && contadosGlobal.has(codigo)) return ss;
-    if (codigo) contadosGlobal.add(codigo);
-    // FIX A1 (2026-05-30): costo de la celda O el de la reserva, NO sumados (duplicaba).
-    const cSlot = parseFloat(col.slots[h]?.costo)||0;
-    const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-    const cRes = resA ? (parseFloat(resA.costo)||0) : 0;
-    const c = cSlot > 0 ? cSlot : cRes;
-    return ss+c;
-  },0),0);
-  const tv = document.getElementById('piz-total-val'); if(tv) tv.textContent='$'+totalServicios.toFixed(2);
+  // v111: MISMO criterio que renderPD (helper único). Antes acá se recalculaba el total del día
+  // solo con las reservas asignadas a slots, así que el número grande de la pizarra cambiaba de
+  // significado (y de valor) apenas se tocaba un slot.
+  const tv = document.getElementById('piz-total-val'); if(tv) tv.textContent='$'+_totalResDiaVigente(f).toFixed(2);
   renderStats2(f);
   if(campo==='metodo') recalcCerramos();
 }
@@ -7601,6 +7827,7 @@ function _calcLinkPorDia(fHasta, diasAtras) {
           if (contados.has(sl.reservaCodigo)) return;
           contados.add(sl.reservaCodigo);
           const res = (reservas||[]).find(rv => rv.codigo === sl.reservaCodigo);
+          if (res && res.estado === 'cancelado') return;   // v111: cancelada = $0
           const cSlot = parseFloat(sl.costo) || 0;
           const cRes = res ? parseFloat(res.costo) || 0 : 0;
           linkDia += (cSlot > 0 ? cSlot : cRes);
@@ -7616,31 +7843,26 @@ function _calcLinkPorDia(fHasta, diasAtras) {
   return { porDia, total };
 }
 
+// Tarjetas de estadísticas de la pizarra. ÚNICA implementación (v111): antes existía una copia
+// casi idéntica dentro de renderPD que además contaba distinto (esa incluía la hora 'otra' y
+// esta no), así que el mismo día mostraba dos totales según si venías de recargar o de editar un
+// slot. Ahora las dos usan _prodDia() y muestran el PRECIO VIGENTE (pactado ± ajustes de cobro):
+// el desglose por método suma exactamente el "Total servicios".
 function renderStats2(f) {
   const day = getDayData(f);
-  let totalServicios=0, totalEfectivo=0, totalCusca=0, totalLink=0, totalPendiente=0;
-  day.columnas.forEach(col=>{
-    const contadosS2 = new Set();
-    HORARIOS.forEach(h=>{
-    const codigo = col.slots[h]?.reservaCodigo;
-    const cSlot=parseFloat(col.slots[h]?.costo)||0;
-    const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
-    const cRes = (resA && !contadosS2.has(codigo)) ? (parseFloat(resA.costo)||0) : 0;
-    let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
-    if (codigo) contadosS2.add(codigo);
-    const m=col.slots[h]?.metodo||'EFECTIVO';
-    if(m==='CANCELADO') return;
-    totalServicios+=c;
-    if(m==='EFECTIVO') totalEfectivo+=c; else if(m==='CUSCA') totalCusca+=c;
-    else if(m==='LINK') totalLink+=c; else if(m==='PENDIENTE') totalPendiente+=c;
-  });});
+  const t = _prodDia(f);
+  // Sin equipos creados todavía: mostrar lo que vale el día según las reservaciones de la fecha.
+  const totalServicios = (day.columnas.length === 0) ? _totalResDiaVigente(f) : t.vigente;
+  const totalEfectivo = t.metodos.EFECTIVO, totalCusca = t.metodos.CUSCA;
+  const totalLink = t.metodos.LINK, totalPendiente = t.metodos.PENDIENTE;
   const totalGastos=day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const totalPersonal=day.columnas.reduce((s,col)=>s+col.miembros.reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
   const linkNeto=totalLink* LINK_NETO; const neto=totalServicios-totalGastos-totalPersonal;
+  const hayAj = Math.abs(t.ajustes) >= 0.005;
   const statsEl=document.getElementById('pd-stats');
   try {
     if(statsEl) statsEl.innerHTML=`
-      <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)</div></div>
+      <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)${hayAj?`<br><span style="color:#0891b2;font-weight:800;">✏️ pactado $${t.base.toFixed(2)} · ajustes ${t.ajustes>0?'+':'−'}$${Math.abs(t.ajustes).toFixed(2)}</span>`:''}</div></div>
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
       <div class="sc a"><div class="sc-lbl">TARJETA CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
@@ -7858,10 +8080,12 @@ function renderCuaderno() {
     const pagos = [];
     day.columnas.forEach(col => col.miembros.forEach(m => { if(parseFloat(m.pago)>0) pagos.push({nombre:m.nombre,monto:parseFloat(m.pago),equipo:col.nombre}); }));
     const totalPers = pagos.reduce((s,p)=>s+p.monto,0);
+    // v111: aviso de comisión por día de descanso (domingos) pendiente de pagar.
+    let avisoDesc = ''; try { avisoDesc = _avisoComisionesDescansoHTML(); } catch(e) { avisoDesc = ''; }
     if (pagos.length===0) {
-      cuadPers.innerHTML = '<div style="font-size:12px;color:var(--gris2);">Sin pagos registrados.</div>';
+      cuadPers.innerHTML = avisoDesc + '<div style="font-size:12px;color:var(--gris2);">Sin pagos registrados.</div>';
     } else {
-      cuadPers.innerHTML = pagos.map(p=>`
+      cuadPers.innerHTML = avisoDesc + pagos.map(p=>`
         <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f0f0f0;">
           <div><span style="font-size:13px;font-weight:600;">${p.nombre.split(' ').slice(0,2).join(' ')}</span><span style="font-size:11px;color:var(--gris2);margin-left:6px;">${p.equipo}</span></div>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;color:#d97706;">$${p.monto.toFixed(2)}</span>
@@ -7882,6 +8106,8 @@ function renderCuaderno() {
       const codigo = col.slots[h]?.reservaCodigo;
       const cSlot=parseFloat(col.slots[h]?.costo)||0;
       const resAsig = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
+      // v111: cancelada asignada a un slot = $0 (misma regla que el cuadre y que la pizarra).
+      if (resAsig && resAsig.estado === 'cancelado') { contadosIng.add(codigo); return; }
       const cRes = (resAsig && !contadosIng.has(codigo)) ? (parseFloat(resAsig.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosIng.add(codigo);
@@ -7976,6 +8202,8 @@ function renderCuaderno() {
       const codigo = col.slots[h]?.reservaCodigo;
       const cSlot = parseFloat(col.slots[h]?.costo)||0;
       const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
+      // v111: cancelada asignada a un slot = $0 (misma regla que el cuadre y que la pizarra).
+      if (resA && resA.estado === 'cancelado') { contadosTI.add(codigo); return; }
       const cRes = (resA && !contadosTI.has(codigo)) ? (parseFloat(resA.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosTI.add(codigo);
@@ -8216,7 +8444,7 @@ function cerrarDia() {
         const sl = col.slots?.[h];
         if (sl && sl.metodo === 'LINK' && sl.reservaCodigo) {
           const r = reservas.find(rv=>rv.codigo===sl.reservaCodigo);
-          if (r) return ss + (parseFloat(r.costo)||0);
+          if (r && r.estado !== 'cancelado') return ss + (parseFloat(r.costo)||0);  // v111: cancelada = $0
         }
         return ss;
       },0);
@@ -8296,9 +8524,9 @@ function renderGastos() {
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
         <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateGasto('${g._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
-        <select onchange="updateGasto('${g._id}','fondo',this.value)" ${dis}
-          style="border:1px solid var(--gris1);border-radius:5px;padding:5px 4px;font-size:11px;font-family:'Barlow',sans-serif;outline:none;background:#fff;">
-          ${FONDOS.map(fd=>`<option value="${fd}" ${g.fondo===fd?'selected':''}>${fd}</option>`).join('')}
+        <select onchange="updateGasto('${g._id}','fondo',this.value)" ${dis} title="¿De qué bolsa salió el dinero? El gasto se descuenta SOLO de esta cuenta."
+          style="border:1.5px solid ${COLOR_FONDO[g.fondo||'CAJA CHICA']||'var(--gris1)'};border-radius:5px;padding:5px 4px;font-size:11px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:#fff;color:${COLOR_FONDO[g.fondo||'CAJA CHICA']||'#111'};">
+          ${FONDOS.map(fd=>`<option value="${fd}" ${(g.fondo||'CAJA CHICA')===fd?'selected':''}>${fd}</option>`).join('')}
         </select>
         <button onclick="delGasto('${g._id}')" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
       </div>`).join('');
@@ -8328,6 +8556,12 @@ function updateGasto(id, campo, val) {
   const g = (day.gastos||[]).find(x=>x._id===id);
   if (!g) return;
   g[campo]=val; g._ts=Date.now();
+  // v111: recolorear el selector de FONDO sin re-renderizar la lista (REGLA 8.2: re-dibujar
+  // acá destruiría el input que el usuario está escribiendo).
+  if (campo === 'fondo') {
+    const sel = document.querySelector(`select[onchange*="'${id}','fondo'"]`);
+    if (sel) { const c = COLOR_FONDO[val] || 'var(--gris1)'; sel.style.borderColor = c; sel.style.color = c; }
+  }
   // Guardado LOCAL instantáneo (sin red, sin re-render): cada tecla se persiste pero
   // NO dispara el ciclo Realtime que re-dibujaba el bloque y borraba la fila en curso.
   savePDLocal();
@@ -8729,6 +8963,99 @@ function _notaCostoMod(codigo, corta){
   return corta
     ? ` ✏️ modificado`
     : ` ✏️ PRECIO MODIFICADO (original $${orig.toFixed(2)} · ${signo}$${Math.abs(d).toFixed(2)})`;
+}
+
+// ==================== PRODUCCIÓN DE SERVICIOS: TOTALES DE LA PIZARRA (v111) ====================
+// FUENTE ÚNICA de "cuánto produjo un equipo / cuánto produjo el día". Antes cada vista lo
+// recalculaba por su cuenta (buildColumna2, buildColumnaTV, renderPD, renderStats2, updateSlot,
+// imprimirPD) y con criterios DISTINTOS entre sí: unas incluían la hora 'otra' y los servicios
+// extra y otras no; unas deduplicaban las mudanzas multi-horario y otras las contaban dos veces
+// (la hoja impresa cobraba doble una mudanza de 11:00 + 2:30); y TODAS usaban el costo PACTADO
+// aunque la tarjeta de al lado mostrara el precio VIGENTE. De ahí venía "el total del grupo
+// sigue con el costo viejo".
+//
+// ⚠️ FRONTERA CONTABLE (no borrar): estos totales son OPERATIVOS (pizarra, modo TV, hoja
+// impresa de equipos) y van en precio VIGENTE = lo que de verdad se le cobra al cliente.
+// El CUADERNO y todo el libro contable (calcIngresosServiciosPorCuenta, recalcCerramos,
+// cuad-ingresos, tot-ingresos, conciliación bancaria, comisiones, reporte financiero del día,
+// cobro de pendientes) siguen en costo BASE A PROPÓSITO: cada ajuste ya entra a su día como
+// OTRO INGRESO, así que sumarlo también al servicio contaría el MISMO dinero dos veces y
+// rompería el cuadre. Los dos lados NO se unifican; se suman: base (servicios) + ajustes
+// (otros ingresos) = vigente.
+
+// Servicios de UNA columna, deduplicados por código (una mudanza multi-horario cuenta UNA vez).
+// `vistos` opcional: pasar un Set compartido para deduplicar a nivel de DÍA entre columnas.
+// Devuelve [{codigo, r, hora, extra, base, metodo, ajustes[]}].
+function _serviciosColumna(col, vistos){
+  const out = [];
+  const seen = vistos || new Set();
+  if (!col || !col.slots) return out;
+  [...HORARIOS, 'otra'].forEach(h => {
+    const s = col.slots[h];
+    if (!s) return;
+    const codigo = s.reservaCodigo || '';
+    if (codigo && seen.has(codigo)) return;            // ya contada en otro slot/equipo
+    const r = codigo ? reservas.find(rv => rv.codigo === codigo) : null;
+    if (r && r.estado === 'cancelado') { seen.add(codigo); return; }
+    // Criterio A1: costo de la celda si tiene (>0), si no el de la reserva. NUNCA la suma.
+    const cSlot = parseFloat(s.costo) || 0;
+    const base = cSlot > 0 ? cSlot : (r ? (parseFloat(r.costo)||0) : 0);
+    if (!codigo && base <= 0) return;                  // slot vacío
+    if (codigo) seen.add(codigo);
+    out.push({ codigo, r, hora: h, extra: false, base,
+               metodo: s.metodo || 'EFECTIVO',
+               ajustes: codigo ? _ajustesDe(codigo) : [] });
+  });
+  (Array.isArray(col.serviciosExtra) ? col.serviciosExtra : []).forEach(item => {
+    const codigo = (typeof item === 'string') ? item : (item && item.codigo);
+    if (!codigo || seen.has(codigo)) return;
+    const r = reservas.find(rv => rv.codigo === codigo);
+    if (!r || r.estado === 'cancelado') return;
+    seen.add(codigo);
+    out.push({ codigo, r, hora: 'extra', extra: true, base: parseFloat(r.costo)||0,
+               metodo: (typeof item === 'string') ? 'EFECTIVO' : (item.metodo || 'EFECTIVO'),
+               ajustes: _ajustesDe(codigo) });
+  });
+  return out;
+}
+
+// Totaliza una lista de _serviciosColumna → { base, ajustes, vigente, cancelado, metodos{} }.
+// El costo pactado va al método del slot; cada ajuste va al método con que se cobró ESE ajuste
+// (puede ser distinto: p. ej. el servicio en efectivo y el recargo por transferencia). Así el
+// desglose por método sigue sumando exactamente el total vigente.
+// Método CANCELADO: no produce dinero, sale del total (se guarda aparte para poder mostrarlo).
+function _totalizarServicios(lista){
+  const t = { base:0, ajustes:0, vigente:0, cancelado:0,
+              metodos:{EFECTIVO:0, CUSCA:0, LINK:0, PENDIENTE:0} };
+  (lista||[]).forEach(s => {
+    if (s.metodo === 'CANCELADO') { t.cancelado += s.base; return; }
+    t.base += s.base;
+    if (t.metodos[s.metodo] !== undefined) t.metodos[s.metodo] += s.base;
+    (s.ajustes||[]).forEach(it => {
+      t.ajustes += it.monto;
+      const mAj = (it.g && t.metodos[it.g.metodo] !== undefined) ? it.g.metodo : s.metodo;
+      if (t.metodos[mAj] !== undefined) t.metodos[mAj] += it.monto;
+    });
+  });
+  t.vigente = t.base + t.ajustes;
+  return t;
+}
+
+// Totales de PRODUCCIÓN de un día completo (todas las columnas, dedupe GLOBAL entre equipos).
+function _prodDia(f){
+  const day = getDayData(f);
+  const vistos = new Set();
+  const lista = [];
+  (day.columnas||[]).forEach(col => { _serviciosColumna(col, vistos).forEach(s => lista.push(s)); });
+  const t = _totalizarServicios(lista);
+  t.equipos = (day.columnas||[]).length;
+  return t;
+}
+
+// Total del DÍA en precio VIGENTE contando TODAS las reservaciones de la fecha (asignadas a un
+// equipo o no), una sola vez por reserva y sin las canceladas. Es el número grande de la pizarra.
+function _totalResDiaVigente(f){
+  return (reservas||[]).reduce((s,r) => (r.fecha === f && r.estado !== 'cancelado') ? s + _costoActual(r) : s, 0);
 }
 
 // ==================== PROPINAS: BANCO ↔ EFECTIVO (v108) ====================
@@ -9222,6 +9549,11 @@ function calcIngresosServiciosPorCuenta(day) {
       // Criterio unificado: usar el costo de la celda si tiene; si no, el de la reserva.
       const cSlot = parseFloat(col.slots[h]?.costo)||0;
       const res = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
+      // v111: una reservación CANCELADA no produce dinero aunque haya quedado asignada al slot.
+      // Es la MISMA regla que ya se aplicaba abajo a los servicios extra y la que usa la pizarra
+      // (_serviciosColumna). El flujo de cancelación limpia los slots del día, así que esto es
+      // defensa en profundidad para datos viejos o un merge que resucite la asignación.
+      if (res && res.estado === 'cancelado') { slotCodigos.add(codigo); return; }
       // FIX F8 (2026-07-02): dedupe GLOBAL del día (antes era por columna). Si el mismo código
       // quedaba asignado por error en DOS equipos, el costo de la reserva entraba dos veces al
       // cierre. Ahora se usa el mismo criterio que la pizarra (updateSlot2: una vez por día).
@@ -9630,20 +9962,15 @@ function imprimirPD() {
   const day = getDayData(f);
   const fechaLabel = new Date(f+'T12:00:00').toLocaleDateString('es-SV',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 
+  // v104: la hoja impresa lleva el PRECIO VIGENTE (pactado ± ajustes) — es lo que el equipo
+  // cobra en la calle. v111: se calcula con la FUENTE ÚNICA (_serviciosColumna), con dedupe
+  // GLOBAL entre equipos, y el total de cada equipo sale de la misma lista que se imprime, así
+  // el total del día siempre cuadra con la suma de los equipos y con los precios de cada línea.
+  // Solo entran los servicios de los SLOTS (los "servicios extra" no se imprimen en esta hoja).
+  const _vistosPrint = new Set();
+  const _servPorCol = day.columnas.map(col => _serviciosColumna(col, _vistosPrint).filter(s => !s.extra));
   let totalServ = 0;
-  day.columnas.forEach(col => {
-    const contadosPrint = new Set();
-    [...HORARIOS, 'otra'].forEach(h => {
-      const codigo = col.slots[h]?.reservaCodigo;
-      if (codigo && !contadosPrint.has(codigo)) {
-        contadosPrint.add(codigo);
-        const r = reservas.find(rv=>rv.codigo===codigo);
-        // v104: la hoja impresa lleva el PRECIO VIGENTE (pactado ± ajustes) — es lo que el
-        // equipo cobra en la calle. El total del día impreso cuadra con los precios de arriba.
-        if (r) totalServ += _costoActual(r);
-      }
-    });
-  });
+  _servPorCol.forEach(lista => { totalServ += _totalizarServicios(lista).vigente; });
   const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const totalPers   = day.columnas.reduce((s,col)=>s+(col.miembros||[]).reduce((sm,m)=>sm+(parseFloat(m.pago)||0),0),0);
 
@@ -9664,24 +9991,33 @@ function imprimirPD() {
       return `<div class="crew ${esM?'lider':''}">${esM?'&#9733; ':''}${display}${parseFloat(m.pago)>0?` <span class="pago">(+$${parseFloat(m.pago).toFixed(0)})</span>`:''}</div>`;
     }).join('');
 
-    // Slots
-    let colTotal = 0;
+    // Slots — v111: la MISMA lista con la que se calculó el total (una mudanza multi-horario se
+    // imprime UNA vez, en su primer horario). Antes se recorrían los slots crudos: una mudanza
+    // de 11:00 + 2:30 se imprimía dos veces y su precio se sumaba DOS veces al total del equipo,
+    // que quedaba inflado y no cuadraba con el total del día (ese sí deduplicaba).
+    const _servSlots = _servPorCol[colIdx] || [];
+    const colTotal = _totalizarServicios(_servSlots).vigente;
     let posicion = 0;
-    const slotsHtml = [...HORARIOS, 'otra'].map(h => {
-      const r = col.slots[h]?.reservaCodigo ? reservas.find(rv=>rv.codigo===col.slots[h].reservaCodigo) : null;
+    const slotsHtml = _servSlots.map(sv => {
+      const r = sv.r;
       if (!r) return '';
       posicion++;
-      const costo = _costoActual(r);
-      colTotal += costo;
-      const metodo = col.slots[h]?.metodo || 'EFECTIVO';
+      // Precio impreso = EXACTAMENTE lo que este servicio aporta al total del equipo
+      // (costo de la celda si tiene, si no el de la reserva, ± sus ajustes de cobro).
+      const _ajSv = (sv.ajustes||[]).reduce((s,it)=>s+it.monto, 0);
+      const costo = sv.base + _ajSv;
+      const _modSv = Math.abs(_ajSv) >= 0.005;
+      const _anulado = sv.metodo === 'CANCELADO';   // no suma al total del equipo
+      const h = sv.hora;
       const horaLabel = h==='otra' ? r.hora : h;
       return `<div class="slot">
         <div class="slot-header">
           <span class="pos">#${posicion}</span>
           <span class="hora">${horaLabel}</span>
-          <span class="precio">$${costo.toFixed(2)}${_costoModificado(r.codigo)?` <span style="font-size:.65em;font-weight:700;">✏️</span>`:''}</span>
+          <span class="precio"${_anulado?' style="text-decoration:line-through;opacity:.6;"':''}>$${costo.toFixed(2)}${_modSv?` <span style="font-size:.65em;font-weight:700;">✏️</span>`:''}</span>
         </div>
-        ${_costoModificado(r.codigo)?`<div style="font-size:7pt;font-weight:700;color:#0e7490;">✏️ Precio ajustado — antes $${(parseFloat(r.costo)||0).toFixed(2)}</div>`:''}
+        ${_anulado?`<div style="font-size:7pt;font-weight:700;color:#991b1b;">CANCELADO — no suma al total</div>`:''}
+        ${_modSv?`<div style="font-size:7pt;font-weight:700;color:#0e7490;">✏️ Precio ajustado — antes $${sv.base.toFixed(2)}</div>`:''}
         <div class="dirs">
           <div class="dir"><span class="dir-icon">&#9650;</span>${r.carga}</div>
           <div class="dir"><span class="dir-icon">&#9660;</span>${r.descarga}</div>
@@ -9915,6 +10251,8 @@ function renderConciliacion() {
       const codigo = slot.reservaCodigo;
       const cSlot = parseFloat(slot.costo) || 0;
       const resSlot = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
+      // v111: cancelada asignada a un slot = $0 (misma regla que el cuadre y que la pizarra).
+      if (resSlot && resSlot.estado === 'cancelado') { contadosConc.add(codigo); return; }
       const cRes = (resSlot && !contadosConc.has(codigo)) ? (parseFloat(resSlot.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosConc.add(codigo);
@@ -10458,6 +10796,9 @@ function renderComisiones() {
   }
   const [anio, mes] = mesInput.value.split('-').map(Number);
   const vendedores = USUARIOS.map(u => u.nombre);
+
+  // ---- Comisiones por día de descanso (domingos trabajados) — v111 ----
+  try { renderComisionesDescanso(); } catch(e) { console.warn('comisiones descanso:', e); }
 
   // ---- Pago de comisiones $1 (por mes de INGRESO, sin canceladas, sin duplicados) ----
   const pago = _comisionUnoPorReserva(mes, anio);
