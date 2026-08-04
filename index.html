@@ -2667,7 +2667,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-03-v111';
+const APP_VERSION = '2026-08-04-v112';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6777,7 +6777,14 @@ function anularComisionDescanso(diaISO, comId) {
 }
 
 // Aviso compacto para el Cuaderno (bloque PAGOS AL PERSONAL).
+// v112 (2026-08-04): Pedro pidió OCULTAR este aviso en la interfaz. Se apaga SOLO la
+// visualización: el conteo de domingos, la acumulación, el cálculo, el registro del pago
+// y su gasto en CAJA CHICA siguen EXACTAMENTE igual (_estadoComisionDescanso,
+// registrarComisionDescanso, anularComisionDescanso, renderComisionesDescanso en la
+// sección 💰 Comisiones). Para volver a mostrarlo: poner esta constante en true.
+const MOSTRAR_AVISO_COMISION_DESCANSO = false;
 function _avisoComisionesDescansoHTML() {
+  if (!MOSTRAR_AVISO_COMISION_DESCANSO) return '';
   let pend = [];
   try { pend = COMISIONES_DESCANSO.map(c => _estadoComisionDescanso(c.id)).filter(e => e && e.debe); } catch (e) { return ''; }
   if (!pend.length) return '';
