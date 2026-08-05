@@ -812,6 +812,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
               <div></div>
             </div>
             <div id="gastos-lista"></div>
+            <div id="dup-gastos-aviso" style="display:none;margin-top:8px;"></div>
             <div style="margin-top:10px;padding-top:10px;border-top:2px solid #1a2236;display:flex;justify-content:space-between;">
               <span style="font-weight:800;font-size:13px;">TOTAL GASTOS:</span>
               <span id="total-gastos" style="font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:900;color:#d42b2b;">$0.00</span>
@@ -2667,7 +2668,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-04-v112';
+const APP_VERSION = '2026-08-05-v113';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6938,6 +6939,9 @@ function _programarSyncFinanzas() {
     try { syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('sync finanzas:', e); }
     try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
     try { if (typeof buildTitulosDatalist === 'function') buildTitulosDatalist(); } catch(e) {}
+    // v113: recalcular los avisos de gasto repetido cuando el usuario deja de escribir
+    // (solo repinta bordes/renglón de aviso: NO re-renderiza la lista, REGLA 8.2).
+    try { if (typeof _pintarAvisosDupGastos === 'function') _pintarAvisosDupGastos(); } catch(e) {}
   }, 1500);
 }
 function pdHoy() { _flushFinanzasPendiente(); document.getElementById('pd-fecha').valueAsDate = new Date(); renderPD(); }
@@ -8506,6 +8510,136 @@ function updateCuenta(f, tipo, cuenta, val) {
   if (tipo === 'abrimos') recalcCerramos();
 }
 
+// ============ ANTI-DUPLICADOS DE GASTOS (v113) ============
+// Por qué: el cruce contra el estado de cuenta del banco (05-jul→04-ago 2026) mostró gastos
+// anotados dos veces (mismo importe, mismo concepto, un solo cargo real en el banco). El sistema
+// no avisaba nada: cualquiera podía escribir el mismo gasto dos veces, o anotarlo en dos bolsas.
+// Esta pieza SOLO AVISA (marca visual + panel). NO borra, NO bloquea y NO toca ninguna fórmula
+// financiera: el cuadre, recalcCerramos, la conciliación y las comisiones quedan idénticos.
+const _DUP_DIAS = 4;        // ventana: mismo día ± 4 días (un gasto se anota tarde, no un mes tarde)
+const _DUP_MONTO_MIN = 25;  // piso para avisar entre días distintos: evita el ruido de los pagos
+                            // diarios de siempre (horas extra $20, pago andy $20, ingredientes $5…)
+function _dupNorm(s) {
+  return (s == null ? '' : String(s)).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+// Clave de contenido de un gasto para comparar: importe + título (la bolsa NO entra a propósito,
+// porque anotar el MISMO gasto en CAJA CHICA y en CUSCATLAN es justamente uno de los errores).
+function _dupClave(g) {
+  return (parseFloat(g && g.monto) || 0).toFixed(2) + '|' + _dupNorm(g && g.titulo);
+}
+function _dupFechasVentana(f) {
+  const out = [];
+  const base = new Date(f + 'T12:00:00');
+  if (isNaN(base)) return [f];
+  for (let d = -_DUP_DIAS; d <= _DUP_DIAS; d++) {
+    const x = new Date(base); x.setDate(x.getDate() + d);
+    out.push(x.toISOString().slice(0, 10));
+  }
+  return out;
+}
+// FUENTE ÚNICA de la detección. Devuelve un mapa _id → {nivel:'rojo'|'ambar', otros:[{fecha,fondo,desc}]}
+// para los gastos del día `f`. Nivel rojo = importe + título + descripción idénticos (duplicado casi
+// seguro). Nivel ámbar = importe + título iguales pero descripción distinta (revisar).
+// Se ignoran: filas sin importe, filas sin título y las que el usuario marcó como "no es duplicado".
+function _dupInfoGastos(f) {
+  const info = {};
+  const day = pdData[f];
+  if (!day || !Array.isArray(day.gastos)) return info;
+  const fechas = _dupFechasVentana(f);
+  // Índice de TODOS los gastos de la ventana (incluye el día visible).
+  const idx = {};
+  fechas.forEach(fx => {
+    const d = pdData[fx];
+    if (!d || !Array.isArray(d.gastos)) return;
+    d.gastos.forEach(g => {
+      const monto = parseFloat(g && g.monto) || 0;
+      if (monto <= 0 || !_dupNorm(g && g.titulo) || (g && g._dupOk)) return;
+      const k = _dupClave(g);
+      (idx[k] = idx[k] || []).push({ fecha: fx, g: g, monto: monto });
+    });
+  });
+  day.gastos.forEach(g => {
+    const monto = parseFloat(g.monto) || 0;
+    if (monto <= 0 || !_dupNorm(g.titulo) || g._dupOk) return;
+    const lista = (idx[_dupClave(g)] || []).filter(x => x.g !== g);
+    if (!lista.length) return;
+    const otros = [];
+    let nivel = '';
+    lista.forEach(x => {
+      const mismoDia = x.fecha === f;
+      const mismaDesc = _dupNorm(x.g.desc) === _dupNorm(g.desc);
+      // Entre días distintos solo se avisa de montos que valen la pena revisar.
+      if (!mismoDia && monto < _DUP_MONTO_MIN) return;
+      if (mismaDesc && monto >= _DUP_MONTO_MIN) nivel = 'rojo';
+      else if (!nivel) nivel = 'ambar';
+      otros.push({ fecha: x.fecha, fondo: x.g.fondo || 'CAJA CHICA', desc: x.g.desc || '', mismoDia: mismoDia });
+    });
+    if (otros.length) info[g._id] = { nivel: nivel || 'ambar', monto: monto, titulo: g.titulo, otros: otros };
+  });
+  return info;
+}
+// Marca de "no es duplicado" (se guarda con la fila, así el aviso no vuelve en ninguna compu).
+function marcarNoDuplicado(id) {
+  if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
+  const f = getPDFecha(); const day = getDayData(f);
+  const g = (day.gastos || []).find(x => x._id === id);
+  if (!g) return;
+  g._dupOk = 1; g._ts = Date.now();
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  _pintarAvisosDupGastos();
+  _programarSyncFinanzas();
+}
+// Pinta los avisos SIN re-renderizar la lista (REGLA 8.2: re-dibujar acá destruiría el input que
+// el usuario está escribiendo). Solo toca bordes y el renglón de aviso de cada fila + el panel.
+function _pintarAvisosDupGastos() {
+  const cont = document.getElementById('gastos-lista');
+  if (!cont) return;
+  const f = getPDFecha();
+  const info = _dupInfoGastos(f);
+  const dis = isDiaCerrado();
+  cont.querySelectorAll('[data-gid]').forEach(fila => {
+    const id = fila.getAttribute('data-gid');
+    const av = fila.querySelector('.dup-aviso');
+    const inp = fila.querySelector('input[type="number"]');
+    const d = info[id];
+    if (!av) return;
+    if (!d) {
+      av.style.display = 'none'; av.innerHTML = '';
+      if (inp) { inp.style.borderColor = 'var(--gris1)'; inp.style.background = '#fff'; }
+      return;
+    }
+    const rojo = d.nivel === 'rojo';
+    const col = rojo ? '#d42b2b' : '#b45309';
+    const bg = rojo ? '#fee2e2' : '#fef3c7';
+    if (inp) { inp.style.borderColor = col; inp.style.background = bg; }
+    const det = d.otros.map(o => (o.mismoDia ? 'hoy' : _fechaCorta(o.fecha)) + ' · ' + o.fondo + (o.desc ? ' · ' + escHtml(o.desc) : '')).join(' | ');
+    av.style.display = 'block';
+    av.innerHTML = `<span style="display:inline-block;background:${bg};color:${col};border:1px solid ${col};border-radius:4px;padding:1px 6px;font-size:10px;font-weight:800;">`
+      + (rojo ? '🔁 POSIBLE DUPLICADO' : '⚠️ IMPORTE REPETIDO')
+      + `</span> <span style="font-size:10px;color:var(--gris2);">mismo importe y concepto en: ${det}</span>`
+      + (dis ? '' : ` <button onclick="marcarNoDuplicado('${id}')" style="background:none;border:none;color:#1a3a6b;font-size:10px;font-weight:700;cursor:pointer;text-decoration:underline;padding:0 2px;">no es duplicado</button>`);
+  });
+  const panel = document.getElementById('dup-gastos-aviso');
+  if (panel) {
+    const ids = Object.keys(info);
+    if (!ids.length) { panel.style.display = 'none'; panel.innerHTML = ''; }
+    else {
+      const rojos = ids.filter(i => info[i].nivel === 'rojo').length;
+      const suma = ids.reduce((s, i) => s + info[i].monto, 0);
+      panel.style.display = 'block';
+      panel.innerHTML = `<div style="background:#fff7ed;border:1.5px solid #f59e0b;border-radius:8px;padding:8px 10px;font-size:11px;color:#92400e;">
+        <strong>🔁 ${ids.length} gasto${ids.length>1?'s':''} con importe repetido</strong>${rojos ? ` · <strong style="color:#d42b2b;">${rojos} posible${rojos>1?'s':''} duplicado${rojos>1?'s':''}</strong>` : ''}
+        · suma $${suma.toFixed(2)} — revisá las filas marcadas antes de cerrar el día. Se compara el mismo día y ±${_DUP_DIAS} días, en TODAS las bolsas.
+      </div>`;
+    }
+  }
+}
+function _fechaCorta(f) {
+  const p = (f || '').split('-');
+  return p.length === 3 ? p[2] + '/' + p[1] : f;
+}
+
 // ==================== GASTOS ====================
 function addGasto() {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
@@ -8524,7 +8658,8 @@ function renderGastos() {
   const gastosHtml = day.gastos.length===0
     ? '<div style="font-size:12px;color:var(--gris2);padding:4px 0;">Sin gastos registrados.</div>'
     : day.gastos.map((g)=>`
-      <div style="display:grid;grid-template-columns:80px 1fr 1fr 90px 28px;gap:6px;align-items:center;margin-bottom:6px;">
+      <div data-gid="${g._id}" style="margin-bottom:6px;">
+      <div style="display:grid;grid-template-columns:80px 1fr 1fr 90px 28px;gap:6px;align-items:center;">
         <input type="number" value="${g.monto}" placeholder="0.00" min="0" step="0.01" oninput="updateGasto('${g._id}','monto',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:#d42b2b;">
         <input type="text" value="${escHtml(g.titulo)}" placeholder="Título" list="dl-titulos-gastos" oninput="updateGasto('${g._id}','titulo',this.value)" ${dis}
@@ -8536,6 +8671,8 @@ function renderGastos() {
           ${FONDOS.map(fd=>`<option value="${fd}" ${(g.fondo||'CAJA CHICA')===fd?'selected':''}>${fd}</option>`).join('')}
         </select>
         <button onclick="delGasto('${g._id}')" ${dis} style="background:#fee2e2;border:none;border-radius:5px;padding:4px 7px;color:#d42b2b;font-size:12px;cursor:pointer;">🗑</button>
+      </div>
+      <div class="dup-aviso" style="display:none;margin-top:2px;padding-left:2px;"></div>
       </div>`).join('');
 
   // Renglón SOLO-LECTURA de propinas (Opción A): las propinas se anotan en los equipos
@@ -8553,6 +8690,8 @@ function renderGastos() {
   cont.innerHTML = gastosHtml + propinasRow;
   const total = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el = document.getElementById('total-gastos'); if(el) el.textContent='$'+total.toFixed(2);
+  // v113: avisos de importes repetidos (solo pinta, no re-renderiza).
+  try { _pintarAvisosDupGastos(); } catch(e) { console.warn('avisos duplicados:', e); }
 }
 
 function updateGasto(id, campo, val) {
