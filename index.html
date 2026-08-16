@@ -2668,7 +2668,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-05-v113';
+const APP_VERSION = '2026-08-16-v114';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3151,7 +3151,7 @@ function renderStats() {
 // ==================== AGENDA ====================
 // CODIGO MUERTO ELIMINADO (2026-07-02): funcion sin ningun caller (expandAgCard).
 
-function agHoy() { document.getElementById('ag-fecha').valueAsDate = new Date(); renderAgenda(); }
+function agHoy() { document.getElementById('ag-fecha').value = _hoyISO(); renderAgenda(); }
 
 // ==================== PDF: FORMATO UNIFICADO (compartido por todos los PDFs) ====================
 // Única fuente de verdad para el formato del PDF de reservaciones.
@@ -3688,7 +3688,7 @@ function addAgCol() {
 
 function renderAgenda() {
   const f = document.getElementById('ag-fecha')?.value || new Date().toISOString().slice(0,10);
-  if (!document.getElementById('ag-fecha').value) document.getElementById('ag-fecha').valueAsDate = new Date();
+  if (!document.getElementById('ag-fecha').value) document.getElementById('ag-fecha').value = _hoyISO();
 
   const day = getAgDay(f);
   const numCols = day.numCols;
@@ -5011,7 +5011,7 @@ function openNueva() {
   srvActivos = new Set(['transporte']);
   truckSel = '';
   document.getElementById('mo-nueva').classList.add('open');
-  document.getElementById('f-fecha').valueAsDate = new Date();
+  document.getElementById('f-fecha').value = _hoyISO();
   // Reset hora checkboxes
   const h8 = document.getElementById('f-h-8'); if(h8) h8.checked = true;
   const h11 = document.getElementById('f-h-11'); if(h11) h11.checked = false;
@@ -6524,6 +6524,25 @@ const MOTORISTAS = new Set([
   'Fabio Jose González Coto',
 ]);
 
+// ==================== NOMBRE CON QUE SE MUESTRA CADA EMPLEADO (v114) ====================
+// Cómo se LLAMA en pantalla una persona, sin tocar cómo se GUARDA. La identidad de un empleado
+// en los datos es su nombre completo (pdData[...].columnas[].miembros[].nombre, MOTORISTAS,
+// COMISIONES_DESCANSO, roster, DUI): si se cambiara ese texto, los 74 registros históricos de
+// esta persona quedarían huérfanos y sus pagos, equipos y comisiones se perderían.
+// Por eso el nombre guardado NO cambia y solo se traduce al pintarlo.
+// Pedido de Pedro (16-ago-2026): Juan Carlos Vasquez González se muestra como MAZARIEGO.
+// Es el ÚNICO "Juan Carlos" del roster, así que no hay riesgo de tocar a otra persona.
+const NOMBRE_MOSTRAR = {
+  'Juan Carlos Vasquez González': 'MAZARIEGO',
+};
+// Nombre COMPLETO para mostrar (hojas impresas, reportes).
+function _nombreDisplay(n) { return NOMBRE_MOSTRAR[n] || String(n == null ? '' : n); }
+// Nombre CORTO para las listas de la pizarra/cuaderno (por defecto, los dos primeros nombres).
+function _nombreCorto(n) {
+  const d = NOMBRE_MOSTRAR[n];
+  return d ? d : String(n == null ? '' : n).split(' ').slice(0, 2).join(' ');
+}
+
 // ==================== COMISIONES POR DÍA DE DESCANSO (DOMINGOS) — v111 (2026-08-02) ====================
 // REGLA DE NEGOCIO: en Mudanzas Tecleñas el ÚNICO día de descanso es el DOMINGO. Cuando uno de los
 // empleados configurados abajo trabaja un domingo, acumula un "domingo trabajado". Al juntar N
@@ -6944,8 +6963,16 @@ function _programarSyncFinanzas() {
     try { if (typeof _pintarAvisosDupGastos === 'function') _pintarAvisosDupGastos(); } catch(e) {}
   }, 1500);
 }
-function pdHoy() { _flushFinanzasPendiente(); document.getElementById('pd-fecha').valueAsDate = new Date(); renderPD(); }
-function getPDFecha() { return document.getElementById('pd-fecha').value || new Date().toISOString().slice(0,10); }
+// v114: HOY según el reloj de la computadora (El Salvador, UTC−6), en formato YYYY-MM-DD.
+// Antes se usaba `input.valueAsDate = new Date()` y `toISOString()`, que trabajan en UTC: de las
+// 6:00 p. m. en adelante el programa ya mostraba el día SIGUIENTE, así que "Hoy" abría el
+// cuaderno equivocado y el reporte salía con la fecha de mañana.
+function _hoyISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function pdHoy() { _flushFinanzasPendiente(); document.getElementById('pd-fecha').value = _hoyISO(); renderPD(); }
+function getPDFecha() { return document.getElementById('pd-fecha').value || _hoyISO(); }
 
 // Sube YA cualquier gasto/ingreso/movimiento pendiente (que estaba en el debounce de 1.5s).
 // CRÍTICO: se llama ANTES de cambiar de fecha en el cuaderno. Sin esto, los gastos recién
@@ -7062,20 +7089,46 @@ function renderPD() {
   equalizePDRows();
 }
 
+// ==================== ¿QUÉ SERVICIOS ESTÁN ASIGNADOS? — FUENTE ÚNICA (v114) ====================
+// Un servicio puede estar asignado a un equipo de DOS maneras, y las dos valen igual:
+//   1. ocupando un SLOT horario (8:00 / 11:00 / 2:30 / 'otra'), o
+//   2. como SERVICIO EXTRA fuera de cuota (col.serviciosExtra[]).
+// Antes cada lugar decidía por su cuenta y varios solo miraban los slots: por eso una mudanza
+// puesta como servicio extra seguía apareciendo en el banner "sin asignar a equipo" y seguía
+// ofreciéndose como disponible en los demás equipos (riesgo de asignarla dos veces).
+// _codigosExtraCol devuelve los códigos extra de UNA columna (normaliza el formato viejo, donde
+// el ítem era un string suelto en vez de {codigo, metodo}).
+function _codigosExtraCol(col) {
+  const out = [];
+  (Array.isArray(col && col.serviciosExtra) ? col.serviciosExtra : []).forEach(it => {
+    const c = (typeof it === 'string') ? it : (it && it.codigo);
+    if (c) out.push(c);
+  });
+  return out;
+}
+// Códigos asignados en el día. `exceptoIdx` (opcional): ignorar esa columna — sirve para saber
+// qué está tomado por los OTROS equipos mientras se dibuja el equipo `exceptoIdx`.
+function _codigosAsignadosDia(f, exceptoIdx) {
+  const day = getDayData(f);
+  const set = new Set();
+  (day.columnas || []).forEach((col, ci) => {
+    if (exceptoIdx != null && ci === exceptoIdx) return;
+    [...HORARIOS, 'otra'].forEach(h => {
+      const cod = col.slots?.[h]?.reservaCodigo;
+      if (cod) set.add(cod);
+    });
+    _codigosExtraCol(col).forEach(c => set.add(c));
+  });
+  return set;
+}
+
 // Banner para servicios del día que NO están asignados a ningún equipo de la pizarra.
 // Útil cuando Pedro nota que faltan servicios de la administración diaria — visibilidad clara.
 function renderPDSinAsignar(f) {
   const banner = document.getElementById('pd-sin-asignar');
   if (!banner) return;
-  const day = getDayData(f);
-  // Códigos de reservaciones que YA están asignadas a algún slot de algún equipo
-  const asignadasCodigos = new Set();
-  (day.columnas || []).forEach(col => {
-    [...HORARIOS, 'otra'].forEach(h => {
-      const cod = col.slots?.[h]?.reservaCodigo;
-      if (cod) asignadasCodigos.add(cod);
-    });
-  });
+  // v114: cuenta como asignado tanto el slot horario como el servicio extra fuera de cuota.
+  const asignadasCodigos = _codigosAsignadosDia(f);
   // Servicios del día (no canceladas) que NO están asignadas
   const sinAsignar = reservas.filter(r =>
     r.fecha === f &&
@@ -7160,7 +7213,7 @@ function buildColumnaTV(col, idx, f) {
   const crewHtml = miembrosOrdenados.map(m => {
     const esM = MOTORISTAS.has(m.nombre);
     const esEventual = m.eventual === true;
-    const nick = m.nombre.split(' ').slice(0,2).join(' ');
+    const nick = _nombreCorto(m.nombre);   // v114: alias de pantalla (el dato guardado no cambia)
     const pre = esM ? '<span style="color:#fca5a5;font-weight:900;">(M)</span> '
              : esEventual ? '<span style="color:#fcd34d;font-weight:900;">(E)</span> '
              : '';
@@ -7233,14 +7286,15 @@ function buildColumna2(col, idx, f) {
 
   // All reservations for this date
   const resDia = reservas.filter(r => r.fecha === f);
-  // Reservations already assigned to OTHER columns (not this one)
-  const asignadas = new Set();
+  // Reservations already assigned to OTHER columns (not this one).
+  // v114: incluye los SERVICIOS EXTRA de los otros equipos (fuente única _codigosAsignadosDia).
+  // Antes solo miraba los slots: una mudanza puesta como extra en el equipo A se seguía
+  // ofreciendo como disponible en el equipo B y podía quedar asignada dos veces.
   const day = getDayData(f);
-  day.columnas.forEach((c2, ci) => {
-    if (ci === idx) return;
-    HORARIOS.forEach(h => { if (c2.slots[h]?.reservaCodigo) asignadas.add(c2.slots[h].reservaCodigo); });
-    if (c2.slots['otra']?.reservaCodigo) asignadas.add(c2.slots['otra'].reservaCodigo);
-  });
+  const asignadas = _codigosAsignadosDia(f, idx);
+  // Extras de ESTE equipo: tampoco se ofrecen en sus propios slots (si no, la misma mudanza
+  // quedaría a la vez en un horario y en la lista de extras del mismo equipo).
+  const codsExtra = new Set(_codigosExtraCol(col));
 
   // Crew with (M) marker — motoristas siempre primero
   const _miembrosOrdenados = [...(col.miembros||[])].sort((a,b) => {
@@ -7255,7 +7309,7 @@ function buildColumna2(col, idx, f) {
     const realIdx = col.miembros.indexOf(m);
     const esM = MOTORISTAS.has(m.nombre);
     const esEventual = m.eventual === true;
-    const nick = m.nombre.split(' ').slice(0,2).join(' ');
+    const nick = _nombreCorto(m.nombre);   // v114: alias de pantalla (el dato guardado no cambia)
     const display = esM ? `<span style="color:#d42b2b;font-weight:900;font-size:11px;">(M)</span> ${nick}`
       : esEventual ? `<span style="color:#d97706;font-weight:900;font-size:11px;">(E)</span> ${nick}`
       : nick;
@@ -7293,6 +7347,7 @@ function buildColumna2(col, idx, f) {
     // para que NO queden invisibles. El banner "Sin asignar" también las captura.
     const disponibles = esExtension ? [] : resDia.filter(r => {
       if (asignadas.has(r.codigo)) return false;
+      if (codsExtra.has(r.codigo)) return false;   // v114: ya está como servicio extra de este equipo
       if (r.codigo === slot.reservaCodigo) return false;
       // Excluir canceladas (van al banner "Sin ubicar" en la agenda, no al disponibles de la pizarra)
       if (r.estado === 'cancelado') return false;
@@ -7469,6 +7524,11 @@ function buildColumna2(col, idx, f) {
   const totalPagos = (col.miembros||[]).reduce((s,m)=>s+(parseFloat(m.pago)||0),0);
   const propinas = col.propinas || ['','',''];
   const propTotal = propinas.reduce((s,p) => s+(parseFloat(p)||0), 0);
+  // v114: COMISIÓN PARA EL EQUIPO (por conseguir reseñas positivas). NO es propina y NO entró
+  // al banco: es dinero que sale de CAJA CHICA una sola vez. Se guarda en la columna (igual que
+  // las propinas) y recalcCerramos la descuenta; no se crea ninguna fila en day.gastos, así no
+  // hay forma de contarla dos veces ni de que un merge la duplique.
+  const comisionEq = parseFloat(col.comision) || 0;
   const numMiembros = (col.miembros||[]).length;
   const propPorPersona = numMiembros > 0 && propTotal > 0 ? (propTotal / numMiembros).toFixed(2) : '0.00';
   const placa = col.camion ? col.camion.split('·')[0].trim() : '';
@@ -7480,9 +7540,13 @@ function buildColumna2(col, idx, f) {
   const extras = (Array.isArray(col.serviciosExtra) ? col.serviciosExtra : [])
     .map(it => (typeof it === 'string') ? {codigo: it, metodo: 'EFECTIVO'} : it)
     .filter(it => it && it.codigo);
-  const codsExtra = new Set(extras.map(it => it.codigo));
   const extrasAsignados = extras.map(it => ({ metodo: it.metodo || 'EFECTIVO', r: reservas.find(rv => rv.codigo === it.codigo) })).filter(x => x.r);
-  const resDiaParaExtra = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado' && !codsExtra.has(r.codigo));
+  // v114: el desplegable solo ofrece servicios del día que NO están tomados por NADIE —
+  // ni en un slot horario (de este equipo o de otro) ni como extra de otro equipo.
+  const _codsSlotsPropios = new Set();
+  [...HORARIOS, 'otra'].forEach(h => { const c = col.slots?.[h]?.reservaCodigo; if (c) _codsSlotsPropios.add(c); });
+  const resDiaParaExtra = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado'
+    && !codsExtra.has(r.codigo) && !asignadas.has(r.codigo) && !_codsSlotsPropios.has(r.codigo));
   const _METODOS_EXTRA = ['EFECTIVO','CUSCA','LINK','PENDIENTE'];
   const _colorMetodoExtra = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', LINK:'#7c3aed', PENDIENTE:'#d97706' };
   const serviciosExtraHtml = `
@@ -7528,6 +7592,14 @@ function buildColumna2(col, idx, f) {
         </div>
       </div>
       ${propTotal>0?`<div style="font-size:10px;color:#16a34a;font-weight:700;margin-bottom:4px;">🪙 Propina: $${propTotal.toFixed(2)} ÷ ${numMiembros} = $${propPorPersona}/persona</div>`:''}
+      <!-- v114: comisión al equipo por reseñas positivas (sale de CAJA CHICA, NO es propina) -->
+      <div style="display:flex;align-items:center;gap:5px;margin-bottom:5px;">
+        <span style="font-size:10px;font-weight:800;color:#7c3aed;white-space:nowrap;" title="Comisión por conseguir reseñas positivas. Se paga en efectivo desde CAJA CHICA. No es propina y no entró al banco.">⭐ Comisión equipo ($)</span>
+        <input type="number" value="${col.comision||''}" placeholder="0.00" min="0" step="0.01"
+          ${isDiaCerrado(f)?'disabled title="Día cerrado"':''} onchange="updateComisionEquipo('${f}',${idx},this.value)"
+          style="width:60px;border:none;border-bottom:1.5px solid ${comisionEq>0?'#7c3aed':'#e0e4ed'};padding:1px 3px;font-size:11px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:transparent;color:#7c3aed;text-align:right;">
+      </div>
+      ${comisionEq>0?`<div style="font-size:10px;color:#7c3aed;font-weight:700;margin-bottom:4px;">⭐ Comisión por reseñas: $${comisionEq.toFixed(2)} · sale de CAJA CHICA</div>`:''}
       <div style="min-height:20px;">${crewHtml||'<span style="font-size:11px;color:var(--gris2);">Sin personal</span>'}</div>
     </div>
     <div style="padding:4px 14px 10px;flex:1;">
@@ -7561,12 +7633,15 @@ async function toggleFinalizarColumna(idx) {
     renderPD();
     return;
   }
-  // Concluir: marcar reservaciones del grupo como completadas
+  // Concluir: marcar reservaciones del grupo como completadas.
+  // v114: los SERVICIOS EXTRA fuera de cuota también se concluyen — el equipo los hizo igual
+  // que los de horario; la única diferencia es que no ocupan cuota horaria.
   const codigos = new Set();
   [...HORARIOS, 'otra'].forEach(h => {
     const cod = col.slots?.[h]?.reservaCodigo;
     if (cod) codigos.add(cod);
   });
+  _codigosExtraCol(col).forEach(c => codigos.add(c));
   if (!confirm(`¿Concluir el grupo "${col.nombre}"?\n\n• ${codigos.size} servicio(s) se marcarán como COMPLETADOS\n• El grupo quedará como FINALIZADO\n• Podés reabrirlo si necesitás corregir algo`)) return;
   col.finalizada = true;
   // CRÍTICO: persistir pdData y ESPERAR a que suba ANTES de los saveSingle. Cada saveSingle
@@ -7602,6 +7677,15 @@ function addServicioExtra(f, colIdx, codigo) {
   const col = day.columnas[colIdx];
   if (!col) return;
   if (!Array.isArray(col.serviciosExtra)) col.serviciosExtra = [];
+  // v114: ANTI-DUPLICADO en los datos (no solo en el desplegable). Si el servicio ya está en un
+  // slot horario de cualquier equipo, o es extra de otro equipo, no se agrega dos veces.
+  const _tomados = _codigosAsignadosDia(f, colIdx);
+  const _propios = new Set();
+  [...HORARIOS, 'otra'].forEach(h => { const c = col.slots?.[h]?.reservaCodigo; if (c) _propios.add(c); });
+  if (_tomados.has(codigo) || _propios.has(codigo)) {
+    alert('⚠️ Ese servicio ya está asignado a un equipo. Quitalo de donde está antes de ponerlo como servicio extra.');
+    return;
+  }
   const ya = col.serviciosExtra.some(it => (typeof it === 'string' ? it : it.codigo) === codigo);
   if (!ya) col.serviciosExtra.push({ codigo: codigo, metodo: 'EFECTIVO' });
   _ultimaEdicionFinanzas = Date.now();
@@ -7912,7 +7996,7 @@ function abrirModalColumna(editIdx=null) {
     return `<div style="background:${enOtro ? '#fee2e2' : 'var(--gris0)'};border:1.5px solid ${enOtro ? '#fca5a5' : 'var(--gris1)'};border-radius:6px;padding:7px 10px;display:flex;align-items:center;gap:8px;${enOtro ? 'opacity:.6;' : ''}">
       <input type="checkbox" id="col-emp-${i}" ${selMiembro?'checked':''} ${enOtro?'disabled':''} style="width:14px;height:14px;cursor:${enOtro?'not-allowed':'pointer'};">
       <label for="col-emp-${i}" style="flex:1;font-size:12px;font-weight:600;cursor:${enOtro?'not-allowed':'pointer'};">
-        ${MOTORISTAS.has(emp) ? '<span style="color:#d42b2b;font-weight:900;font-size:11px;">(M)</span> ' : ''}${emp.split(' ').slice(0,2).join(' ')}
+        ${MOTORISTAS.has(emp) ? '<span style="color:#d42b2b;font-weight:900;font-size:11px;">(M)</span> ' : ''}${_nombreCorto(emp)}
         ${enOtro ? `<span style="font-size:10px;color:#991b1b;font-weight:700;"> · en ${equipoNombre}</span>` : ''}
       </label>
     </div>`;
@@ -7984,6 +8068,57 @@ function updatePropina(f, colIdx, propIdx, val) {
   recalcCerramos();
 }
 
+// ==================== COMISIÓN PARA EL EQUIPO (v114) ====================
+// Comisión por conseguir RESEÑAS POSITIVAS. NO es propina: no entró al banco, se entrega en
+// efectivo desde CAJA CHICA. Vive en la columna (pdData[fecha].columnas[i].comision), igual que
+// las propinas, así queda amarrada a la FECHA y al EQUIPO y viaja con el mismo sync.
+// Por qué NO se crea una fila en day.gastos: una fila suelta habría que crearla, editarla y
+// borrarla en tres caminos distintos (y sobrevivir al merge entre computadoras) — el primer
+// error de sincronización la duplicaría y descontaría dos veces. Guardándola en la columna, el
+// descuento lo hace recalcCerramos leyendo UN solo campo: editar = recalcular, borrar = queda en
+// blanco y deja de descontar. No hay movimiento que duplicar.
+// El total se entrega AL EQUIPO: no se reparte automáticamente entre los empleados.
+function updateComisionEquipo(f, colIdx, val) {
+  if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) {
+    alert('⚠️ Este día está cerrado. Desbloqueá para editar la comisión del equipo.');
+    renderPD();
+    return;
+  }
+  const day = getDayData(f);
+  const col = day.columnas[colIdx];
+  if (!col) return;
+  const n = parseFloat(val);
+  // Vacío / 0 / negativo → se guarda en blanco (deja de descontar). Mínimo $0.00.
+  col.comision = (!isFinite(n) || n <= 0) ? '' : String(Math.round(n * 100) / 100);
+  savePD();
+  // Subida INMEDIATA (no el debounce): la comisión vive en la columna del equipo y las columnas
+  // viajan enteras en el merge, así que cuanto antes suba, menor la ventana en la que otra
+  // computadora podría mandar su versión del día sin ella. Mismo criterio que addServicioExtra.
+  _ultimaEdicionFinanzas = Date.now();
+  try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); } catch(e) {}
+  renderPD();
+  recalcCerramos(f);
+  // El bloque de gastos del cuaderno no se redibuja solo (renderCuaderno lo salta durante la
+  // ventana de gracia que protege lo que se está tecleando). Acá el cambio viene de un `onchange`
+  // de la pizarra, no de un input de esa lista, así que redibujarlo es seguro y hace que la
+  // comisión se vea al instante. REGLA 8.2 intacta: nunca se re-renderiza durante un `oninput`.
+  if (getPDFecha() === f) { try { renderGastos(); } catch(e) {} }
+}
+// Total de comisiones a equipos de un día (fuente única para cuadre, cuaderno y reportes).
+function _comisionesEquipoDelDia(f) {
+  const day = getDayData(f);
+  const out = [];
+  (day.columnas || []).forEach(col => {
+    const m = parseFloat(col.comision) || 0;
+    if (m > 0) out.push({ equipo: col.nombre || 'Equipo', monto: m });
+  });
+  return out;
+}
+function _totalComisionesEquipo(day) {
+  return (day && Array.isArray(day.columnas) ? day.columnas : [])
+    .reduce((s, col) => s + (parseFloat(col.comision) || 0), 0);
+}
+
 function guardarColumna() {
   // FIX M1 (2026-05-30): no permitir crear/editar equipos en un día cerrado.
   if (isDiaCerrado()) { alert('🔒 Día cerrado: no se pueden modificar los equipos. Desbloquéalo primero.'); return; }
@@ -8033,6 +8168,9 @@ function guardarColumna() {
   const propinas = oldCol?.propinas || ['','',''];
 
   const col = { nombre, camion, miembros, slots, extras, propinas };
+  // v114: preservar la comisión al equipo (mismo motivo que serviciosExtra/finalizada: el objeto
+  // se reconstruye y sin esto editar el equipo borraría la comisión y descuadraría CAJA CHICA).
+  if (oldCol && oldCol.comision) col.comision = oldCol.comision;
   // FIX (2026-06-29): preservar serviciosExtra y finalizada al editar el equipo. Antes el
   // objeto se reconstruía sin ellos → editar un equipo BORRABA sus servicios extra (y su
   // método de pago, que ahora entra al cuadre) y reabría un grupo finalizado en silencio.
@@ -8098,7 +8236,7 @@ function renderCuaderno() {
     } else {
       cuadPers.innerHTML = avisoDesc + pagos.map(p=>`
         <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f0f0f0;">
-          <div><span style="font-size:13px;font-weight:600;">${p.nombre.split(' ').slice(0,2).join(' ')}</span><span style="font-size:11px;color:var(--gris2);margin-left:6px;">${p.equipo}</span></div>
+          <div><span style="font-size:13px;font-weight:600;">${_nombreCorto(p.nombre)}</span><span style="font-size:11px;color:var(--gris2);margin-left:6px;">${p.equipo}</span></div>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;color:#d97706;">$${p.monto.toFixed(2)}</span>
         </div>`).join('') +
         `<div style="padding-top:8px;display:flex;justify-content:space-between;font-weight:800;"><span>TOTAL PERSONAL:</span><span style="color:#d97706;">$${totalPers.toFixed(2)}</span></div>`;
@@ -8687,7 +8825,24 @@ function renderGastos() {
       </div>
       <div style="font-size:10px;color:#92400e;font-style:italic;margin-top:3px;">Se anota en cada equipo; ya se descuenta de Caja Chica automáticamente.</div>` : '';
 
-  cont.innerHTML = gastosHtml + propinasRow;
+  // v114: COMISIÓN POR RESEÑAS por equipo — misma lógica de solo-lectura que las propinas.
+  // Se anota en la pizarra (⭐ Comisión equipo) y recalcCerramos ya la descontó de CAJA CHICA;
+  // acá se MUESTRA como gasto del día para que quede a la vista en el cuaderno. NO se guarda en
+  // day.gastos[] (así es imposible contarla dos veces).
+  const comisionesEq = _comisionesEquipoDelDia(f);
+  const totalComisEq = comisionesEq.reduce((s,c)=>s+c.monto, 0);
+  const comisionRows = totalComisEq > 0 ? comisionesEq.map(c => `
+      <div style="display:grid;grid-template-columns:80px 1fr 90px;gap:6px;align-items:center;margin-top:6px;">
+        <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:5px;padding:5px 7px;font-size:12px;font-weight:800;color:#6d28d9;text-align:right;">$${c.monto.toFixed(2)}</div>
+        <div style="font-size:12px;font-weight:700;color:#5b21b6;">⭐ Comisión por reseñas – Equipo ${escHtml(c.equipo)}</div>
+        <div style="font-size:10px;font-weight:700;color:#6d28d9;text-align:center;">CAJA CHICA</div>
+      </div>`).join('')
+    + `<div style="font-size:10px;color:#5b21b6;font-style:italic;margin-top:3px;">Se anota en cada equipo (⭐ Comisión equipo); ya se descuenta de Caja Chica automáticamente. No es propina y no entró al banco.</div>`
+    : '';
+  const comisionBloque = totalComisEq > 0
+    ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #c4b5fd;">${comisionRows}</div>` : '';
+
+  cont.innerHTML = gastosHtml + propinasRow + comisionBloque;
   const total = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const el = document.getElementById('total-gastos'); if(el) el.textContent='$'+total.toFixed(2);
   // v113: avisos de importes repetidos (solo pinta, no re-renderiza).
@@ -9801,6 +9956,9 @@ function recalcCerramos(fArg) {
   // Personal + propinas (siempre de CAJA CHICA)
   const totalPersonal = day.columnas.reduce((s,col) => s + col.miembros.reduce((sm,m) => sm + (parseFloat(m.pago)||0), 0), 0);
   const totalPropinas = day.columnas.reduce((s,col) => s + (col.propinas||[]).reduce((sp,p) => sp + (parseFloat(p)||0), 0), 0);
+  // v114: comisión al equipo por reseñas positivas — gasto en efectivo desde CAJA CHICA.
+  // Se descuenta UNA sola vez, acá; no existe como fila de gasto, así que no hay doble conteo.
+  const totalComisionEq = _totalComisionesEquipo(day);
 
   // Movimientos entre cuentas
   const movIn = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
@@ -9824,7 +9982,7 @@ function recalcCerramos(fArg) {
   CUENTAS.forEach(c => {
     const abrimos = parseFloat(day.cuentas.abrimos[c]) || 0;
     let cierre = abrimos + (ingServ[c]||0) + (ingOtros[c]||0) + (ingCobros[c]||0) - (gastosPorFondo[c]||0) + (movIn[c]||0) - (movOut[c]||0);
-    if (c === 'CAJA CHICA') cierre -= totalPersonal + totalPropinas;
+    if (c === 'CAJA CHICA') cierre -= totalPersonal + totalPropinas + totalComisionEq;
     // LINK del día anterior cae hoy en CUSCATLAN
     if (c === 'CUSCATLAN') cierre += linkAyer;
     day.cuentas.cerramos[c] = cierre.toFixed(2);
@@ -9874,10 +10032,131 @@ function _recalcDesde(fecha){
 
 // CODIGO MUERTO ELIMINADO (2026-07-02): funcion sin ningun caller (descargarResumenMensual, sin boton desde v83).
 
+// ==================== GUARDADO DEL PDF EN LA CARPETA "REPORTE DIARIO" (v114) ====================
+// El programa corre en el NAVEGADOR (GitHub Pages), no es una app de escritorio: una página web
+// NO puede escribir en una ruta fija del disco por su cuenta. Lo único que el navegador permite
+// es que el USUARIO elija una carpeta UNA VEZ (File System Access API) y a partir de ahí la
+// página escribe ahí sin volver a preguntar. Eso es lo que se hace acá:
+//   • Chrome / Edge (y cualquier navegador con showDirectoryPicker): la primera vez se pide
+//     elegir/crear la carpeta "REPORTE DIARIO" del Escritorio. El permiso queda guardado en
+//     IndexedDB (mt_fs) y se reutiliza en las siguientes descargas, en esa computadora.
+//   • Firefox / Safari / iPhone: no existe esa API. El PDF se descarga normal, con el nombre
+//     correcto, a la carpeta de Descargas, y se avisa dónde quedó. No se simula una ruta falsa.
+// El nombre es "YYYY-MM-DD REPORTE DIARIO.pdf"; si ya existe, NO se pisa: se guarda numerado
+// "(2)", "(3)", etc.
+const _FS_DB = 'mt_fs', _FS_STORE = 'handles', _FS_KEY_REPORTES = 'carpeta-reporte-diario';
+
+function _fsAbrirDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(_FS_DB, 1);
+    r.onupgradeneeded = () => { try { r.result.createObjectStore(_FS_STORE); } catch(e) {} };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function _fsLeerHandle(clave) {
+  try {
+    const db = await _fsAbrirDB();
+    return await new Promise((res, rej) => {
+      const q = db.transaction(_FS_STORE, 'readonly').objectStore(_FS_STORE).get(clave);
+      q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error);
+    });
+  } catch(e) { return null; }
+}
+async function _fsGuardarHandle(clave, h) {
+  try {
+    const db = await _fsAbrirDB();
+    await new Promise((res, rej) => {
+      const t = db.transaction(_FS_STORE, 'readwrite');
+      t.objectStore(_FS_STORE).put(h, clave);
+      t.oncomplete = () => res(); t.onerror = () => rej(t.error);
+    });
+  } catch(e) { console.warn('no se pudo recordar la carpeta:', e); }
+}
+async function _fsTienePermiso(h, pedir) {
+  if (!h || typeof h.queryPermission !== 'function') return false;
+  const opt = { mode: 'readwrite' };
+  try {
+    if (await h.queryPermission(opt) === 'granted') return true;
+    if (!pedir) return false;
+    return (await h.requestPermission(opt)) === 'granted';
+  } catch(e) { return false; }
+}
+// Devuelve el handle de la carpeta destino, o null si el navegador no puede o el usuario canceló.
+async function _fsCarpetaReportes(pedirSiFalta) {
+  const guardada = await _fsLeerHandle(_FS_KEY_REPORTES);
+  if (guardada && await _fsTienePermiso(guardada, true)) return guardada;
+  if (!pedirSiFalta || typeof window.showDirectoryPicker !== 'function') return null;
+  alert('📁 Elegí dónde guardar los reportes.\n\nSe abre el explorador: seleccioná (o creá) en el ESCRITORIO la carpeta "REPORTE DIARIO" y dale "Seleccionar carpeta".\n\nEsto se pregunta UNA SOLA VEZ en esta computadora; después los reportes se guardan solos ahí.');
+  try {
+    const elegida = await window.showDirectoryPicker({ id: 'mt-reporte-diario', mode: 'readwrite', startIn: 'desktop' });
+    let destino = elegida;
+    // Si eligió el Escritorio (u otra carpeta) en vez de "REPORTE DIARIO", se crea/usa adentro.
+    if (!/^\s*reporte\s+diario\s*$/i.test(elegida.name || '')) {
+      try { destino = await elegida.getDirectoryHandle('REPORTE DIARIO', { create: true }); } catch(e) { destino = elegida; }
+    }
+    await _fsGuardarHandle(_FS_KEY_REPORTES, destino);
+    return destino;
+  } catch(e) { return null; }   // el usuario canceló el explorador
+}
+// Permite cambiar de carpeta más adelante (desde la consola o un botón futuro).
+async function cambiarCarpetaReporteDiario() {
+  await _fsGuardarHandle(_FS_KEY_REPORTES, null);
+  const d = await _fsCarpetaReportes(true);
+  alert(d ? '✅ Carpeta nueva: ' + d.name : '⚠️ No se cambió la carpeta.');
+}
+// Primer nombre libre: nunca sobrescribe en silencio.
+async function _fsNombreLibre(dir, base) {
+  let n = base + '.pdf';
+  for (let i = 2; i <= 200; i++) {
+    try { await dir.getFileHandle(n); }        // existe → probar el siguiente
+    catch(e) { return n; }                     // NotFoundError → está libre
+    n = base + ' (' + i + ').pdf';
+  }
+  return base + ' (' + Date.now() + ').pdf';
+}
+// Genera el PDF de verdad (Blob) con html2pdf desde un contenedor fuera de pantalla.
+// REGLA 8.1: el contenedor va con position:fixed;left:-99999px — NUNCA opacity:0 (sale en blanco).
+async function _pdfBlobDesdeHTML(htmlCuerpo) {
+  if (typeof html2pdf !== 'function') throw new Error('html2pdf no disponible');
+  const cont = document.createElement('div');
+  cont.style.cssText = 'position:fixed;left:-99999px;top:0;width:196mm;background:#fff;color:#111;';
+  cont.innerHTML = htmlCuerpo;
+  document.body.appendChild(cont);
+  try {
+    return await html2pdf().set({
+      margin: [8, 10, 10, 10],
+      image: { type: 'jpeg', quality: 0.96 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
+      jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(cont).outputPdf('blob');
+  } finally { cont.remove(); }
+}
+// Guarda el Blob: en la carpeta elegida si se puede, si no descarga normal. Devuelve texto de dónde quedó.
+async function _guardarPdfReporte(blob, base, dir) {
+  if (dir) {
+    try {
+      const nombre = await _fsNombreLibre(dir, base);
+      const fh = await dir.getFileHandle(nombre, { create: true });
+      const w = await fh.createWritable();
+      await w.write(blob);
+      await w.close();
+      return 'carpeta "' + (dir.name || 'REPORTE DIARIO') + '" · archivo: ' + nombre;
+    } catch(e) { console.warn('no se pudo escribir en la carpeta, se descarga normal:', e); }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = base + '.pdf';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return 'la carpeta de DESCARGAS · archivo: ' + base + '.pdf';
+}
+
 // ==================== REPORTE COMPLETO DEL DÍA (PDF) ====================
 // PDF con TODA la info del día: servicios por equipo (quién + pago), gastos, movimientos
 // entre cuentas, otros ingresos, cobros, y al final abrimos/cerramos con el CONTEO REAL.
-function descargarReporteDia() {
+async function descargarReporteDia() {
   const f = getPDFecha();
   // Refrescar el cerramos para que el reporte muestre números al día (no toca un día cerrado).
   try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
@@ -9888,7 +10167,13 @@ function descargarReporteDia() {
   const metBadge = (m) => { const c = MC[m]||['#e5e7eb','#111']; return `<span style="font-size:7pt;font-weight:700;padding:0.3mm 1.5mm;border-radius:3px;background:${c[0]};color:${c[1]};">${esc(metodoLabel(m||'EFECTIVO'))}</span>`; };
 
   // ===== Sección 1: SERVICIOS POR EQUIPO (quién los hizo + pago) =====
+  // v114: se recorre con la FUENTE ÚNICA _serviciosColumna (la misma de la pizarra y la hoja
+  // diaria), con dedupe GLOBAL entre equipos. Así el reporte incluye los SERVICIOS EXTRA fuera
+  // de cuota — antes se los saltaba y su dinero aparecía en el cuadre pero no en este papel.
+  // El precio impreso sigue siendo la BASE (frontera contable: los ajustes de cobro van abajo,
+  // en OTROS INGRESOS y en MODIFICACIONES DE COSTO; sumarlos acá los contaría dos veces).
   let totalServ = 0, totalPers = 0, totalProp = 0;
+  const _vistosRep = new Set();
   const equiposHtml = (day.columnas||[]).map((col, ci) => {
     const tipo = (typeof getTipoFromCamion==='function') ? getTipoFromCamion(col.camion) : '';
     const unidadLabel = tipo==='grande' ? 'GRANDE' : tipo==='mediano' ? 'MEDIANO' : tipo==='pequeño' ? 'PEQUEÑO' : '';
@@ -9897,29 +10182,28 @@ function descargarReporteDia() {
     let pagoEq = 0;
     const crewHtml = miembros.map(m => {
       const esM = MOTORISTAS.has(m.nombre); const pago = parseFloat(m.pago)||0; pagoEq += pago;
-      return `<div style="display:flex;justify-content:space-between;font-size:8.5pt;line-height:1.5;${esM?'font-weight:700;':''}"><span>${esM?'<span style="color:#1a3a6b;font-weight:800;">(M) </span>':''}${esc(m.nombre)}${m.eventual?' <span style="font-size:7pt;color:#a16207;font-weight:700;">EVENTUAL</span>':''}</span><span style="font-weight:700;color:${pago>0?'#d97706':'#999'};">$${pago.toFixed(2)}</span></div>`;
+      return `<div style="display:flex;justify-content:space-between;font-size:8.5pt;line-height:1.5;${esM?'font-weight:700;':''}"><span>${esM?'<span style="color:#1a3a6b;font-weight:800;">(M) </span>':''}${esc(_nombreDisplay(m.nombre))}${m.eventual?' <span style="font-size:7pt;color:#a16207;font-weight:700;">EVENTUAL</span>':''}</span><span style="font-weight:700;color:${pago>0?'#d97706':'#999'};">$${pago.toFixed(2)}</span></div>`;
     }).join('') || '<div style="font-size:8pt;color:#888;font-style:italic;">Sin personal asignado</div>';
     const props = (col.propinas||[]).map(p=>parseFloat(p)||0).filter(p=>p>0);
     const propEq = props.reduce((s,p)=>s+p,0);
     const propHtml = propEq>0 ? `<div style="font-size:8pt;margin-top:1mm;color:#a16207;font-weight:700;">Propinas: ${props.map(p=>'$'+p.toFixed(2)).join(' + ')} = $${propEq.toFixed(2)}</div>` : '';
-    let servEq = 0, pos = 0; const vistos = new Set();
-    const slotsHtml = [...HORARIOS,'otra'].map(h => {
-      const slot = col.slots ? col.slots[h] : null; const codigo = slot && slot.reservaCodigo;
-      if (!codigo || vistos.has(codigo)) return ''; vistos.add(codigo);
-      const r = reservas.find(rv=>rv.codigo===codigo); if (!r) return '';
-      // Criterio A1: costo de la celda si tiene (>0), si no el de la reserva. NUNCA la suma.
+    let servEq = 0, pos = 0;
+    const slotsHtml = _serviciosColumna(col, _vistosRep).map(sv => {
+      const r = sv.r; if (!r) return '';
+      // Criterio A1 (ya aplicado por _serviciosColumna): costo de la celda si tiene (>0), si no
+      // el de la reserva. NUNCA la suma.
       // OJO (v104): acá el precio se queda en la BASE, sin sumarle los ajustes de cobro. Este es
       // el reporte FINANCIERO del día y los ajustes ya aparecen abajo como OTROS INGRESOS —
       // sumarlos también al servicio contaría el mismo dinero dos veces y rompería el cuadre.
       // El total cobrado de cada servicio se ve en su badge y en la sección MODIFICACIONES.
-      pos++; const cSlot = parseFloat(slot.costo)||0; const costo = cSlot>0 ? cSlot : (parseFloat(r.costo)||0); servEq += costo;
-      const horaLabel = (h==='otra') ? (r.hora||'—') : h;
+      pos++; const costo = sv.base; servEq += costo;
+      const horaLabel = sv.extra ? (r.hora||'—') : (sv.hora==='otra' ? (r.hora||'—') : sv.hora);
       return `<div style="border-bottom:0.4pt dotted #aaa;padding:1.2mm 0;">
-        <div style="display:flex;align-items:center;gap:1.5mm;margin-bottom:0.5mm;"><span style="background:#1a3a6b;color:#fff;font-size:7.5pt;font-weight:800;padding:0 1.5mm;border-radius:2px;">#${pos}</span><span style="font-weight:800;font-size:9pt;">${esc(horaLabel)}</span><span style="margin-left:auto;font-weight:800;font-size:9pt;">$${costo.toFixed(2)}</span></div>
+        <div style="display:flex;align-items:center;gap:1.5mm;margin-bottom:0.5mm;"><span style="background:${sv.extra?'#a16207':'#1a3a6b'};color:#fff;font-size:7.5pt;font-weight:800;padding:0 1.5mm;border-radius:2px;">#${pos}</span><span style="font-weight:800;font-size:9pt;">${esc(horaLabel)}</span>${sv.extra?'<span style="font-size:6.5pt;font-weight:800;color:#a16207;border:0.5pt solid #a16207;border-radius:2px;padding:0 1mm;">EXTRA</span>':''}<span style="margin-left:auto;font-weight:800;font-size:9pt;">$${costo.toFixed(2)}</span></div>
         <div style="font-size:8.5pt;font-weight:700;line-height:1.4;"><span style="color:#16a34a;">▲</span> ${esc(r.carga)}</div>
         <div style="font-size:8.5pt;font-weight:700;line-height:1.4;"><span style="color:#d42b2b;">▼</span> ${esc(r.descarga)}</div>
         <div style="font-size:7.5pt;color:#444;margin-top:0.5mm;">${esc(r.nombre)} ${esc(r.apellido)} &nbsp;|&nbsp; ${esc(r.tel)}</div>
-        <div style="margin-top:0.5mm;display:flex;gap:1.5mm;align-items:center;">${metBadge(slot.metodo)}<span style="font-size:7pt;color:#666;text-transform:uppercase;">${esc(r.estado||'')}</span>${_costoModificado(r.codigo)?`<span style="font-size:7.5pt;font-weight:800;padding:0.3mm 1.5mm;border-radius:3px;background:#0891b2;color:#fff;">✏️ TOTAL COBRADO $${_costoActual(r).toFixed(2)}</span>`:''}</div>
+        <div style="margin-top:0.5mm;display:flex;gap:1.5mm;align-items:center;">${metBadge(sv.metodo)}<span style="font-size:7pt;color:#666;text-transform:uppercase;">${esc(r.estado||'')}</span>${_costoModificado(r.codigo)?`<span style="font-size:7.5pt;font-weight:800;padding:0.3mm 1.5mm;border-radius:3px;background:#0891b2;color:#fff;">✏️ TOTAL COBRADO $${_costoActual(r).toFixed(2)}</span>`:''}</div>
         ${r.obs?`<div style="font-size:7.5pt;font-style:italic;border-left:2px solid #1a3a6b;padding-left:1.5mm;margin-top:0.5mm;">${esc(r.obs)}</div>`:''}
       </div>`;
     }).join('') || '<div style="font-size:8pt;color:#888;font-style:italic;padding:1mm 0;">Sin servicios asignados</div>';
@@ -9937,13 +10221,17 @@ function descargarReporteDia() {
   const gastosRows = (day.gastos||[]).map(g=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#d42b2b;width:22mm;">$${(parseFloat(g.monto)||0).toFixed(2)}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(g.titulo||'')}${g.desc?' — '+esc(g.desc):''}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(g.fondo||'')}</td></tr>`).join('');
   const persRow = totalPers>0 ? `<tr style="background:#fffbeb;"><td style="padding:1.2mm 3mm;text-align:right;font-weight:700;color:#d97706;">$${totalPers.toFixed(2)}</td><td style="padding:1.2mm 3mm;">Pago a personal</td><td style="padding:1.2mm 3mm;font-size:7.5pt;color:#555;">CAJA CHICA</td></tr>` : '';
   const propRow = totalProp>0 ? `<tr style="background:#fffbeb;"><td style="padding:1.2mm 3mm;text-align:right;font-weight:700;color:#d97706;">$${totalProp.toFixed(2)}</td><td style="padding:1.2mm 3mm;">Propinas</td><td style="padding:1.2mm 3mm;font-size:7.5pt;color:#555;">CAJA CHICA</td></tr>` : '';
-  const totalGastosFull = totalGastos + totalPers + totalProp;
-  const gastosHtml = (day.gastos||[]).length || totalPers>0 || totalProp>0 ? `
+  // v114: comisión por reseñas, una fila por equipo (sale de CAJA CHICA, no es propina).
+  const _comisEq = _comisionesEquipoDelDia(f);
+  const totalComis = _comisEq.reduce((s,c)=>s+c.monto,0);
+  const comisRows = _comisEq.map(c => `<tr style="background:#f5f3ff;"><td style="padding:1.2mm 3mm;text-align:right;font-weight:700;color:#6d28d9;">$${c.monto.toFixed(2)}</td><td style="padding:1.2mm 3mm;">Comisión por reseñas – Equipo ${esc(c.equipo)}</td><td style="padding:1.2mm 3mm;font-size:7.5pt;color:#555;">CAJA CHICA</td></tr>`).join('');
+  const totalGastosFull = totalGastos + totalPers + totalProp + totalComis;
+  const gastosHtml = (day.gastos||[]).length || totalPers>0 || totalProp>0 || totalComis>0 ? `
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#d42b2b;border-bottom:2px solid #d42b2b;padding-bottom:1mm;margin:5mm 0 2mm;">GASTOS DEL DÍA</div>
     <table style="width:100%;border-collapse:collapse;font-size:8.5pt;">
       <thead><tr style="background:#fef2f2;"><th style="padding:1.5mm 3mm;text-align:right;">Monto</th><th style="padding:1.5mm 3mm;text-align:left;">Descripción</th><th style="padding:1.5mm 3mm;text-align:left;">Fondo</th></tr></thead>
-      <tbody>${gastosRows}${persRow}${propRow}</tbody>
-      <tfoot><tr style="background:#1a3a6b;color:#fff;"><td style="padding:1.5mm 3mm;text-align:right;font-weight:900;">$${totalGastosFull.toFixed(2)}</td><td style="padding:1.5mm 3mm;font-weight:800;" colspan="2">TOTAL GASTOS (incluye personal y propinas)</td></tr></tfoot>
+      <tbody>${gastosRows}${persRow}${propRow}${comisRows}</tbody>
+      <tfoot><tr style="background:#1a3a6b;color:#fff;"><td style="padding:1.5mm 3mm;text-align:right;font-weight:900;">$${totalGastosFull.toFixed(2)}</td><td style="padding:1.5mm 3mm;font-weight:800;" colspan="2">TOTAL GASTOS (incluye personal, propinas y comisiones)</td></tr></tfoot>
     </table>` : '';
 
   // ===== Sección 3: MOVIMIENTOS ENTRE CUENTAS / OTROS INGRESOS / COBROS =====
@@ -10083,12 +10371,31 @@ function descargarReporteDia() {
     ${cuentasHtml}
   </div>`;
 
-  // Método CONFIABLE (igual que la tarjeta de reservación y la impresión diaria): ventana de
-  // impresión del navegador. El usuario elige "Guardar como PDF". html2pdf/html2canvas salía en
-  // blanco con contenido posicionado fuera de pantalla.
+  // ===== v114: se genera un PDF DE VERDAD y se guarda con nombre y carpeta fijos =====
+  // Nombre pedido: "YYYY-MM-DD REPORTE DIARIO.pdf", con la fecha LOCAL de El Salvador — que es
+  // exactamente `f`, el día que el cuaderno tiene en pantalla (getPDFecha trabaja en hora local).
+  const _baseNombre = f + ' REPORTE DIARIO';
+  // IMPORTANTE: el explorador de carpetas se pide ANTES de armar el PDF. El navegador solo deja
+  // abrirlo mientras el clic del usuario está "fresco"; si primero se generara el PDF (tarda
+  // segundos) el permiso ya habría vencido y nunca se podría elegir la carpeta.
+  let _dirDestino = null;
+  try { _dirDestino = await _fsCarpetaReportes(true); } catch(e) { console.warn('carpeta reportes:', e); }
+  let _blob = null;
+  try { _blob = await _pdfBlobDesdeHTML(cuerpo); } catch(e) { console.warn('html2pdf:', e); }
+  if (_blob && _blob.size > 1000) {
+    try {
+      const donde = await _guardarPdfReporte(_blob, _baseNombre, _dirDestino);
+      alert('✅ Reporte guardado en ' + donde
+        + (_dirDestino ? '' : '\n\n(Tu navegador no permite elegir carpeta; el archivo quedó en Descargas con el nombre correcto.)'));
+      return;
+    } catch(e) { console.warn('guardado del PDF:', e); }
+  }
+  // RESPALDO: si html2pdf falla (o el navegador lo bloquea), se abre la ventana de impresión de
+  // siempre y el usuario elige "Guardar como PDF". Nunca se queda sin reporte.
+  alert('⚠️ No se pudo generar el PDF automáticamente.\n\nSe abre la ventana de impresión: elegí "Guardar como PDF" y ponele de nombre:\n' + _baseNombre);
   // FIX v95 (2026-07-04): abrir con Blob URL (document.write dejaba la ventana en blanco en Chrome nuevo).
   const docReporte = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">'
-    + '<title>Reporte del Dia ' + f + '</title>'
+    + '<title>' + _baseNombre + '</title>'
     + '<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800;900&family=Barlow:wght@400;600;700&display=swap" rel="stylesheet">'
     + '<style>*{box-sizing:border-box;margin:0;padding:0;}'
     + 'body{font-family:\'Barlow\',sans-serif;color:#111;background:#fff;padding:10mm;}'
@@ -10112,9 +10419,11 @@ function imprimirPD() {
   // cobra en la calle. v111: se calcula con la FUENTE ÚNICA (_serviciosColumna), con dedupe
   // GLOBAL entre equipos, y el total de cada equipo sale de la misma lista que se imprime, así
   // el total del día siempre cuadra con la suma de los equipos y con los precios de cada línea.
-  // Solo entran los servicios de los SLOTS (los "servicios extra" no se imprimen en esta hoja).
+  // v114: los SERVICIOS EXTRA fuera de cuota SÍ se imprimen — el equipo los hace igual que los
+  // de horario. Salen al final de su equipo (así los devuelve _serviciosColumna) y marcados
+  // "EXTRA"; la única diferencia con 8:00/11:00/2:30 es que no ocupan cuota horaria.
   const _vistosPrint = new Set();
-  const _servPorCol = day.columnas.map(col => _serviciosColumna(col, _vistosPrint).filter(s => !s.extra));
+  const _servPorCol = day.columnas.map(col => _serviciosColumna(col, _vistosPrint));
   let totalServ = 0;
   _servPorCol.forEach(lista => { totalServ += _totalizarServicios(lista).vigente; });
   const totalGastos = day.gastos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
@@ -10133,7 +10442,8 @@ function imprimirPD() {
     });
     const crewHtml = _miembrosOrd.map((m,i) => {
       const esM = MOTORISTAS.has(m.nombre);
-      const display = esM ? `<b>(M) ${m.nombre}</b>` : m.nombre;
+      const _nm = _nombreDisplay(m.nombre);   // v114: alias de pantalla
+      const display = esM ? `<b>(M) ${_nm}</b>` : _nm;
       return `<div class="crew ${esM?'lider':''}">${esM?'&#9733; ':''}${display}${parseFloat(m.pago)>0?` <span class="pago">(+$${parseFloat(m.pago).toFixed(0)})</span>`:''}</div>`;
     }).join('');
 
@@ -10155,11 +10465,11 @@ function imprimirPD() {
       const _modSv = Math.abs(_ajSv) >= 0.005;
       const _anulado = sv.metodo === 'CANCELADO';   // no suma al total del equipo
       const h = sv.hora;
-      const horaLabel = h==='otra' ? r.hora : h;
+      const horaLabel = sv.extra ? (r.hora || 'EXTRA') : (h==='otra' ? r.hora : h);
       return `<div class="slot">
         <div class="slot-header">
           <span class="pos">#${posicion}</span>
-          <span class="hora">${horaLabel}</span>
+          <span class="hora">${horaLabel}${sv.extra?' &middot; EXTRA':''}</span>
           <span class="precio"${_anulado?' style="text-decoration:line-through;opacity:.6;"':''}>$${costo.toFixed(2)}${_modSv?` <span style="font-size:.65em;font-weight:700;">✏️</span>`:''}</span>
         </div>
         ${_anulado?`<div style="font-size:7pt;font-weight:700;color:#991b1b;">CANCELADO — no suma al total</div>`:''}
@@ -10193,13 +10503,17 @@ function imprimirPD() {
   // Filas extras de personal y propinas para la tabla de gastos
   const persRow = totalPers > 0 ? `<tr style="background:#fef3c7;"><td>$${totalPers.toFixed(2)}</td><td>Pago personal extra</td><td>—</td></tr>` : '';
   const propRow = totalPropinas > 0 ? `<tr style="background:#fef3c7;"><td>$${totalPropinas.toFixed(2)}</td><td>Propinas</td><td>—</td></tr>` : '';
-  const totalGastosFull = totalGastos + totalPers + totalPropinas;
+  // v114: comisión por reseñas entregada a cada equipo (CAJA CHICA, no es propina).
+  const _comisEqPD = _comisionesEquipoDelDia(f);
+  const totalComisPD = _comisEqPD.reduce((s,c)=>s+c.monto,0);
+  const comisRowsPD = _comisEqPD.map(c=>`<tr style="background:#f5f3ff;"><td>$${c.monto.toFixed(2)}</td><td>Comisi&oacute;n por rese&ntilde;as – Equipo ${c.equipo}</td><td>CAJA CHICA</td></tr>`).join('');
+  const totalGastosFull = totalGastos + totalPers + totalPropinas + totalComisPD;
 
-  const hayGastos = day.gastos.length > 0 || totalPers > 0 || totalPropinas > 0;
+  const hayGastos = day.gastos.length > 0 || totalPers > 0 || totalPropinas > 0 || totalComisPD > 0;
   const gastosHtml = hayGastos ? `
     <table class="t-gastos">
       <thead><tr><th>Monto</th><th>Descripción</th><th>Fondo</th></tr></thead>
-      <tbody>${day.gastos.map(g=>`<tr><td>$${parseFloat(g.monto||0).toFixed(2)}</td><td>${g.titulo||''}${g.desc?' — '+g.desc:''}</td><td>${g.fondo||''}</td></tr>`).join('')}${persRow}${propRow}</tbody>
+      <tbody>${day.gastos.map(g=>`<tr><td>$${parseFloat(g.monto||0).toFixed(2)}</td><td>${g.titulo||''}${g.desc?' — '+g.desc:''}</td><td>${g.fondo||''}</td></tr>`).join('')}${persRow}${propRow}${comisRowsPD}</tbody>
       <tfoot><tr><td><b>$${totalGastosFull.toFixed(2)}</b></td><td colspan="2"><b>TOTAL GASTOS</b></td></tr></tfoot>
     </table>` : '';
 
@@ -10315,7 +10629,7 @@ function imprimirPD() {
 let concData; try { concData = JSON.parse(localStorage.getItem('mt_conc') || '{}'); } catch(e) { concData = {}; }
 
 function saveConc() { safeSetLS('mt_conc', JSON.stringify(concData)); syncToSupabase('mt_conc', concData); }
-function concHoy() { document.getElementById('conc-fecha').valueAsDate = new Date(); renderConciliacion(); }
+function concHoy() { document.getElementById('conc-fecha').value = _hoyISO(); renderConciliacion(); }
 function getConcFecha() { return document.getElementById('conc-fecha')?.value || new Date().toISOString().slice(0,10); }
 
 function getConcDayData(f) {
@@ -10645,7 +10959,7 @@ function openWAReader() {
   document.getElementById('wa-paso2').style.display = 'none';
   document.getElementById('wa-paso3').style.display = 'none';
   document.getElementById('wa-input').value = '';
-  document.getElementById('wa-fecha').valueAsDate = new Date();
+  document.getElementById('wa-fecha').value = _hoyISO();
 }
 function closeWAReader() { document.getElementById('mo-wa-reader').classList.remove('open'); }
 function volverPaso1() {
@@ -10717,7 +11031,7 @@ function analizarWA() {
   document.getElementById('wa-carga').value = carga;
   document.getElementById('wa-descarga').value = descarga;
   document.getElementById('wa-obs').value = notas;
-  document.getElementById('wa-fecha').valueAsDate = new Date();
+  document.getElementById('wa-fecha').value = _hoyISO();
 
   actualizarPreviewWA();
 
