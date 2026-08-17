@@ -2668,7 +2668,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-16-v115';
+const APP_VERSION = '2026-08-16-v116';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -10127,28 +10127,64 @@ async function _fsNombreLibre(dir, base) {
 // nunca opacity:0) y a html2pdf se le pasa el div de adentro, que está en FLUJO NORMAL y sí tiene
 // alto real. Además se comprueba el canvas antes de armar el PDF: si viene vacío se lanza el
 // error y descargarReporteDia cae a la ventana de impresión, en vez de guardar una hoja en blanco.
+// ⚠️ Y POR QUÉ SE SUBE LA PÁGINA ANTES DE GENERAR (bug "sigue en blanco", 16-ago-2026):
+// html2canvas ubica el contenido usando el SCROLL de la ventana. El botón del reporte está al
+// final del cuaderno, o sea que cuando se lo aprieta la página SIEMPRE está scrolleada hacia
+// abajo — y entonces el contenido se dibujaba corrido hacia abajo por esa misma cantidad: la
+// primera hoja salía vacía y el encabezado aparecía al pie de la segunda. Medido: con la página
+// arriba, tinta=2323; scrolleada 1500 px, tinta=0 (hoja totalmente en blanco).
+// Se corrige por tres lados a la vez: el envoltorio va `position:absolute` (se ubica respecto al
+// documento, no a la ventana), se le pasa `scrollX/scrollY: 0` a html2canvas, y se sube la página
+// mientras se toma la foto, devolviéndola después a donde estaba.
 async function _pdfBlobDesdeHTML(htmlCuerpo) {
-  if (typeof html2pdf !== 'function') throw new Error('html2pdf no disponible');
+  if (typeof html2pdf !== 'function') throw new Error('html2pdf no se cargó (revisá la conexión a internet)');
   const envoltorio = document.createElement('div');
-  envoltorio.style.cssText = 'position:fixed;left:-99999px;top:0;width:196mm;background:#fff;';
+  envoltorio.style.cssText = 'position:absolute;left:-99999px;top:0;width:196mm;background:#fff;';
   const cont = document.createElement('div');   // ← este es el que se le pasa a html2pdf
   cont.style.cssText = 'width:196mm;background:#fff;color:#111;';
   cont.innerHTML = htmlCuerpo;
   envoltorio.appendChild(cont);
   document.body.appendChild(envoltorio);
+  const scrollPrevio = { x: window.scrollX || window.pageXOffset || 0, y: window.scrollY || window.pageYOffset || 0 };
+  window.scrollTo(0, 0);
   try {
     if (cont.getBoundingClientRect().height < 20) throw new Error('el contenido del reporte quedó sin alto');
     const w = html2pdf().set({
       margin: [8, 10, 10, 10],
       image: { type: 'jpeg', quality: 0.96 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false,
+                     scrollX: 0, scrollY: 0, windowWidth: document.documentElement.clientWidth },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] }
     }).from(cont).toCanvas();
     const canvas = await w.get('canvas');
     if (!canvas || !canvas.width || !canvas.height) throw new Error('el PDF salió en blanco (canvas vacío)');
+    if (!_canvasTieneTinta(canvas)) throw new Error('el PDF salió en blanco (la hoja no tiene nada dibujado)');
     return await w.outputPdf('blob');
-  } finally { envoltorio.remove(); }
+  } finally {
+    envoltorio.remove();
+    window.scrollTo(scrollPrevio.x, scrollPrevio.y);
+  }
+}
+
+// ¿La foto tiene algo dibujado? Es la ÚNICA comprobación que de verdad detecta una hoja en
+// blanco: el tamaño del archivo no sirve (un PDF vacío pesa 3 KB y es un PDF perfectamente
+// válido) y el alto del canvas tampoco (puede medir 3 páginas y estar todo blanco, que fue
+// justo lo que pasó). Se muestrean filas salteadas para que sea instantáneo aunque el reporte
+// tenga varias páginas.
+function _canvasTieneTinta(canvas) {
+  try {
+    const ctx = canvas.getContext('2d');
+    const paso = Math.max(1, Math.floor(canvas.height / 400));   // ~400 filas de muestra
+    let tinta = 0;
+    for (let y = 0; y < canvas.height; y += paso) {
+      const d = ctx.getImageData(0, y, canvas.width, 1).data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] < 245 || d[i+1] < 245 || d[i+2] < 245) { tinta++; if (tinta > 500) return true; }
+      }
+    }
+    return tinta > 500;
+  } catch(e) { return true; }   // si el navegador no deja leer el canvas, no bloqueamos el PDF
 }
 // Guarda el Blob: en la carpeta elegida si se puede, si no descarga normal. Devuelve texto de dónde quedó.
 async function _guardarPdfReporte(blob, base, dir) {
@@ -10168,6 +10204,29 @@ async function _guardarPdfReporte(blob, base, dir) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   return 'la carpeta de DESCARGAS · archivo: ' + base + '.pdf';
+}
+
+// Imprime un documento completo SIN abrir una ventana emergente, usando un iframe oculto.
+// Por qué: el reporte se genera después de varios `await` (elegir carpeta, armar el PDF), y para
+// entonces el navegador ya considera "vencido" el clic del usuario → `window.open` queda
+// bloqueado o abre una ventana VACÍA. El iframe no necesita permiso de ventanas emergentes.
+// Devuelve true si logró lanzar la impresión.
+function _imprimirEnIframeBlob(fullDocument) {
+  try {
+    const url = URL.createObjectURL(new Blob([fullDocument], { type: 'text/html' }));
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = 'position:absolute;left:-99999px;top:0;width:216mm;height:279mm;border:0;';
+    ifr.onload = () => {
+      setTimeout(() => {
+        try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch(e) { console.warn('print iframe:', e); }
+        // El iframe se deja un rato: si se borra antes, Chrome cancela el diálogo de impresión.
+        setTimeout(() => { try { ifr.remove(); URL.revokeObjectURL(url); } catch(e){} }, 120000);
+      }, 600);
+    };
+    ifr.src = url;
+    document.body.appendChild(ifr);
+    return true;
+  } catch(e) { console.warn('iframe impresion:', e); return false; }
 }
 
 // ==================== REPORTE COMPLETO DEL DÍA (PDF) ====================
@@ -10397,19 +10456,23 @@ async function descargarReporteDia() {
   // segundos) el permiso ya habría vencido y nunca se podría elegir la carpeta.
   let _dirDestino = null;
   try { _dirDestino = await _fsCarpetaReportes(true); } catch(e) { console.warn('carpeta reportes:', e); }
-  let _blob = null;
-  try { _blob = await _pdfBlobDesdeHTML(cuerpo); } catch(e) { console.warn('html2pdf:', e); }
+  let _blob = null, _motivoFallo = '';
+  try { _blob = await _pdfBlobDesdeHTML(cuerpo); }
+  catch(e) { _motivoFallo = (e && e.message) ? e.message : String(e); console.warn('html2pdf:', e); }
   if (_blob && _blob.size > 1000) {
     try {
       const donde = await _guardarPdfReporte(_blob, _baseNombre, _dirDestino);
       alert('✅ Reporte guardado en ' + donde
         + (_dirDestino ? '' : '\n\n(Tu navegador no permite elegir carpeta; el archivo quedó en Descargas con el nombre correcto.)'));
       return;
-    } catch(e) { console.warn('guardado del PDF:', e); }
+    } catch(e) { _motivoFallo = 'no se pudo guardar el archivo: ' + ((e && e.message) || e); console.warn('guardado del PDF:', e); }
   }
-  // RESPALDO: si html2pdf falla (o el navegador lo bloquea), se abre la ventana de impresión de
-  // siempre y el usuario elige "Guardar como PDF". Nunca se queda sin reporte.
-  alert('⚠️ No se pudo generar el PDF automáticamente.\n\nSe abre la ventana de impresión: elegí "Guardar como PDF" y ponele de nombre:\n' + _baseNombre);
+  // RESPALDO: si el PDF no se pudo armar (o saldría en blanco), se manda a la impresora y el
+  // usuario elige "Guardar como PDF". Nunca se guarda una hoja vacía y nunca se queda sin reporte.
+  // El motivo se muestra a propósito: si vuelve a fallar, Pedro puede decir exactamente qué dijo.
+  alert('⚠️ No se pudo generar el PDF automáticamente'
+    + (_motivoFallo ? ' (' + _motivoFallo + ')' : '') + '.\n\nSe abre la ventana de impresión: elegí "Guardar como PDF" y ponele de nombre:\n'
+    + _baseNombre + '\n\nVersión: ' + APP_VERSION);
   // FIX v95 (2026-07-04): abrir con Blob URL (document.write dejaba la ventana en blanco en Chrome nuevo).
   const docReporte = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">'
     + '<title>' + _baseNombre + '</title>'
@@ -10420,9 +10483,13 @@ async function descargarReporteDia() {
     + '@media print{@page{size:letter portrait;margin:8mm 10mm;}body{padding:0;}}</style>'
     + '</head><body>'
     + cuerpo
-    + '<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},800);<\/script>'
     + '</body></html>';
-  const w = _abrirVentanaImpresionBlob(docReporte);
+  // Se imprime desde un IFRAME oculto, no desde una ventana emergente: acá el clic del usuario ya
+  // "venció" (pasaron varios await) y `window.open` quedaría bloqueado o abriría una ventana en
+  // blanco — que fue justo lo que se vio en la otra computadora. El iframe no necesita permiso.
+  if (_imprimirEnIframeBlob(docReporte)) return;
+  const w = _abrirVentanaImpresionBlob(docReporte
+    .replace('</body>', '<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},800);<\/script></body>'));
   if (!w) { alert('⚠️ El navegador bloqueó la ventana emergente.\n\nPermití las ventanas emergentes para este sitio e intentá de nuevo. En la ventana que abre, elegí "Guardar como PDF".'); return; }
 }
 
