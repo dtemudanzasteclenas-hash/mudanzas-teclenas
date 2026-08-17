@@ -2668,7 +2668,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-16-v114';
+const APP_VERSION = '2026-08-16-v115';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -10116,22 +10116,39 @@ async function _fsNombreLibre(dir, base) {
   return base + ' (' + Date.now() + ').pdf';
 }
 // Genera el PDF de verdad (Blob) con html2pdf desde un contenedor fuera de pantalla.
-// REGLA 8.1: el contenedor va con position:fixed;left:-99999px — NUNCA opacity:0 (sale en blanco).
+//
+// ⚠️ POR QUÉ HAY UN ENVOLTORIO Y NO UN SOLO DIV (bug "el PDF sale en blanco", 16-ago-2026):
+// html2pdf NO fotografía el elemento donde está: lo CLONA dentro de un contenedor propio y
+// fotografía ese contenedor. Si el elemento que se le pasa lleva `position:fixed`, el clon
+// también lo lleva → queda FUERA DE FLUJO dentro del contenedor de html2pdf → ese contenedor
+// mide 0 de alto → el canvas sale 816x0 y el PDF, aunque es un PDF válido, sale EN BLANCO.
+// (Medido: con position:fixed en el propio elemento, canvas 816x0; con el envoltorio, 816x87.)
+// Solución: el `position:fixed;left:-99999px` va en el ENVOLTORIO (REGLA 8.1: fuera de pantalla,
+// nunca opacity:0) y a html2pdf se le pasa el div de adentro, que está en FLUJO NORMAL y sí tiene
+// alto real. Además se comprueba el canvas antes de armar el PDF: si viene vacío se lanza el
+// error y descargarReporteDia cae a la ventana de impresión, en vez de guardar una hoja en blanco.
 async function _pdfBlobDesdeHTML(htmlCuerpo) {
   if (typeof html2pdf !== 'function') throw new Error('html2pdf no disponible');
-  const cont = document.createElement('div');
-  cont.style.cssText = 'position:fixed;left:-99999px;top:0;width:196mm;background:#fff;color:#111;';
+  const envoltorio = document.createElement('div');
+  envoltorio.style.cssText = 'position:fixed;left:-99999px;top:0;width:196mm;background:#fff;';
+  const cont = document.createElement('div');   // ← este es el que se le pasa a html2pdf
+  cont.style.cssText = 'width:196mm;background:#fff;color:#111;';
   cont.innerHTML = htmlCuerpo;
-  document.body.appendChild(cont);
+  envoltorio.appendChild(cont);
+  document.body.appendChild(envoltorio);
   try {
-    return await html2pdf().set({
+    if (cont.getBoundingClientRect().height < 20) throw new Error('el contenido del reporte quedó sin alto');
+    const w = html2pdf().set({
       margin: [8, 10, 10, 10],
       image: { type: 'jpeg', quality: 0.96 },
       html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false },
       jsPDF: { unit: 'mm', format: 'letter', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] }
-    }).from(cont).outputPdf('blob');
-  } finally { cont.remove(); }
+    }).from(cont).toCanvas();
+    const canvas = await w.get('canvas');
+    if (!canvas || !canvas.width || !canvas.height) throw new Error('el PDF salió en blanco (canvas vacío)');
+    return await w.outputPdf('blob');
+  } finally { envoltorio.remove(); }
 }
 // Guarda el Blob: en la carpeta elegida si se puede, si no descarga normal. Devuelve texto de dónde quedó.
 async function _guardarPdfReporte(blob, base, dir) {
