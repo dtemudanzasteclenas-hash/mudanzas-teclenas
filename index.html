@@ -899,7 +899,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
             </div>
             <!-- CONTEO REAL (arqueo) -->
             <div>
-              <div style="font-size:11px;font-weight:800;color:var(--gris2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">CONTEO REAL</div>
+              <div style="font-size:11px;font-weight:800;color:var(--gris2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;" title="Cuanto dinero hay de verdad. Es solo una herramienta de control: no cambia el cuadre ni el arranque del dia siguiente.">CONTEO REAL <span style="font-weight:600;text-transform:none;letter-spacing:0;">(solo control)</span></div>
               <div id="arqueo-campos"></div>
               <div style="margin-top:8px;padding-top:6px;border-top:2px solid #1a2236;display:flex;justify-content:space-between;">
                 <span style="font-size:11px;font-weight:800;">TOTAL</span>
@@ -950,6 +950,15 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
         <div style="font-size:10px;opacity:.85;margin-top:2px;">Justificación del efectivo de Caja Chica: cada propina pagada al personal debe estar respaldada por el dinero que ingresó a la cuenta bancaria.</div>
       </div>
       <div id="propinas-banco-body" style="padding:12px 16px;font-size:12px;"></div>
+    </div>
+
+    <!-- ===== FALTANTES Y SOBRANTES DE CAJA (v117) ===== -->
+    <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #d42b2b;overflow:hidden;">
+      <div style="background:#b91c1c;color:#fff;padding:11px 16px;">
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;">⚖️ FALTANTES Y SOBRANTES DE CAJA (últimos 30 días)</span>
+        <div style="font-size:10px;opacity:.85;margin-top:2px;">Diferencia entre el saldo que calcula el programa y el CONTEO REAL de cada día. Queda registrada para siempre: así se puede rastrear dónde se descuadró el dinero. El conteo NO mueve el cuadre — el día siguiente siempre arranca con el saldo teórico.</div>
+      </div>
+      <div id="descuadres-body" style="padding:6px 6px;font-size:12px;"></div>
     </div>
 
     <!-- Resumen mensual -->
@@ -1755,8 +1764,41 @@ function _mergeItems(aArr, bArr, aTomb, bTomb) {
   });
   return { items: out, tomb };
 }
-// Merge de todo pdData: por fecha, las 4 listas financieras se UNEN ítem por ítem; las columnas de
-// la pizarra y las cuentas se toman del lado con más items (misma elección conservadora de siempre).
+// v117: une las columnas (equipos) de los dos lados. Empareja por CAMIÓN (col.camion) o, si no lo
+// tiene, por nombre. Para cada par gana la de _ts más nuevo; si alguna no tiene _ts gana la del
+// lado BASE (comportamiento anterior, no se inventa nada). Un equipo que existe en un solo lado se
+// agrega, SALVO que tenga tumba (_tombCol) más nueva: así no resucita un equipo recién borrado,
+// que volvería a descontar sus pagos/propinas/comisión de CAJA CHICA.
+function _claveColumna(col, i) {
+  return String((col && (col.camion || col.nombre)) || ('#' + i)).trim().toUpperCase();
+}
+function _mergeColumnas(base, otro) {
+  const A = Array.isArray(base && base.columnas) ? base.columnas : [];
+  const B = Array.isArray(otro && otro.columnas) ? otro.columnas : [];
+  if (!B.length) return A;
+  if (!A.length) return B;
+  const tumbas = Object.assign({}, otro._tombCol || {}, base._tombCol || {});
+  const idxB = new Map();
+  B.forEach((c, i) => { const k = _claveColumna(c, i); if (!idxB.has(k)) idxB.set(k, c); });
+  const clavesA = new Set(A.map((c, i) => _claveColumna(c, i)));
+  const out = A.map((c, i) => {
+    const g = idxB.get(_claveColumna(c, i));
+    if (!g) return c;
+    return ((+g._ts || 0) > (+c._ts || 0)) ? g : c;   // empate o sin sello -> gana el lado base
+  });
+  B.forEach((c, i) => {
+    const k = _claveColumna(c, i);
+    if (clavesA.has(k)) return;
+    const t = +tumbas[k] || 0;
+    if (t && t >= (+c._ts || 0)) return;   // borrada después de su última edición: no resucita
+    clavesA.add(k);
+    out.push(c);
+  });
+  return out;
+}
+
+// Merge de todo pdData: por fecha, las 5 listas financieras se UNEN ítem por ítem; las columnas de
+// la pizarra se unen equipo por equipo (v117) y las cuentas se toman del lado con más items.
 function _mergePdDataSeguro(local, nube) {
   const out = {};
   const fechas = new Set([...Object.keys(nube||{}), ...Object.keys(local||{})]);
@@ -1766,9 +1808,18 @@ function _mergePdDataSeguro(local, nube) {
     if (!L) { out[f] = N; return; }
     if (!N) { out[f] = L; return; }
     _asegurarIdsItems(L); _asegurarIdsItems(N);
-    // Base del día (columnas/cuentas/escalares): el lado con MÁS items financieros, como antes.
+    // Base del día (cuentas/escalares): el lado con MÁS items financieros, como antes.
     const base = (_contarItemsFinancieros(L) > _contarItemsFinancieros(N)) ? L : N;
     const merged = Object.assign({}, base);
+    // v117: las COLUMNAS ya no viajan en bloque con el lado ganador. Antes, si una computadora
+    // solo tocaba la PIZARRA (pagos al personal, propinas, comisión del equipo, servicios
+    // asignados) y la otra anotaba un gasto, ganaba la de los gastos y TODA la pizarra de la
+    // primera se perdía en silencio: CAJA CHICA cambiaba de saldo sin ningún registro de por qué.
+    try {
+      const otroLado = (base === L) ? N : L;
+      merged.columnas = _mergeColumnas(base, otroLado);
+      merged._tombCol = Object.assign({}, otroLado._tombCol || {}, base._tombCol || {});
+    } catch(e) { console.warn('_mergeColumnas:', e); }
     const tombOut = {};
     _LISTAS_FIN.forEach(campo => {
       const at = (L._tomb && L._tomb[campo]) || {};
@@ -2668,7 +2719,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-16-v116';
+const APP_VERSION = '2026-08-22-v119';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -4549,7 +4600,7 @@ function exportarReservas() {
   const blob = new Blob([JSON.stringify(reservas, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const fecha = new Date().toISOString().slice(0,10);
+  const fecha = _hoyISO();   // v118: fecha local SV en el nombre del archivo
   a.href = url;
   a.download = `reservaciones_mudanzas_teclenas_${fecha}.json`;
   document.body.appendChild(a);
@@ -6507,7 +6558,13 @@ const EMPLEADOS = [
   'Douglas Alexis Hernández Diaz','Manuel de Jesus Diaz Diaz','Julio Cesar Cines Hernández',
   'Melvin Josue Enriquez Amaya','Francisco Antonio Rosales Vega','Sergio Alberto García González',
   'Sergio Humberto Henríquez Orellana','Ricardo Antonio Rosales Molina','Juan Carlos Vasquez González',
-  'Fredy Edgardo Orellana Escamilla'
+  'Fredy Edgardo Orellana Escamilla',
+  // v117 (2026-08-19): PERSONA DISTINTA de 'Juan Carlos Vasquez González'. Venía escribiéndose a mano
+  // como ayudante eventual ("mazariego", "MAZARIEGO", "Mazariego") desde el 24-jul-2026; al no existir
+  // en el roster, quien programaba elegía por error la ficha del OTRO Juan Carlos y los dos quedaban
+  // fundidos en un solo nombre (se detectaron 2 días con la misma ficha en DOS equipos a la vez).
+  // Se agrega AL FINAL a propósito: _DUIS_EMPLEADOS se cruza por índice y así ningún DUI se corre.
+  'Juan Carlos Mazariego'
 ];
 const COLORES2 = { pequeño:'#d97706', mediano:'#7c3aed', grande:'#1a3a6b' };
 
@@ -6533,14 +6590,108 @@ const MOTORISTAS = new Set([
 // Pedido de Pedro (16-ago-2026): Juan Carlos Vasquez González se muestra como MAZARIEGO.
 // Es el ÚNICO "Juan Carlos" del roster, así que no hay riesgo de tocar a otra persona.
 const NOMBRE_MOSTRAR = {
-  'Juan Carlos Vasquez González': 'MAZARIEGO',
+  // v117 (corregido por Pedro el 19-ago-2026): son DOS personas distintas y cada una tiene su apodo.
+  // La v114 le había puesto MAZARIEGO al que en realidad le dicen MONGO — de ahí venía la confusión.
+  'Juan Carlos Vasquez González': 'MONGO',
+  'Juan Carlos Mazariego'       : 'MAZARIEGO',
 };
-// Nombre COMPLETO para mostrar (hojas impresas, reportes).
-function _nombreDisplay(n) { return NOMBRE_MOSTRAR[n] || String(n == null ? '' : n); }
+
+// ==================== IDENTIDAD DE CADA EMPLEADO (v117, 2026-08-19) ====================
+// PROBLEMA QUE RESUELVE: el programa identificaba a una persona SOLO por el texto de su nombre.
+// Con dos empleados que la gente llama igual ("Juan Carlos" / "Mazariego") eso los fundía en uno:
+// el mismo nombre terminaba en DOS equipos el mismo día (15 y 18-ago-2026) y sus pagos, domingos
+// trabajados y asistencias se mezclaban.
+// SOLUCIÓN: cada persona tiene un ID INTERNO estable. El nombre guardado NO cambia (si se
+// reescribiera, los ~90 registros históricos quedarían huérfanos), pero TODA comparación de
+// "¿es la misma persona?" pasa por el ID, nunca por el texto.
+//   • _EMP_ID[nombre exacto]  -> id interno
+//   • _EMP_ALIAS[alias exacto en minúsculas] -> id interno (para lo ya escrito a mano)
+// Los alias son EXACTOS (trim + minúsculas), NUNCA por "contiene": "mazariego jr" es OTRA persona
+// y por eso NO entra acá.
+const _EMP_ID = {
+  'Juan Carlos Vasquez González': 'EMP-JC-VASQUEZ',
+  'Juan Carlos Mazariego'       : 'EMP-JC-MAZARIEGO',
+};
+const _EMP_ALIAS = {
+  // Apodos con que se les escribió a mano en la pizarra. Coincidencia EXACTA (trim + minúsculas),
+  // nunca "contiene": "mazariego jr" es OTRA persona y por eso NO está en esta lista.
+  'mongo'                 : 'EMP-JC-VASQUEZ',
+  'mazariego'             : 'EMP-JC-MAZARIEGO',
+  'juan carlos mazariego' : 'EMP-JC-MAZARIEGO',
+  'juan carlos vasquez gonzález' : 'EMP-JC-VASQUEZ',
+  'juan carlos vasquez gonzalez' : 'EMP-JC-VASQUEZ',
+};
+// Nombre CANÓNICO (el que se guarda) de cada id interno.
+const _EMP_CANON = {
+  'EMP-JC-VASQUEZ'  : 'Juan Carlos Vasquez González',
+  'EMP-JC-MAZARIEGO': 'Juan Carlos Mazariego',
+};
+// Id interno de un miembro de equipo. Prioridad: el id ya guardado en el registro > nombre exacto
+// > alias exacto. Si no hay ninguno, la identidad es el propio nombre normalizado (comportamiento
+// de siempre para las otras 25 personas, que no tienen homónimos).
+function _empId(m) {
+  if (m && typeof m === 'object') {
+    if (m.empId) return String(m.empId);
+    return _empIdDeNombre(m.nombre);
+  }
+  return _empIdDeNombre(m);
+}
+function _empIdDeNombre(n) {
+  const t = String(n == null ? '' : n).trim();
+  if (!t) return '';
+  if (_EMP_ID[t]) return _EMP_ID[t];
+  const a = _EMP_ALIAS[t.toLowerCase()];
+  return a || ('N:' + t.toLowerCase());
+}
+// ¿Son la MISMA persona? Única fuente de verdad para duplicados, asistencias y comisiones.
+// Nombre CANÓNICO guardado para un miembro (resuelve los alias escritos a mano, sin tocar el dato).
+function _nombreCanonico(m) {
+  const id = _empId(m);
+  return _EMP_CANON[id] || String((m && typeof m === 'object' ? m.nombre : m) || '');
+}
+
+// Nombre COMPLETO para mostrar (hojas impresas, reportes). v117: resuelve por ID interno, así
+// "mazariego"/"MAZARIEGO" escritos a mano se ven como JUAN CARLOS MAZARIEGO y nunca se confunden
+// con el otro Juan Carlos.
+function _nombreDisplay(n) {
+  const canon = _nombreCanonico(n);
+  return NOMBRE_MOSTRAR[canon] || canon || String(n == null ? '' : (typeof n === 'object' ? (n.nombre||'') : n));
+}
 // Nombre CORTO para las listas de la pizarra/cuaderno (por defecto, los dos primeros nombres).
 function _nombreCorto(n) {
-  const d = NOMBRE_MOSTRAR[n];
-  return d ? d : String(n == null ? '' : n).split(' ').slice(0, 2).join(' ');
+  const canon = _nombreCanonico(n);
+  const d = NOMBRE_MOSTRAR[canon];
+  if (d) return d;
+  return String(canon || (typeof n === 'object' ? (n && n.nombre) || '' : n == null ? '' : n)).split(' ').slice(0, 2).join(' ');
+}
+// v117: marca de tiempo por COLUMNA. Sin esto, cuando dos computadoras editan el mismo día el
+// merge se queda con las columnas de UN solo lado (el que tenga más gastos/ingresos anotados) y
+// TODO lo que la otra escribió en la pizarra —pagos al personal, propinas, comisión del equipo,
+// servicios asignados— se pierde en silencio y el cuadre de CAJA CHICA cambia sin que nadie lo
+// note. Con el sello, el merge puede quedarse con la versión MÁS NUEVA de cada equipo.
+function _sellarColumna(f, idx) {
+  try {
+    const day = pdData && pdData[f];
+    const col = day && day.columnas && day.columnas[idx];
+    if (col) col._ts = Date.now();
+  } catch(e) {}
+}
+// ¿Esta persona ya está en OTRO equipo del mismo día? Devuelve el nombre del equipo, o ''.
+// Se compara por ID interno: dos fichas distintas con el mismo nombre NO se confunden, y el mismo
+// empleado escrito de dos formas (roster / eventual a mano) SÍ se detecta.
+// ¿Son la MISMA persona? Se compara por id interno, NUNCA por el texto del nombre (v117).
+function _mismaPersona(a, b) { const x = _empId(a); return !!x && x === _empId(b); }
+function _equipoDuplicadoDelDia(f, miembro, exceptoIdx) {
+  const day = (typeof pdData !== 'undefined' && pdData[f]) ? pdData[f] : null;
+  if (!day || !Array.isArray(day.columnas)) return '';
+  const id = _empId(miembro);
+  if (!id) return '';
+  for (let i = 0; i < day.columnas.length; i++) {
+    if (i === exceptoIdx) continue;
+    const col = day.columnas[i];
+    if ((col.miembros || []).some(m => _empId(m) === id)) return col.nombre || ('Equipo ' + (i + 1));
+  }
+  return '';
 }
 
 // ==================== COMISIONES POR DÍA DE DESCANSO (DOMINGOS) — v111 (2026-08-02) ====================
@@ -7314,8 +7465,14 @@ function buildColumna2(col, idx, f) {
       : esEventual ? `<span style="color:#d97706;font-weight:900;font-size:11px;">(E)</span> ${nick}`
       : nick;
     const c = esM ? '#d42b2b' : esEventual ? '#d97706' : '#1e4fa0';
+    // v117: aviso si la MISMA persona quedó también en otro equipo del día (se compara por id
+    // interno, así detecta al mismo empleado escrito de dos formas distintas).
+    const _eqDup = _equipoDuplicadoDelDia(f, m, idx);
+    const _avisoDup = _eqDup
+      ? `<span title="Esta persona también está en el equipo ${escHtml(_eqDup)}. Quitala de uno de los dos, o si son dos personas distintas escribí el nombre completo de cada una." style="font-size:10px;font-weight:900;color:#fff;background:#d42b2b;border-radius:9px;padding:0 6px;">⚠ TAMBIÉN EN ${escHtml(_eqDup)}</span>`
+      : '';
     return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
-      <span style="font-size:14px;font-weight:700;color:${c};flex:1;line-height:1.4;">${display}</span>
+      <span style="font-size:14px;font-weight:700;color:${c};flex:1;line-height:1.4;">${display}${_avisoDup}</span>
       <input type="number" value="${m.pago||''}" placeholder="$" min="0" step="1"
         onchange="updatePago('${f}',${idx},${realIdx},this.value)"
         style="width:52px;border:none;border-bottom:1.5px solid ${m.pago?'#d97706':'#e0e4ed'};padding:1px 4px;font-size:11px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;background:transparent;color:#d97706;text-align:right;">
@@ -7692,7 +7849,9 @@ function addServicioExtra(f, colIdx, codigo) {
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
   else savePD();
-  try { if (getPDFecha() === f) recalcCerramos(); } catch(e) {}
+  // v118: encadenar. Un servicio extra es INGRESO del dia `f`; con recalcCerramos() solo se
+  // rehacia el dia visible y el arranque de los dias siguientes quedaba viejo (defecto de v117/E).
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(f); } catch(e2){} }
   renderPD();
 }
 
@@ -7713,7 +7872,9 @@ function updateServicioExtraMetodo(f, colIdx, codigo, metodo) {
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
   else savePD();
-  try { if (getPDFecha() === f) recalcCerramos(); } catch(e) {}
+  // v118: encadenar. Un servicio extra es INGRESO del dia `f`; con recalcCerramos() solo se
+  // rehacia el dia visible y el arranque de los dias siguientes quedaba viejo (defecto de v117/E).
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(f); } catch(e2){} }
   renderPD();
 }
 
@@ -7729,7 +7890,9 @@ function delServicioExtra(f, colIdx, codigo) {
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
   else savePD();
-  try { if (getPDFecha() === f) recalcCerramos(); } catch(e) {}
+  // v118: encadenar. Un servicio extra es INGRESO del dia `f`; con recalcCerramos() solo se
+  // rehacia el dia visible y el arranque de los dias siguientes quedaba viejo (defecto de v117/E).
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(f); } catch(e2){} }
   renderPD();
 }
 
@@ -7769,10 +7932,11 @@ function assignSlot(f, colIdx, hora, codigo) {
   // CRÍTICO: activar ventana de gracia (bloquea polling/Realtime hardReplace) + guardar local
   // + flush inmediato. Sin esto, un sync traía la versión vieja de pdData (sin la asignación)
   // y la quitaba "un segundo después".
+  _sellarColumna(f, colIdx);   // v117
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   renderPD();
-  recalcCerramos();
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} }   // v117: encadenar
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
   else savePD();
 }
@@ -7803,10 +7967,11 @@ function deassignSlot(f, colIdx, hora) {
     }
   }
   day.columnas[colIdx].slots[hora].reservaCodigo = '';
+  _sellarColumna(f, colIdx);   // v117
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   renderPD();
-  recalcCerramos();
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} }   // v117: encadenar
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
   else savePD();
 }
@@ -7867,13 +8032,16 @@ function updateSlot2(f, idx, hora, campo, valor) {
     _logAudit(_codAud, 'cambio_precio', `pizarra ${hora}: $${_slotAud.costo || '0'} → $${valor || '0'}`);
   }
   day.columnas[idx].slots[hora][campo] = valor;
+  _sellarColumna(f, idx);   // v117
   savePD();
   // v111: MISMO criterio que renderPD (helper único). Antes acá se recalculaba el total del día
   // solo con las reservas asignadas a slots, así que el número grande de la pizarra cambiaba de
   // significado (y de valor) apenas se tocaba un slot.
   const tv = document.getElementById('piz-total-val'); if(tv) tv.textContent='$'+_totalResDiaVigente(f).toFixed(2);
   renderStats2(f);
-  if(campo==='metodo') recalcCerramos();
+  // v117: también el COSTO de la celda mueve dinero (slot.costo pisa el costo de la reserva en el
+  // cuadre), y el recálculo tiene que encadenar hacia adelante si se edita un día pasado.
+  if (campo === 'metodo' || campo === 'costo') { try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} } }
 }
 
 function updatePago(f, colIdx, mIdx, val) {
@@ -7887,9 +8055,11 @@ function updatePago(f, colIdx, mIdx, val) {
   const day = getDayData(f);
   if (day.columnas[colIdx] && day.columnas[colIdx].miembros[mIdx]) {
     day.columnas[colIdx].miembros[mIdx].pago = val;
+    _sellarColumna(f, colIdx);   // v117
     savePD();
     renderStats2(f);
-    recalcCerramos();
+    // v117: el pago al personal sale de CAJA CHICA; si el día editado es pasado hay que encadenar.
+    try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} }
   }
 }
 
@@ -7980,24 +8150,33 @@ function abrirModalColumna(editIdx=null) {
   ensureDatalistPersonal(); // datalist de autocompletado para ayudantes eventuales
 
   // Find employees already assigned to OTHER teams today
+  // v117: se indexa por ID INTERNO, no por el texto del nombre. Antes, el mismo empleado escrito
+  // como ayudante eventual a mano ("mazariego") no coincidía con su ficha del roster y el aviso
+  // "ya está en otro equipo" no saltaba → la misma persona quedaba en dos equipos a la vez.
   const asignadosOtros = new Set();
   day.columnas.forEach((c2, ci) => {
     if (ci === editIdx) return; // skip current team being edited
-    (c2.miembros || []).forEach(m => asignadosOtros.add(m.nombre));
+    (c2.miembros || []).forEach(m => asignadosOtros.add(_empId(m)));
   });
 
   // Empleados checkboxes
   const empCont = document.getElementById('col-empleados');
   empCont.innerHTML = EMPLEADOS.map((emp,i) => {
-    const selMiembro = col ? col.miembros.find(m=>m.nombre===emp) : null;
-    const enOtro = asignadosOtros.has(emp);
-    const enOtroEquipo = enOtro ? day.columnas.find((c2,ci) => ci !== editIdx && c2.miembros.some(m=>m.nombre===emp)) : null;
-    const equipoNombre = enOtroEquipo ? enOtroEquipo.nombre : '';
+    const _idEmp = _empId(emp);
+    const selMiembro = col ? col.miembros.find(m=>_empId(m)===_idEmp) : null;
+    // v117: si YA está en este equipo, la casilla queda HABILITADA aunque también esté en otro —
+    // si se bloqueara, un duplicado histórico no se podría corregir desde acá.
+    const enOtro = asignadosOtros.has(_idEmp) && !selMiembro;
+    const dupAqui = asignadosOtros.has(_idEmp) && !!selMiembro;
+    const enOtroEquipo = enOtro ? day.columnas.find((c2,ci) => ci !== editIdx && c2.miembros.some(m=>_empId(m)===_idEmp)) : null;
+    const _otroEq2 = (enOtro || dupAqui) ? day.columnas.find((c2,ci) => ci !== editIdx && c2.miembros.some(m=>_empId(m)===_idEmp)) : null;
+    const equipoNombre = enOtroEquipo ? enOtroEquipo.nombre : (_otroEq2 ? _otroEq2.nombre : '');
     return `<div style="background:${enOtro ? '#fee2e2' : 'var(--gris0)'};border:1.5px solid ${enOtro ? '#fca5a5' : 'var(--gris1)'};border-radius:6px;padding:7px 10px;display:flex;align-items:center;gap:8px;${enOtro ? 'opacity:.6;' : ''}">
       <input type="checkbox" id="col-emp-${i}" ${selMiembro?'checked':''} ${enOtro?'disabled':''} style="width:14px;height:14px;cursor:${enOtro?'not-allowed':'pointer'};">
       <label for="col-emp-${i}" style="flex:1;font-size:12px;font-weight:600;cursor:${enOtro?'not-allowed':'pointer'};">
         ${MOTORISTAS.has(emp) ? '<span style="color:#d42b2b;font-weight:900;font-size:11px;">(M)</span> ' : ''}${_nombreCorto(emp)}
         ${enOtro ? `<span style="font-size:10px;color:#991b1b;font-weight:700;"> · en ${equipoNombre}</span>` : ''}
+        ${dupAqui ? `<span style="font-size:10px;color:#fff;background:#d42b2b;border-radius:8px;padding:0 5px;font-weight:800;"> ⚠ REPETIDO · también en ${equipoNombre}</span>` : ''}
       </label>
     </div>`;
   }).join('');
@@ -8045,6 +8224,8 @@ function autoNombreEquipo() {
   document.getElementById('col-nombre').value = nombre;
 }
 
+// v117: para no repetir el aviso de propina duplicada en cada tecla del mismo día.
+const _avisoPropDupHecho = {};
 function updatePropina(f, colIdx, propIdx, val) {
   if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para editar propinas.');
@@ -8053,19 +8234,26 @@ function updatePropina(f, colIdx, propIdx, val) {
   const day = getDayData(f);
   if (!day.columnas[colIdx]) return;
   if (!day.columnas[colIdx].propinas) day.columnas[colIdx].propinas = ['','',''];
+  // v117: aviso anti-duplicado. Si ese mismo día ya hay un GASTO escrito a mano que habla de
+  // propina y sale de CAJA CHICA, la propina se estaría descontando dos veces del efectivo.
+  try {
+    const _gm = _propinasGastoManualDelDia(f);
+    if ((parseFloat(val)||0) > 0 && _gm.length && !_avisoPropDupHecho[f]) {
+      _avisoPropDupHecho[f] = true;
+      alert('⚠️ Ojo con la propina.\n\nEste día ya hay ' + _gm.length + ' gasto(s) anotados a mano que dicen "propina" y salen de CAJA CHICA:\n· ' +
+            _gm.map(x => (x.g.titulo||'') + ' $' + x.monto.toFixed(2)).join('\n· ') +
+            '\n\nSi es el MISMO dinero, dejá uno solo: con los dos, la propina se descuenta dos veces de la caja.');
+    }
+  } catch(e) {}
   day.columnas[colIdx].propinas[propIdx] = val;
-  // Auto-distribute propina among team members
-  const propTotal = day.columnas[colIdx].propinas.reduce((s,p) => s + (parseFloat(p)||0), 0);
-  const numMiembros = day.columnas[colIdx].miembros.length;
-  if (numMiembros > 0 && propTotal > 0) {
-    const porPersona = Math.round(propTotal / numMiembros * 100) / 100;
-    day.columnas[colIdx].propinaPorPersona = porPersona;
-  } else {
-    day.columnas[colIdx].propinaPorPersona = 0;
-  }
+  // v118: se elimino el campo con el reparto por persona. Se reescribia en cada tecleo y NADIE lo leia:
+  // el reparto por persona se calcula al vuelo donde se muestra (propina total / miembros). Un dato
+  // guardado que nadie lee solo puede quedar desactualizado y ocupar lugar en cada sync.
+  _sellarColumna(f, colIdx);   // v117
   savePD();
   renderPD();
-  recalcCerramos();
+  // v117: la propina sale de CAJA CHICA; encadenar si el día es pasado.
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} }
 }
 
 // ==================== COMISIÓN PARA EL EQUIPO (v114) ====================
@@ -8090,6 +8278,7 @@ function updateComisionEquipo(f, colIdx, val) {
   const n = parseFloat(val);
   // Vacío / 0 / negativo → se guarda en blanco (deja de descontar). Mínimo $0.00.
   col.comision = (!isFinite(n) || n <= 0) ? '' : String(Math.round(n * 100) / 100);
+  _sellarColumna(f, colIdx);   // v117
   savePD();
   // Subida INMEDIATA (no el debounce): la comisión vive en la columna del equipo y las columnas
   // viajan enteras en el merge, así que cuanto antes suba, menor la ventana en la que otra
@@ -8097,7 +8286,7 @@ function updateComisionEquipo(f, colIdx, val) {
   _ultimaEdicionFinanzas = Date.now();
   try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); } catch(e) {}
   renderPD();
-  recalcCerramos(f);
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(f); } catch(e2){} }   // v117: encadenar
   // El bloque de gastos del cuaderno no se redibuja solo (renderCuaderno lo salta durante la
   // ventana de gracia que protege lo que se está tecleando). Acá el cambio viene de un `onchange`
   // de la pizarra, no de un input de esa lista, así que redibujarlo es seguro y hace que la
@@ -8134,8 +8323,10 @@ function guardarColumna() {
       const f = getPDFecha();
       const day = getDayData(f);
       const colExist = editColIdx !== null ? day.columnas[editColIdx] : null;
-      const existing = colExist ? colExist.miembros.find(m => m.nombre === emp) : null;
-      miembros.push({ nombre: emp, pago: existing ? existing.pago : '' });
+      // v117: se busca el pago anterior por ID INTERNO (no por texto), así no se pierde al
+      // normalizar un nombre escrito a mano.
+      const existing = colExist ? colExist.miembros.find(m => _mismaPersona(m, emp)) : null;   // v118: fuente unica
+      miembros.push({ nombre: emp, empId: _empId(emp), pago: existing ? existing.pago : '' });
     }
   });
 
@@ -8151,9 +8342,37 @@ function guardarColumna() {
     const f2 = getPDFecha();
     const day2 = getDayData(f2);
     const colExist2 = editColIdx !== null ? day2.columnas[editColIdx] : null;
-    const existingEx = colExist2 ? colExist2.miembros.find(m => m.nombre === ex.nombre) : null;
-    miembros.push({ nombre: ex.nombre, pago: existingEx ? existingEx.pago : '', eventual: true });
+    const _idEx = _empIdDeNombre(ex.nombre);
+    const existingEx = colExist2 ? colExist2.miembros.find(m => _empId(m) === _idEx) : null;
+    // v117: si el ayudante escrito a mano es en realidad un empleado del roster (alias conocido),
+    // se guarda con su NOMBRE CANÓNICO y su id, para que su historial no se parta en dos personas.
+    const _canon = _EMP_CANON[_idEx] || ex.nombre;
+    const _esDePlanta = !!_EMP_CANON[_idEx];
+    miembros.push({ nombre: _canon, empId: _idEx, pago: existingEx ? existingEx.pago : '', eventual: !_esDePlanta });
   });
+
+  // v117 GUARD ANTI-DUPLICADO: una persona NO puede estar en dos equipos el mismo día. El aviso del
+  // modal solo mira lo que había al ABRIRLO (otra computadora pudo agregarlo mientras tanto) y no
+  // cubría a los ayudantes escritos a mano. Este chequeo corre justo ANTES de guardar y compara por
+  // ID interno, así detecta también al mismo empleado escrito de dos formas distintas.
+  {
+    const _fDup = getPDFecha();
+    const _repes = [];
+    const _vistos = new Set();
+    miembros.forEach(m => {
+      const id = _empId(m);
+      if (_vistos.has(id)) { _repes.push(_nombreCorto(m.nombre) + ' (dos veces en este mismo equipo)'); return; }
+      _vistos.add(id);
+      const eq = _equipoDuplicadoDelDia(_fDup, m, editColIdx);
+      if (eq) _repes.push(_nombreCorto(m.nombre) + ' ya está en el equipo ' + eq);
+    });
+    if (_repes.length) {
+      alert('⚠️ No se puede guardar: la misma persona quedaría en dos equipos el mismo día.\n\n· ' +
+            _repes.join('\n· ') +
+            '\n\nQuitala de un equipo, o si son dos personas distintas escribí el nombre completo de cada una.');
+      return;
+    }
+  }
 
   const f = getPDFecha();
   const day = getDayData(f);
@@ -8176,11 +8395,15 @@ function guardarColumna() {
   // método de pago, que ahora entra al cuadre) y reabría un grupo finalizado en silencio.
   if (oldCol && Array.isArray(oldCol.serviciosExtra)) col.serviciosExtra = oldCol.serviciosExtra;
   if (oldCol && oldCol.finalizada) col.finalizada = oldCol.finalizada;
+  col._ts = Date.now();   // v117: sello para el merge por columna entre computadoras
   if (editColIdx !== null) day.columnas[editColIdx] = col;
   else day.columnas.push(col);
 
   savePD();
-  recalcCerramos();  // FIX M4 (2026-05-30): los miembros/pagos del equipo afectan el cierre de caja.
+  // v117: _recalcDesde en vez de recalcCerramos() — los pagos del equipo salen de CAJA CHICA, y si
+  // el equipo se edita en un día PASADO el cierre de los días siguientes quedaba viejo hasta que
+  // alguien los visitaba UNO POR UNO en orden (mismo defecto que v109 arregló para los ajustes).
+  try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} }
   cerrarModalColumna();
   renderPD();
 }
@@ -8194,8 +8417,17 @@ function elimColumna(idx) {
   // Use a simple inline confirmation approach instead of confirm()
   const btn = document.getElementById('elim-btn-' + idx);
   if (btn && btn.dataset.confirming === '1') {
+    // v117: TUMBA de la columna, para que el merge con otra computadora no la resucite.
+    try {
+      if (!day._tombCol) day._tombCol = {};
+      day._tombCol[_claveColumna(day.columnas[idx], idx)] = Date.now();
+    } catch(e) {}
     day.columnas.splice(idx, 1);
     savePD();
+    // v117: faltaba recalcular. Al borrar un equipo desaparecen sus pagos, propinas y comisión
+    // (todos salen de CAJA CHICA) y el cierre quedaba con el valor viejo hasta que alguien
+    // entraba al Cuaderno; si además el día era pasado, los días siguientes tampoco se corregían.
+    try { _recalcDesde(f); } catch(e) { try { recalcCerramos(); } catch(e2){} }
     renderPD();
   } else {
     if (btn) {
@@ -8257,7 +8489,12 @@ function renderCuaderno() {
       const resAsig = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
       // v111: cancelada asignada a un slot = $0 (misma regla que el cuadre y que la pizarra).
       if (resAsig && resAsig.estado === 'cancelado') { contadosIng.add(codigo); return; }
-      const cRes = (resAsig && !contadosIng.has(codigo)) ? (parseFloat(resAsig.costo)||0) : 0;
+      // v118: dedupe COMPLETO del dia. Antes el "ya contado" solo anulaba el costo de la RESERVA:
+      // si el mismo codigo quedaba en dos celdas y ambas traian `costo` propio (dato de versiones
+      // viejas o un merge que resucito una asignacion), el ingreso entraba DOS veces. Una mudanza
+      // vale UNA sola vez por dia, venga el precio de la celda o de la reservacion.
+      if (codigo && contadosIng.has(codigo)) return;
+      const cRes = resAsig ? (parseFloat(resAsig.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosIng.add(codigo);
       const m=col.slots[h]?.metodo||'EFECTIVO';
@@ -8353,7 +8590,12 @@ function renderCuaderno() {
       const resA = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
       // v111: cancelada asignada a un slot = $0 (misma regla que el cuadre y que la pizarra).
       if (resA && resA.estado === 'cancelado') { contadosTI.add(codigo); return; }
-      const cRes = (resA && !contadosTI.has(codigo)) ? (parseFloat(resA.costo)||0) : 0;
+      // v118: dedupe COMPLETO del dia. Antes el "ya contado" solo anulaba el costo de la RESERVA:
+      // si el mismo codigo quedaba en dos celdas y ambas traian `costo` propio (dato de versiones
+      // viejas o un merge que resucito una asignacion), el ingreso entraba DOS veces. Una mudanza
+      // vale UNA sola vez por dia, venga el precio de la celda o de la reservacion.
+      if (codigo && contadosTI.has(codigo)) return;
+      const cRes = resA ? (parseFloat(resA.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosTI.add(codigo);
       totalIngresos += c;
@@ -8382,6 +8624,8 @@ function renderCuaderno() {
   try { renderAuditoriaCostos(); } catch(e) { console.warn('renderAuditoriaCostos:', e); }
   // v108: panel de propinas banco ↔ efectivo (debajo de la auditoría).
   try { renderPropinasBanco(); } catch(e) { console.warn('renderPropinasBanco:', e); }
+  // v117: faltantes y sobrantes de caja (historico auditable).
+  try { renderDescuadres(30); } catch(e) { console.warn('renderDescuadres:', e); }
 }
 
 function getFechaAnterior(f) {
@@ -8396,14 +8640,42 @@ function getFechaSiguiente(f) {
 }
 
 // Valor que un día le HEREDA al siguiente como "abrimos".
-// Si el día quedó CERRADO y tiene CONTEO REAL (arqueo) para esa cuenta, hereda el CONTEO REAL
-// (lo que de verdad hay contado), no el cerramos teórico. Así, al cerrar con descuadre, el día
-// siguiente arranca de la realidad y el descuadre NO se arrastra. Si la cuenta no tiene conteo
-// real, cae al cerramos automático.
-function _valorCierrePropagado(dayObj, c) {
+//
+// REGLA VIGENTE (Pedro, 22-ago-2026 — v119): del 21-ago-2026 en adelante, el día siguiente
+// arranca SIEMPRE con el SALDO TEÓRICO del día anterior (su `cerramos`), esté cerrado o
+// abierto, tenga conteo o no. Los días anteriores se quedan como se cerraron (ver la constante
+// _FECHA_REGLA_TEORICO abajo): reescribir el historial cambiaría libros ya cuadrados.
+// El CONTEO REAL (arqueo) pasó a ser SOLO una herramienta de control: sirve para ver si el
+// dinero cuadra o no cuadra, y NO mueve ni un centavo del cuadre.
+//
+// Qué cambió y por qué importa: hasta la v118, un día cerrado con conteo le pasaba al siguiente
+// el CONTEO REAL. Eso hacía que el descuadre desapareciera de los números (regla de v81, "el
+// descuadre no se arrastra"), pero traía dos problemas: (1) un error de conteo se convertía en
+// el saldo inicial del día siguiente y reaparecía ahí como un faltante fantasma por el mismo
+// monto (fue exactamente el caso del 17 y 18-ago-2026, ±$50.01); y (2) el saldo del programa se
+// "corregía solo" en silencio, así que nadie podía comparar el acumulado teórico contra la
+// realidad. Ahora el teórico corre limpio y la diferencia queda a la vista en el panel de
+// FALTANTES Y SOBRANTES, día por día y acumulada.
+//
+// Consecuencia esperada y buscada: si un día falta o sobra dinero de verdad, esa diferencia
+// sigue apareciendo mientras no se corrija. Para realinear el programa con la realidad hay que
+// editar a mano el ABRIMOS del día (o anotar el gasto/ingreso que faltaba). El programa ya no
+// lo hace por su cuenta.
+//
+// Los días YA CERRADOS no se tocan: recalcCerramos nunca sobrescribe el abrimos de un día
+// cerrado, así que el historial auditado queda igual que como se cerró.
+// DESDE CUANDO rige la regla nueva. Los dias ANTERIORES se quedan como se cerraron en su momento:
+// reescribir hacia atras cambiaria el arranque de ~85 dias del historial (hasta miles de dolares
+// en abril y mayo), y esos libros ya estan cuadrados y auditados. Para aplicar la regla nueva a
+// TODO el historial, poner esta constante en '' (cadena vacia).
+const _FECHA_REGLA_TEORICO = '2026-08-21';
+function _valorCierrePropagado(dayObj, c, fechaDelDia) {
   const cu = dayObj && dayObj.cuentas;
   if (!cu) return '';
-  if (cu.diaCerrado && cu.arqueo && cu.arqueo[c] !== undefined && String(cu.arqueo[c]).trim() !== '') {
+  // Dias viejos (cerrados bajo la regla anterior): siguen pasando el CONTEO REAL, para no
+  // reescribir el historial ya cuadrado.
+  const esViejo = _FECHA_REGLA_TEORICO && typeof fechaDelDia === 'string' && fechaDelDia < _FECHA_REGLA_TEORICO;
+  if (esViejo && cu.diaCerrado && cu.arqueo && cu.arqueo[c] !== undefined && String(cu.arqueo[c]).trim() !== '') {
     return (parseFloat(cu.arqueo[c]) || 0).toFixed(2);
   }
   return (cu.cerramos && cu.cerramos[c] != null) ? String(cu.cerramos[c]) : '';
@@ -8420,8 +8692,8 @@ function renderCuentas(f) {
   if (ayer && ayer.cuentas && ayer.cuentas.cerramos && !day.cuentas.diaCerrado && !(typeof _syncInProgress !== 'undefined' && _syncInProgress)) {
     let cambioAb = false;
     CUENTAS.forEach(c => {
-      // Hereda el CONTEO REAL de ayer si quedó cerrado con arqueo; si no, su cerramos automático.
-      const valCerr = _valorCierrePropagado(ayer, c);
+      // v119: hereda SIEMPRE el saldo TEÓRICO de ayer (su cerramos). El conteo real no propaga.
+      const valCerr = _valorCierrePropagado(ayer, c, fAyer);
       // Solo auto-llenar si abrimos está vacío y el día anterior tiene un valor
       if (valCerr && !day.cuentas.abrimos[c]) {
         day.cuentas.abrimos[c] = valCerr;
@@ -8547,6 +8819,111 @@ function renderCuentas(f) {
   }
 }
 
+// ==================== FALTANTES Y SOBRANTES DE CAJA (v117, 2026-08-19) ====================
+// POR QUE EXISTE: para poder ver, dia por dia y acumulado, cuanto falto o sobro contra lo que
+// dice el programa. Desde la v119 el CONTEO REAL es exactamente eso: una herramienta de control.
+// El saldo teorico corre limpio (el dia siguiente siempre arranca con el cerramos) y esta tabla
+// es donde se ve la diferencia contra la realidad.
+// Esto NO mueve ni un centavo: solo GUARDA la diferencia (teorico vs contado) el dia que se
+// cierra, y la muestra en una tabla. Ninguna formula del cuadre cambia.
+function _difArqueoDia(dayObj) {
+  const cu = dayObj && dayObj.cuentas; if (!cu) return null;
+  const out = { cuentas: {}, total: 0, hay: false };
+  CUENTAS.forEach(c => {
+    const rawArq = cu.arqueo ? cu.arqueo[c] : undefined;
+    if (rawArq === undefined || String(rawArq).trim() === '') return;
+    const teorico = parseFloat(cu.cerramos && cu.cerramos[c]) || 0;
+    const contado = parseFloat(rawArq) || 0;
+    const dif = contado - teorico;
+    out.cuentas[c] = { teorico: teorico, contado: contado, dif: dif };
+    out.total += dif;
+    if (Math.abs(dif) > 0.01) out.hay = true;
+  });
+  return out;
+}
+// Sella la diferencia del dia en los datos (solo al CERRAR). Reversible: al desbloquear se borra.
+function _sellarDifArqueo(day) {
+  const d = _difArqueoDia(day); if (!d) return;
+  day.cuentas._difArqueo = { cuentas: d.cuentas, total: Math.round(d.total * 100) / 100,
+                             por: (typeof _quienSoy === 'function' ? _quienSoy() : ''), en: new Date().toISOString() };
+}
+// Tabla de faltantes/sobrantes de los ultimos N dias (solo lectura).
+function renderDescuadres(dias) {
+  const cont = document.getElementById('descuadres-body'); if (!cont) return;
+  const N = dias || 30;
+  const hoy = getPDFecha() || _hoyISO();
+  const desde = new Date(hoy + 'T12:00:00'); desde.setDate(desde.getDate() - N);
+  const desdeISO = desde.toISOString().slice(0,10);
+  const filas = [];
+  const acum = {};
+  CUENTAS.forEach(c => { acum[c] = 0; });
+  Object.keys(pdData || {}).filter(f => f >= desdeISO && f <= hoy).sort().forEach(f => {
+    const day = pdData[f]; if (!day || !day.cuentas) return;
+    const d = _difArqueoDia(day); if (!d || !d.hay) return;
+    CUENTAS.forEach(c => { if (d.cuentas[c]) acum[c] += d.cuentas[c].dif; });
+    filas.push({ f: f, d: d, cerrado: !!day.cuentas.diaCerrado });
+  });
+  if (!filas.length) {
+    cont.innerHTML = '<div style="padding:10px;font-size:12px;color:var(--gris2);">Sin faltantes ni sobrantes en los ultimos ' + N + ' dias (o falta el conteo real).</div>';
+    return;
+  }
+  // v117: un SOBRANTE de un día seguido de un FALTANTE IGUAL al día siguiente (o al revés) NO es
+  // dinero perdido: es un ERROR DE CONTEO del PRIMER día.
+  // v119: este patrón lo producían los cierres viejos, que le pasaban al día siguiente el CONTEO
+  // REAL — un día contado de más convertía ese sobrante fantasma en el saldo inicial del siguiente
+  // y reaparecía como faltante exacto. Con la regla nueva (siempre el teórico) ya no puede pasar,
+  // pero el detector se conserva porque los días cerrados ANTES del cambio siguen en la tabla.
+  const compensa = {};
+  for (let i = 1; i < filas.length; i++) {
+    const hoyF = filas[i], ayerF = filas[i - 1];
+    if (getFechaSiguiente(ayerF.f) !== hoyF.f) continue;   // solo días CONSECUTIVOS
+    CUENTAS.forEach(c => {
+      const a = ayerF.d.cuentas[c], b = hoyF.d.cuentas[c];
+      if (!a || !b) return;
+      if (Math.abs(a.dif) < 1 || Math.abs(b.dif) < 1) return;
+      if (Math.abs(a.dif + b.dif) > 0.01) return;          // deben anularse EXACTO
+      compensa[hoyF.f + '|' + c] = { con: ayerF.f, monto: Math.abs(a.dif) };
+      compensa[ayerF.f + '|' + c] = { con: hoyF.f, monto: Math.abs(a.dif) };
+    });
+  }
+  const cell = (v, f, c) => {
+    const k = compensa[f + '|' + c];
+    return '<span title="' + (k ? 'Se anula EXACTO con el ' + _fechaCorta(k.con) + ': casi seguro fue un error de conteo, no dinero perdido.' : '') + '" style="font-weight:800;color:' +
+      (k ? '#2563eb' : (Math.abs(v) <= 0.01 ? '#16a34a' : (v < 0 ? '#d42b2b' : '#d97706'))) + ';">' +
+      (v > 0 ? '+' : '') + '$' + v.toFixed(2) + (k ? ' <span style="font-size:9px;font-weight:900;">⇄</span>' : '') + '</span>';
+  };
+  cont.innerHTML =
+    '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+    '<thead><tr style="background:#f8fafc;">' +
+      '<th style="text-align:left;padding:5px 8px;">Dia</th>' +
+      CUENTAS.map(c => '<th style="text-align:right;padding:5px 8px;">' + c + '</th>').join('') +
+      '<th style="text-align:right;padding:5px 8px;">Total</th><th style="padding:5px 8px;"></th></tr></thead><tbody>' +
+    filas.map(r => '<tr style="border-top:1px solid #eef1f6;">' +
+        '<td style="padding:5px 8px;font-weight:700;">' + _fechaCorta(r.f) + '</td>' +
+        CUENTAS.map(c => '<td style="text-align:right;padding:5px 8px;">' + (r.d.cuentas[c] ? cell(r.d.cuentas[c].dif, r.f, c) : '<span style="color:#c4c9d4;">sin contar</span>') + '</td>').join('') +
+        '<td style="text-align:right;padding:5px 8px;">' + cell(r.d.total, '', '') + '</td>' +
+        '<td style="padding:5px 8px;font-size:9px;color:var(--gris2);">' + (r.cerrado ? '&#128274; cerrado' : 'abierto') + '</td></tr>').join('') +
+    '<tr style="border-top:2px solid #1a2236;background:#f8fafc;"><td style="padding:6px 8px;font-weight:900;">ACUMULADO</td>' +
+      CUENTAS.map(c => '<td style="text-align:right;padding:6px 8px;">' + cell(acum[c], '', '') + '</td>').join('') +
+      '<td style="text-align:right;padding:6px 8px;">' + cell(CUENTAS.reduce((t,c)=>t+acum[c],0), '', '') + '</td><td></td></tr>' +
+    '</tbody></table></div>' +
+    (Object.keys(compensa).length
+      ? '<div style="margin:4px 8px;background:#eff6ff;border-left:4px solid #2563eb;border-radius:0 6px 6px 0;padding:7px 10px;font-size:11px;color:#1e40af;font-weight:700;">&#8644; Hay diferencias marcadas en AZUL que se anulan EXACTO entre dos dias seguidos: ' +
+        Object.keys(compensa).filter((k,i,a) => a.indexOf(k) === i).slice(0, 8).map(k => _fechaCorta(k.split('|')[0]) + ' (' + k.split('|')[1] + ')').join(', ') +
+        '. Eso NO es dinero perdido: casi seguro se conto de MAS el primer dia. (Asi funcionaban los cierres hasta el 22-ago-2026: le pasaban al dia siguiente el conteo real, y el sobrante fantasma reaparecia como faltante exacto. Con la regla nueva ya no puede pasar.) Reviza el conteo del primer dia, no busques la plata del segundo.</div>'
+      : '') +
+    // v119: cerrar el dia ya NO cambia el arranque del dia siguiente (siempre va el teorico), asi
+    // que un dia sin cerrar ya no repite su faltante. Lo que si falta es la CONSTANCIA sellada del
+    // descuadre, que solo se escribe al cerrar. Ese es el aviso ahora.
+    (filas.filter(r => !r.cerrado).length
+      ? '<div style="margin:4px 8px;background:#fef9c3;border-left:4px solid #d97706;border-radius:0 6px 6px 0;padding:7px 10px;font-size:11px;color:#854d0e;font-weight:700;">&#9888; ' +
+        filas.filter(r => !r.cerrado).length + ' dia(s) tienen conteo real pero quedaron SIN CERRAR (' +
+        filas.filter(r => !r.cerrado).map(r => _fechaCorta(r.f)).join(', ') +
+        '). El arranque de manana no cambia por eso, pero la diferencia solo queda SELLADA (con quien y cuando) al cerrar el dia. Cerralos para dejar constancia.</div>'
+      : '') +
+    '<div style="font-size:10px;color:var(--gris2);padding:6px 8px;">Negativo = FALTO dinero contra lo que dice el programa. Positivo = SOBRO. Esta tabla no mueve dinero: el CONTEO REAL es solo una herramienta de control. El dia siguiente SIEMPRE arranca con el saldo teorico, asi que una diferencia sigue a la vista hasta que se corrija su causa (anotando el gasto o el ingreso que falto, o editando a mano el ABRIMOS).</div>';
+}
+
 function updateArqueo(f, cuenta, val) {
   const day = getDayData(f);
   // FIX M1 (2026-05-30): defensa extra — no editar arqueo de un día ya cerrado.
@@ -8570,11 +8947,14 @@ function cerrarDia() {
     if (!confirm('¿Desbloquear este día para editar? Los datos podrían alterarse.')) return;
     day.cuentas.diaCerrado = false;
     day.cuentas._reabiertoPor = { por: _quienSoy(), en: new Date().toISOString() };
+    // v117: el sello de faltante/sobrante corresponde al cierre; al reabrir deja de ser valido.
+    delete day.cuentas._difArqueo;
   } else {
     const tieneArqueo = CUENTAS.some(c => day.cuentas.arqueo && day.cuentas.arqueo[c]);
     if (!tieneArqueo) { alert('Ingresa el conteo real antes de cerrar el día.'); return; }
     // FIX P5 (2026-07-09): avisar EXPLÍCITAMENTE qué cuentas quedan SIN contar antes de cerrar.
-    // Una cuenta sin arqueo hereda su valor TEÓRICO (cerramos) al cerrar → puede ocultar un descuadre en silencio.
+    // v119: una cuenta sin contar ya no cambia el arranque de mañana (siempre va el teórico), pero
+    // el día se cierra SIN constancia de si esa cuenta cuadraba o no. Ese es el aviso.
     const _sinContar = CUENTAS.filter(c => !(day.cuentas.arqueo && String(day.cuentas.arqueo[c] || '').trim() !== ''));
     // Asistente de cierre: revisar pendientes antes de bloquear
     let confirmados = 0, sinMarcar = [];
@@ -8608,7 +8988,7 @@ function cerrarDia() {
     if (sinMarcar.length) resumen += `⚠️ ${sinMarcar.length} sin marcar como completado:\n   - ${sinMarcar.slice(0,6).join('\n   - ')}${sinMarcar.length>6?'\n   ...':''}\n`;
     if (linkHoy>0) resumen += `💳 TARJETA $${linkHoy.toFixed(2)} cae mañana en CUSCATLÁN\n`;
     if (pendCobro>0) resumen += `🟡 ${pendCobro} cobro(s) PENDIENTE sin marcar\n`;
-    if (_sinContar.length) resumen += `🔴 CUENTAS SIN CONTAR: ${_sinContar.join(', ')}\n   Se cerrarán con su valor teórico (podría ocultar un descuadre). Si podés, contá esas cuentas antes de cerrar.\n`;
+    if (_sinContar.length) resumen += `🔴 CUENTAS SIN CONTAR: ${_sinContar.join(', ')}\n   El día se cerrará sin saber si esas cuentas cuadraban. Si podés, contálas antes de cerrar.\n`;
     resumen += `\n¿Cerrar el día de todos modos? No podrás editar hasta desbloquear.`;
     if (!confirm(resumen)) return;
     // Refrescar el cerramos ANTES de congelarlo (por si había un recálculo en cola/debounce),
@@ -8616,10 +8996,17 @@ function cerrarDia() {
     try { recalcCerramos(); } catch(e) {}
     day.cuentas.diaCerrado = true;
     day.cuentas._cerradoPor = { por: _quienSoy(), en: new Date().toISOString() }; // v96: registro de quién cerró
+    // v117: dejar CONSTANCIA del faltante/sobrante de este cierre.
+    // v119: el conteo real ya no se propaga, asi que este sello es la unica constancia del
+    // descuadre del dia. No mueve dinero: solo lo deja escrito con quien y cuando.
+    try { _sellarDifArqueo(day); } catch(e) { console.warn('_sellarDifArqueo:', e); }
   }
   savePD();
-  // Propagar al día siguiente: al CERRAR hereda el CONTEO REAL; al DESBLOQUEAR vuelve al cerramos.
-  try { recalcCerramos(); } catch(e) { console.warn('recalcCerramos tras cerrar/desbloquear:', e); }
+  // Propagar al dia siguiente. v119: siempre el cerramos TEORICO (cerrar ya no cambia el arranque
+  // del dia siguiente; lo que hace es SELLAR la diferencia y bloquear la edicion).
+  // v117: _recalcDesde en vez de recalcCerramos() — al DESBLOQUEAR un dia pasado, su cierre vuelve
+  // al teorico y eso cambia el arranque de TODOS los dias siguientes, no solo el de manana.
+  try { _recalcDesde(f); } catch(e) { console.warn('_recalcDesde tras cerrar/desbloquear:', e); }
   renderPD();
   if(pdTabActual==='cuaderno') renderCuaderno();
 }
@@ -8644,8 +9031,10 @@ function updateCuenta(f, tipo, cuenta, val) {
   const total = CUENTAS.reduce((s,c)=>s+(parseFloat(day.cuentas[tipo][c])||0),0);
   const el = document.getElementById(`${tipo}-total`); if(el) el.textContent='$'+total.toFixed(2);
 
-  // Si editamos abrimos, recalcular cerramos automáticamente
-  if (tipo === 'abrimos') recalcCerramos();
+  // Si editamos abrimos, recalcular cerramos automáticamente.
+  // v118: encadenar — corregir el `abrimos` de un dia PASADO cambia su cierre y el de todos los
+  // dias posteriores; antes solo se propagaba UN dia hacia adelante.
+  if (tipo === 'abrimos') { try { _recalcDesde(f); } catch(e) { try { recalcCerramos(f); } catch(e2){} } }
 }
 
 // ============ ANTI-DUPLICADOS DE GASTOS (v113) ============
@@ -9154,7 +9543,12 @@ function confirmarCobroModal() {
   safeSetLS('mt2_reservas', JSON.stringify(reservas));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
   else savePD();
-  recalcCerramos();
+  // v118: el cobro entra en `fechaCobro`, que el usuario ELIGE en el modal y casi nunca es el dia
+  // visible del cuaderno (se cobra desde Notificaciones). `recalcCerramos()` sin argumento
+  // recalculaba el dia VISIBLE: el dinero quedaba guardado pero el `cerramos` de SU dia nunca se
+  // rehacia y el `abrimos` de los dias siguientes quedaba corto hasta que alguien los visitaba
+  // uno por uno EN ORDEN. Mismo defecto que v109 arreglo para los ajustes y v117 para la pizarra.
+  try { _recalcDesde(fechaCobro); } catch(e) { try { recalcCerramos(fechaCobro); } catch(e2){} }
   renderNotificaciones();
   if (pdTabActual === 'cuaderno') renderCuaderno();
   cerrarModalCobro();
@@ -9196,7 +9590,9 @@ function delCobroPendiente(id) {
     day._tomb.cobrosPendientes[id]=Date.now();
     day.cobrosPendientes.splice(i, 1);
     savePD(); safeSetLS('mt2_reservas', JSON.stringify(reservas));
-    recalcCerramos();
+    // v118: encadenar — borrar un cobro de un dia PASADO cambia su cierre y el arranque de todos
+    // los dias siguientes.
+    try { _recalcDesde(f); } catch(e) { try { recalcCerramos(f); } catch(e2){} }
     renderNotificaciones();
     if (pdTabActual === 'cuaderno') renderCuaderno();
   }
@@ -9375,7 +9771,17 @@ function _totalResDiaVigente(f){
 // palabra "propina" (p. ej. "adelanto, ya se le pagó la propina"), inflando el lado del banco con
 // dinero que no es propina y dando un semáforo equivocado.
 function _esPropinaTexto(g){
-  return /propina/i.test(String(g.tipoMod||'')) || /propina/i.test(String(g.titulo||''));
+  if (/propina/i.test(String(g.tipoMod||'')) || /propina/i.test(String(g.titulo||''))) return true;
+  // v117: en la práctica la propina se venía registrando como "Servicio adicional" con el MOTIVO
+  // escrito "PROPINA" (así están las del 17 y 18-ago-2026). Así quedaba fuera del panel de propinas
+  // y era imposible cruzar el efectivo pagado contra lo que entró al banco.
+  // Se acepta SOLO cuando el motivo/desc es EXACTAMENTE la palabra propina (con o sin acentos y
+  // mayúsculas), nunca dentro de una frase: v109 quitó la búsqueda por texto libre justamente
+  // porque una nota como "ya se le pagó la propina" inflaba el lado del banco. Un igual exacto no
+  // tiene ese problema.
+  if (!g.ajuste) return false;
+  const exacto = t => String(t||'').trim().toLowerCase().replace(/s$/,'') === 'propina';
+  return exacto(g.motivo) || exacto(g.desc);
 }
 function _propinasBancoDelDia(f){
   const day = pdData && pdData[f];
@@ -9398,6 +9804,64 @@ function _propinasEfectivoDelDia(f){
   });
   return out;
 }
+// ==================== PROPINAS: ANTI-DUPLICADO Y VERIFICACIÓN (v117, 2026-08-19) ====================
+// REGLA DE NEGOCIO (Pedro, 19-ago-2026):
+//   • La propina se paga al personal EN EFECTIVO  -> es una SALIDA de CAJA CHICA (casilla de la pizarra).
+//   • El cliente la manda por transferencia       -> es una ENTRADA a la cuenta CUSCATLÁN.
+//   • El programa NO agrega solo ese dinero a CUSCATLÁN: lo registra una PERSONA (ajuste de cobro
+//     tipo Propina). Lo que sí hace el programa es exigir CONSTANCIA de que ese dinero se revisó y
+//     entró de verdad a la cuenta, y avisar si la misma propina quedó anotada dos veces.
+//   • NUNCA se debe descontar dos veces de CAJA CHICA (casilla de la pizarra + gasto escrito a mano).
+//
+// Una propina anotada DOS VECES del lado del efectivo saca el doble de CAJA CHICA y descuadra el día;
+// anotada dos veces del lado del banco infla CUSCATLÁN. Estas funciones SOLO DETECTAN Y AVISAN:
+// no borran, no bloquean y no tocan ninguna fórmula del cuadre.
+
+// Gastos escritos a mano que hablan de propina y salen de CAJA CHICA (posible doble descuento).
+function _propinasGastoManualDelDia(f){
+  const day = pdData && pdData[f];
+  const out = [];
+  ((day && day.gastos) || []).forEach(g => {
+    if (!g || g._dupOk) return;
+    const txt = ((g.titulo||'') + ' ' + (g.desc||'')).toLowerCase();
+    if (txt.indexOf('propina') < 0) return;
+    if ((g.fondo || 'CAJA CHICA') !== 'CAJA CHICA') return;
+    out.push({ g: g, monto: parseFloat(g.monto)||0 });
+  });
+  return out;
+}
+// Propinas del BANCO repetidas: mismo código de reservación y mismo monto el mismo día.
+function _propinasBancoRepetidas(f){
+  const banco = _propinasBancoDelDia(f);
+  const vistas = new Map(), reps = [];
+  banco.forEach(it => {
+    const k = (it.g.resCodigo||'') + '|' + it.monto.toFixed(2);
+    if (vistas.has(k)) reps.push(it); else vistas.set(k, it);
+  });
+  return reps;
+}
+// ¿Este ingreso de propina ya fue revisado y confirmado en la cuenta?
+function _propinaVerificada(g){ return !!(g && g._verif && g._verif.en); }
+// Deja CONSTANCIA de que el dinero se revisó y entró a la cuenta. NO mueve ni un centavo.
+function verificarPropinaBanco(fecha, id){
+  const day = pdData && pdData[fecha];
+  const g = ((day && day.otrosIngresos) || []).find(x => x && x._id === id);
+  if (!g) { alert('No se encontró ese ingreso de propina.'); return; }
+  if (_propinaVerificada(g)) {
+    if (!confirm('Esta propina ya está marcada como revisada por ' + (g._verif.por||'?') + '.\n\n¿Quitar la marca?')) return;
+    delete g._verif;
+  } else {
+    const medio = prompt('¿Cómo entró este dinero a la cuenta?\n\nEscribí: TRANSFERENCIA, DEPOSITO, o el medio que corresponda.', 'TRANSFERENCIA');
+    if (medio === null) return;
+    g._verif = { por: _quienSoy(), en: new Date().toISOString(), medio: String(medio).trim().toUpperCase() || 'TRANSFERENCIA' };
+  }
+  g._ts = Date.now();   // viaja con el merge fino como cualquier edición del ítem
+  _ultimaEdicionFinanzas = Date.now();
+  savePD();
+  try { if (g.resCodigo) _logAudit(g.resCodigo, 'ajuste_cobro', (_propinaVerificada(g) ? 'Propina VERIFICADA en cuenta (' + g._verif.medio + ')' : 'Propina: se quitó la marca de verificación') + ' · $' + (parseFloat(g.monto)||0).toFixed(2)); } catch(e){}
+  try { renderPropinasBanco(); } catch(e){}
+}
+
 function renderPropinasBanco(){
   const cont = document.getElementById('propinas-banco-body'); if (!cont) return;
   const f = getPDFecha();
@@ -9419,13 +9883,25 @@ function renderPropinasBanco(){
       (mesBanco||mesEfectivo ? `<div style="font-size:11px;margin-top:4px;">Mes: al banco $${mesBanco.toFixed(2)} · en efectivo $${mesEfectivo.toFixed(2)}</div>` : '') + `</div>`;
     return;
   }
+  // v117: cada propina del banco lleva su CONSTANCIA de revisión (quién, cuándo y por qué medio).
+  const repes = _propinasBancoRepetidas(f);
+  const idsRepes = new Set(repes.map(r => r.g._id));
   const filaBanco = banco.map(it => {
     const cod = it.g.resCodigo ? `<a href="javascript:void(0)" onclick="verRes('${escHtml(it.g.resCodigo)}')" style="color:#6d28d9;font-weight:800;">${escHtml(it.g.resCodigo)}</a>` : '—';
     const quien = escHtml(it.g.resCliente || it.g.titulo || '');
-    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #ede9fe;">
-      <span>${cod} ${quien}${it.metodo==='LINK'?' <span style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 4px;font-weight:800;">TARJETA</span>':''}</span>
-      <strong style="color:#16a34a;">+$${it.monto.toFixed(2)}</strong></div>`;
+    const ver = _propinaVerificada(it.g);
+    const btn = it.g._id
+      ? `<button onclick="verificarPropinaBanco('${f}','${escHtml(it.g._id)}')" title="${ver ? 'Revisada por ' + escHtml(it.g._verif.por||'') + ' el ' + escHtml((it.g._verif.en||'').slice(0,10)) + ' · ' + escHtml(it.g._verif.medio||'') : 'Marcar que este dinero se revisó y entró a la cuenta'}" style="border:none;cursor:pointer;border-radius:10px;padding:1px 7px;font-size:9px;font-weight:800;font-family:'Barlow',sans-serif;background:${ver?'#dcfce7':'#f1f5f9'};color:${ver?'#166534':'#64748b'};">${ver ? '✔ EN CUENTA' : 'sin revisar'}</button>`
+      : '';
+    const avisoRep = idsRepes.has(it.g._id)
+      ? ' <span title="Ya hay otra propina igual (mismo servicio y mismo monto) este día. Revisá que no esté anotada dos veces." style="font-size:9px;font-weight:900;color:#fff;background:#d42b2b;border-radius:8px;padding:0 5px;">⚠ POSIBLE DUPLICADO</span>'
+      : '';
+    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #ede9fe;align-items:center;">
+      <span>${cod} ${quien}${it.metodo==='LINK'?' <span style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 4px;font-weight:800;">TARJETA</span>':''}${avisoRep}</span>
+      <span style="display:flex;align-items:center;gap:6px;">${btn}<strong style="color:#16a34a;">+$${it.monto.toFixed(2)}</strong></span></div>`;
   }).join('');
+  const sinRevisar = banco.filter(it => !_propinaVerificada(it.g));
+  const gastoManual = _propinasGastoManualDelDia(f);
   const filaEfe = efectivo.map(it =>
     `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #fee2e2;">
       <span>🪙 ${escHtml(it.equipo)}</span><strong style="color:#d42b2b;">−$${it.monto.toFixed(2)}</strong></div>`).join('');
@@ -9449,6 +9925,8 @@ function renderPropinasBanco(){
       </div>
     </div>
     <div style="margin-top:10px;">${sem}</div>
+    ${(gastoManual.length && totEfectivo > 0) ? `<div style="margin-top:8px;background:#fee2e2;border-left:4px solid #d42b2b;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#991b1b;font-weight:700;">⚠ POSIBLE PROPINA DESCONTADA DOS VECES de CAJA CHICA: además de las casillas de propina de la pizarra ($${totEfectivo.toFixed(2)}) hay ${gastoManual.length} gasto(s) que dicen "propina" (${gastoManual.map(x=>escHtml(x.g.titulo||'')+' $'+x.monto.toFixed(2)).join(', ')}). Si es el mismo dinero, dejá UNO solo.</div>` : ''}
+    ${sinRevisar.length ? `<div style="margin-top:8px;background:#fef9c3;border-left:4px solid #d97706;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#854d0e;font-weight:700;">🔎 ${sinRevisar.length} propina(s) del banco SIN REVISAR por $${sinRevisar.reduce((t,x)=>t+x.monto,0).toFixed(2)}. Tocá "sin revisar" cuando confirmes que ese dinero entró a la cuenta (transferencia u otro medio). El programa no suma nada por su cuenta: solo deja constancia.</div>` : ''}
     <div style="margin-top:6px;font-size:11px;color:var(--gris2);text-align:right;">Mes ${mes}: al banco $${mesBanco.toFixed(2)} · en efectivo $${mesEfectivo.toFixed(2)}</div>`;
 }
 
@@ -9858,7 +10336,12 @@ function calcIngresosServiciosPorCuenta(day) {
       // FIX F8 (2026-07-02): dedupe GLOBAL del día (antes era por columna). Si el mismo código
       // quedaba asignado por error en DOS equipos, el costo de la reserva entraba dos veces al
       // cierre. Ahora se usa el mismo criterio que la pizarra (updateSlot2: una vez por día).
-      const cRes = (res && !slotCodigos.has(codigo)) ? (parseFloat(res.costo)||0) : 0;
+      // v118: dedupe COMPLETO del dia. Antes el "ya contado" solo anulaba el costo de la RESERVA:
+      // si el mismo codigo quedaba en dos celdas y ambas traian `costo` propio (dato de versiones
+      // viejas o un merge que resucito una asignacion), el ingreso entraba DOS veces. Una mudanza
+      // vale UNA sola vez por dia, venga el precio de la celda o de la reservacion.
+      if (codigo && slotCodigos.has(codigo)) return;
+      const cRes = res ? (parseFloat(res.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;
       if (codigo) { slotCodigos.add(codigo); }
       const m = col.slots[h]?.metodo||'EFECTIVO';
@@ -9995,12 +10478,12 @@ function recalcCerramos(fArg) {
   // Propagar al día siguiente — PERO solo si el día siguiente NO está cerrado.
   // Si recalculamos un día pasado (después de desbloquearlo), sobreescribir el abrimos
   // congelado del día siguiente rompe la cadena financiera histórica de los días posteriores.
-  // CLAVE (pedido de Pedro): si el día quedó CERRADO con CONTEO REAL (arqueo), el día siguiente
-  // hereda el CONTEO REAL (lo que de verdad hay), no el cerramos teórico → el descuadre no se arrastra.
+  // v119 (pedido de Pedro, 22-ago-2026): el día siguiente hereda SIEMPRE el saldo TEÓRICO
+  // (`cerramos`). El CONTEO REAL es solo una herramienta de control y no mueve el cuadre.
   const fManana = getFechaSiguiente(f);
   const manana = getDayData(fManana);
   if (!manana.cuentas?.diaCerrado) {
-    CUENTAS.forEach(c => { manana.cuentas.abrimos[c] = _valorCierrePropagado(day, c); });
+    CUENTAS.forEach(c => { manana.cuentas.abrimos[c] = _valorCierrePropagado(day, c, f); });
     savePD();
   } else {
     console.log('ℹ️ Día siguiente ' + fManana + ' está cerrado — no se propaga para no descuadrar el historial.');
@@ -10016,10 +10499,10 @@ function recalcCerramos(fArg) {
 // al `abrimos` del siguiente, así que tocar el dinero de un día pasado obliga a rehacer la cadena
 // hasta hoy; si no, el saldo del cuaderno de hoy queda corto/largo por ese monto hasta que alguien
 // visita los días uno por uno EN ORDEN. Los días CERRADOS no se recalculan (recalcCerramos los
-// respeta) pero sí propagan su conteo real, igual que siempre. Tope de 120 días por seguridad.
+// respeta) pero sí propagan su cierre teórico al día siguiente. Tope de 120 días por seguridad.
 function _recalcDesde(fecha){
   if (typeof fecha !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return;
-  const hoy = new Date().toISOString().slice(0,10);
+  const hoy = (typeof _hoyISO === 'function') ? _hoyISO() : new Date().toISOString().slice(0,10);  // v118: hora local SV (regla v114/E)
   let f = fecha, n = 0;
   while (n < 120) {
     try { recalcCerramos(f); } catch(e) { console.warn('recalcCerramos('+f+'):', e); break; }
@@ -10400,7 +10883,7 @@ async function descargarReporteDia() {
       <tbody>${Array.from({length: Math.max(propBanco.length, propEfe.length, 1)}).map((_,i) => {
         const b = propBanco[i], e = propEfe[i];
         return `<tr>
-          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${b ? esc((b.g.resCodigo?b.g.resCodigo+' · ':'')+(b.g.resCliente||b.g.titulo||'')) + (b.metodo==='LINK'?' (TARJETA)':'') : ''}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${b ? esc((b.g.resCodigo?b.g.resCodigo+' · ':'')+(b.g.resCliente||b.g.titulo||'')) + (b.metodo==='LINK'?' (TARJETA)':'') + (_propinaVerificada(b.g) ? ' <span style="font-size:7pt;color:#166534;font-weight:800;">✔ EN CUENTA ('+esc(b.g._verif.medio||'')+' · '+esc(b.g._verif.por||'')+')</span>' : ' <span style="font-size:7pt;color:#b45309;font-weight:800;">— sin revisar</span>') : ''}</td>
           <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#16a34a;">${b ? '+$'+b.monto.toFixed(2) : ''}</td>
           <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${e ? esc(e.equipo) : ''}</td>
           <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#d42b2b;">${e ? '−$'+e.monto.toFixed(2) : ''}</td>
@@ -10408,6 +10891,7 @@ async function descargarReporteDia() {
       }).join('')}
       <tr style="background:#f5f3ff;font-weight:900;"><td style="padding:1.2mm 3mm;">TOTAL AL BANCO</td><td style="padding:1.2mm 3mm;text-align:right;color:#16a34a;">$${propTotB.toFixed(2)}</td><td style="padding:1.2mm 3mm;">TOTAL EN EFECTIVO</td><td style="padding:1.2mm 3mm;text-align:right;color:#d42b2b;">$${propTotE.toFixed(2)}</td></tr></tbody>
     </table>
+    <div style="margin-top:1.5mm;font-size:7.5pt;color:#555;font-style:italic;">La propina se paga al personal en EFECTIVO (sale de Caja Chica) y el cliente la transfiere a la cuenta CUSCATLÁN. El programa no suma ese dinero al banco por su cuenta: cada ingreso se marca "EN CUENTA" cuando se revisa y se confirma que llegó.</div>
     <div style="margin-top:1.5mm;font-size:8pt;font-weight:800;color:${Math.abs(propDif)<0.005?'#166534':'#854d0e'};">${Math.abs(propDif)<0.005 ? '✔ CUADRA: el efectivo pagado está respaldado por lo que ingresó a la cuenta bancaria.' : (propDif>0 ? '⚠ Ingresó al banco $'+propDif.toFixed(2)+' más de lo pagado en efectivo.' : '⚠ Se pagó en efectivo $'+Math.abs(propDif).toFixed(2)+' más de lo que ingresó al banco.')}</div>` : '';
 
   const linkPend = parseFloat(cu._linkPendiente)||0;
@@ -10797,7 +11281,12 @@ function renderConciliacion() {
       const resSlot = codigo ? reservas.find(rv=>rv.codigo===codigo) : null;
       // v111: cancelada asignada a un slot = $0 (misma regla que el cuadre y que la pizarra).
       if (resSlot && resSlot.estado === 'cancelado') { contadosConc.add(codigo); return; }
-      const cRes = (resSlot && !contadosConc.has(codigo)) ? (parseFloat(resSlot.costo)||0) : 0;
+      // v118: dedupe COMPLETO del dia. Antes el "ya contado" solo anulaba el costo de la RESERVA:
+      // si el mismo codigo quedaba en dos celdas y ambas traian `costo` propio (dato de versiones
+      // viejas o un merge que resucito una asignacion), el ingreso entraba DOS veces. Una mudanza
+      // vale UNA sola vez por dia, venga el precio de la celda o de la reservacion.
+      if (codigo && contadosConc.has(codigo)) return;
+      const cRes = resSlot ? (parseFloat(resSlot.costo)||0) : 0;
       let c = cSlot > 0 ? cSlot : cRes;  // FIX A1: O celda O reserva, no sumados
       if (codigo) contadosConc.add(codigo);
       if (!c) return;
@@ -11480,7 +11969,7 @@ function renderNotificaciones() {
   const empresasPendientes = []; // sección eliminada: Crédito Fiscal ≠ PENDIENTE automático
 
   // Servicios PASADOS que siguen "confirmado" (no se marcaron completado/cancelado)
-  const _hoyStr = new Date().toISOString().slice(0,10);
+  const _hoyStr = _hoyISO();   // v118: hora local SV (con UTC, despues de las 6 p.m. los servicios de HOY salian como atrasados)
   const pasadosSinCerrar = reservas.filter(r =>
     r.estado === 'confirmado' && r.fecha && r.fecha < _hoyStr
   ).sort((a,b)=> new Date(a.fecha)-new Date(b.fecha));
