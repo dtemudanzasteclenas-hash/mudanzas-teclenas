@@ -919,12 +919,13 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 
     <!-- ===== COMISIÓN POR RESERVACIONES DIARIAS (v122) ===== -->
     <!-- Mismo conteo que imprime el Reporte del Día: no es un panel aparte, lee las MISMAS
-         funciones (_reservasCompletadasPorVendedorDia + _textoComisionDiaria). Solo informa:
-         no registra pagos, gastos ni movimientos de ninguna cuenta. -->
+         funciones (_reservasCompletadasPorVendedorDia + _textoComisionDiaria).
+         v123: además se puede marcar la comisión como ENTREGADA, y eso SÍ registra un gasto
+         del día en la cuenta elegida (ver pagarComisionDiaria). -->
     <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #16a34a;overflow:hidden;">
       <div style="background:#15803d;color:#fff;padding:11px 16px;">
         <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;" title="Servicios completados de este día, contados por el vendedor que ingresó la reservación.">💵 COMISIÓN POR RESERVACIONES DIARIAS</span>
-        <div style="font-size:10px;opacity:.85;margin-top:2px;">Servicios completados de este día, por el vendedor que ingresó la reservación. Es el mismo conteo que sale impreso en el Reporte del Día. Solo informa: el pago no queda registrado en el programa.</div>
+        <div style="font-size:10px;opacity:.85;margin-top:2px;">Servicios completados de este día, por el vendedor que ingresó la reservación. Es el mismo conteo que sale impreso en el Reporte del Día. Al marcar “Entregada” se registra el pago como gasto del día, de la cuenta que elijas.</div>
       </div>
       <div id="comision-diaria-body" style="padding:12px 16px;font-size:12px;"></div>
     </div>
@@ -2732,7 +2733,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-01-v123';
+const APP_VERSION = '2026-09-02-v124';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -9300,6 +9301,9 @@ function delGasto(id) {
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   renderGastos(); renderStats2(f);
+  // v124: si la fila borrada era la de una comisión diaria, el panel de arriba quedaba
+  // mostrando "ENTREGADA" con el gasto ya borrado, y su botón "Deshacer" no hacía nada.
+  try { renderComisionDiaria(); } catch (e) {}
   _programarSyncFinanzas();
 }
 
@@ -10129,9 +10133,19 @@ function verificarPropinaBanco(fecha, id){
 
 // Escapes para meter un nombre dentro de un onclick='...' y de un id="...". Los nombres
 // salen de USUARIOS (fijos), pero se escapan igual: nada entra crudo al HTML.
-function _jsStr(v) { return String(v == null ? '' : v).replace(/['\\]/g, '\\$&'); }
+// v124: también se escapa la comilla doble — el texto va dentro de onclick="...", así que
+// una comilla doble en un nombre partiría el atributo en dos.
+function _jsStr(v) { return String(v == null ? '' : v).replace(/['\\]/g, '\\$&').replace(/"/g, '&quot;'); }
 function _idSeguro(v) { return String(v == null ? '' : v).replace(/[^A-Za-z0-9_-]/g, '_'); }
 const _CUENTAS_COMISION_DIARIA = ['CAJA CHICA', 'CUSCATLAN'];
+
+// ⚠️ v124 — EL id ES DETERMINISTA A PROPÓSITO (no uses _itemId() acá).
+// Con un id al azar, dos computadoras que marcaran la MISMA comisión del MISMO día antes de
+// sincronizar generaban dos ids distintos, y el merge fino (que une por _id) conservaba las
+// DOS filas: la comisión salía pagada dos veces, en silencio, y "Deshacer" borraba solo una.
+// Con este id las dos máquinas escriben la MISMA fila: el merge se queda con la más nueva y
+// la tumba del "Deshacer" borra la misma en todas. Un vendedor, un día, una sola fila.
+function _idComisionDiaria(f, vendedor) { return 'comdia-' + f + '-' + _idSeguro(vendedor); }
 
 // El gasto que registra la comisión de ESE vendedor en ESE día (o null si no se ha pagado).
 function _gastoComisionDiaria(day, vendedor) {
@@ -10150,13 +10164,19 @@ function pagarComisionDiaria(vendedor, fondo) {
   if (_gastoComisionDiaria(day, vendedor)) { alert('La comisión de ' + vendedor + ' ya está registrada como entregada este día.'); return; }
   const cuenta = _CUENTAS_COMISION_DIARIA.includes(fondo) ? fondo : 'CAJA CHICA';
   const monto = n * 1;
+  // v124: los días ANTERIORES al 01/09/2026 se pagaban en el cierre del mes. Registrar acá una
+  // entrega de esos días es pagar dos veces lo mismo, así que se avisa fuerte antes de seguir.
+  const antesDelCorte = !_esMesComisionDiaria(Number((f || '').slice(5, 7)), Number((f || '').slice(0, 4)));
+  if (antesDelCorte && !confirm('⚠️ CUIDADO: el ' + f + ' es ANTERIOR al ' + FECHA_INICIO_COMISION_DIARIA + '.\n\n'
+      + 'Las comisiones de esos días se pagaban en el CIERRE DEL MES. Si la registrás acá, es muy '
+      + 'probable que estés pagando dos veces lo mismo.\n\n¿Aun así querés registrarla?')) return;
   if (!confirm('¿Entregar la comisión de ' + vendedor + '?\n\n'
       + n + ' reservación(es) x $1 = $' + monto.toFixed(2) + '\n'
       + 'Sale de: ' + cuenta + '\n\n'
       + 'Se registra como un gasto del día ' + f + '.')) return;
   if (!Array.isArray(day.gastos)) day.gastos = [];
   day.gastos.push({
-    _id: _itemId(), _ts: Date.now(),
+    _id: _idComisionDiaria(f, vendedor), _ts: Date.now(),
     monto: monto.toFixed(2),
     titulo: 'Comisión diaria — ' + vendedor,
     desc: n + ' reservación(es) x $1 · entregada por ' + _quienSoy(),
@@ -10183,7 +10203,14 @@ function anularComisionDiaria(vendedor) {
   if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
   const f = getPDFecha(); const day = getDayData(f);
   const g = _gastoComisionDiaria(day, vendedor);
-  if (!g) return;
+  // v124: si el gasto ya no está (lo borraron desde la lista de gastos y el panel quedó viejo),
+  // antes esto no hacía NADA y el botón parecía roto. Ahora se avisa y se repinta.
+  if (!g) {
+    alert('La comisión de ' + vendedor + ' ya no está registrada como entregada este día.\n\n'
+      + '(Es probable que el gasto se haya borrado desde la lista de GASTOS.)');
+    try { renderComisionDiaria(); } catch (e) {}
+    return;
+  }
   if (!confirm('¿Marcar la comisión de ' + vendedor + ' como NO entregada?\n\n'
       + 'Se borra el gasto de $' + (parseFloat(g.monto) || 0).toFixed(2)
       + ' (' + (g.fondo || 'CAJA CHICA') + ') y el dinero vuelve al cuadre.')) return;
@@ -10196,10 +10223,37 @@ function anularComisionDiaria(vendedor) {
   _ultimaEdicionFinanzas = Date.now();
   try { _recalcDesde(f); } catch (e) { console.warn('_recalcDesde (comision diaria):', e); }
   try { renderCuaderno(); } catch (e) { console.warn('renderCuaderno (comision diaria):', e); }
-  // renderCuaderno NO repinta la lista de gastos dentro de la ventana de gracia de 12 s
-  // (_editandoFinanzasReciente), que existe para no destruir lo que alguien esta tecleando.
-  // Aca no hay nadie tecleando: fue un clic. Sin esto, el gasto quedaba guardado pero INVISIBLE
-  // hasta que pasaran los 12 s. Mismo patron que usan addGasto y delGasto.
+  try { renderGastos(); renderStats2(f); } catch (e) { console.warn('renderGastos (comision diaria):', e); }
+  _programarSyncFinanzas();
+}
+
+// v124: pone el gasto al día cuando el conteo cambió DESPUÉS de haberla entregado (se completó
+// otro servicio, o se descompletó uno). No inventa nada: recalcula el conteo y reescribe el
+// monto de esa misma fila, sin tocar la cuenta de la que salió.
+function ajustarComisionDiaria(vendedor) {
+  if (isDiaCerrado()) { alert('Día cerrado. Desbloquea para editar.'); return; }
+  const f = getPDFecha(); const day = getDayData(f);
+  const g = _gastoComisionDiaria(day, vendedor);
+  if (!g) { try { renderComisionDiaria(); } catch (e) {} return; }
+  const d = _reservasCompletadasPorVendedorDia(f);
+  const n = (d.conteo && d.conteo[vendedor] != null) ? d.conteo[vendedor] : 0;
+  const viejo = parseFloat(g.monto) || 0;
+  if (Math.abs(viejo - n) < 0.005) return;
+  if (n <= 0) {
+    alert(vendedor + ' ya no tiene servicios completados este día.\n\nUsá "Deshacer" para quitar la entrega.');
+    return;
+  }
+  if (!confirm('¿Corregir la comisión de ' + vendedor + '?\n\n'
+      + 'Entregado: $' + viejo.toFixed(2) + '\n'
+      + 'Corresponde ahora: $' + n.toFixed(2) + ' (' + n + ' reservación(es) x $1)\n\n'
+      + 'Sale de: ' + (g.fondo || 'CAJA CHICA'))) return;
+  g.monto = n.toFixed(2);
+  g.desc = n + ' reservación(es) x $1 · entregada por ' + _quienSoy() + ' · corregida el ' + _hoyISO();
+  g._ts = Date.now();
+  savePDLocal();
+  _ultimaEdicionFinanzas = Date.now();
+  try { _recalcDesde(f); } catch (e) { console.warn('_recalcDesde (comision diaria):', e); }
+  try { renderCuaderno(); } catch (e) { console.warn('renderCuaderno (comision diaria):', e); }
   try { renderGastos(); renderStats2(f); } catch (e) { console.warn('renderGastos (comision diaria):', e); }
   _programarSyncFinanzas();
 }
@@ -10214,6 +10268,7 @@ function renderComisionDiaria(){
   const d = _reservasCompletadasPorVendedorDia(f);
   const day = getDayData(f);
   const cerrado = !!(day.cuentas && day.cuentas.diaCerrado);
+  const rigeDiaria = _esMesComisionDiaria(Number((f || '').slice(5, 7)), Number((f || '').slice(0, 4)));
   const colores = { Pedro:'#1e4fa0', Fabio:'#16a34a', Roberto:'#d97706', Luis:'#7c3aed' };
   // La línea sale del formateador único; acá solo se le dice cómo pintar cada nombre.
   const linea = _textoComisionDiaria(d,
@@ -10229,11 +10284,20 @@ function renderComisionDiaria(){
     const idv = _idSeguro(v);
     let pie;
     if (g) {
-      pie = `<div style="margin-top:8px;background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:6px 8px;">
-        <div style="font-size:11px;font-weight:800;color:#15803d;">✔ ENTREGADA · $${(parseFloat(g.monto)||0).toFixed(2)}</div>
-        <div style="font-size:10px;color:#166534;">de ${escHtml(g.fondo || 'CAJA CHICA')}</div>
+      // v124: el monto quedó CONGELADO en el momento de entregarla. Si después se completó otro
+      // servicio (o se descompletó uno, o alguien editó el gasto a mano), el número de arriba y
+      // el de abajo dejan de coincidir y hay que decirlo: antes el panel mostraba "4 servicios"
+      // y "$3.00" tan tranquilo, y ese dólar no se lo reclamaba nadie.
+      const pagado = parseFloat(g.monto) || 0;
+      const descuadre = Math.abs(pagado - n) >= 0.005;
+      pie = `<div style="margin-top:8px;background:${descuadre?'#fef9c3':'#dcfce7'};border:1px solid ${descuadre?'#fde047':'#86efac'};border-radius:6px;padding:6px 8px;">
+        <div style="font-size:11px;font-weight:800;color:${descuadre?'#a16207':'#15803d'};">✔ ENTREGADA · $${pagado.toFixed(2)}</div>
+        <div style="font-size:10px;color:${descuadre?'#854d0e':'#166534'};">de ${escHtml(g.fondo || 'CAJA CHICA')}</div>
+        ${descuadre ? `<div style="font-size:10px;font-weight:800;color:#a16207;margin-top:3px;line-height:1.4;">⚠ Hoy corresponden $${n.toFixed(2)}: ${pagado < n ? 'faltan $' + (n - pagado).toFixed(2) : 'sobran $' + (pagado - n).toFixed(2)}.</div>
+        <button onclick="ajustarComisionDiaria('${_jsStr(v)}')" ${dis} title="Poner el gasto en el monto que corresponde ahora."
+          style="margin-top:4px;background:#a16207;border:none;border-radius:5px;padding:3px 8px;font-size:10px;font-weight:800;color:#fff;cursor:${cur};font-family:'Barlow',sans-serif;">Corregir a $${n.toFixed(2)}</button>` : ''}
         <button onclick="anularComisionDiaria('${_jsStr(v)}')" ${dis} title="Marcar como NO entregada: borra el gasto y el dinero vuelve al cuadre."
-          style="margin-top:5px;background:#fff;border:1px solid #86efac;border-radius:5px;padding:3px 8px;font-size:10px;font-weight:700;color:#15803d;cursor:${cur};font-family:'Barlow',sans-serif;">↩ Deshacer</button>
+          style="margin-top:5px;margin-left:${descuadre?'5px':'0'};background:#fff;border:1px solid ${descuadre?'#fde047':'#86efac'};border-radius:5px;padding:3px 8px;font-size:10px;font-weight:700;color:${descuadre?'#a16207':'#15803d'};cursor:${cur};font-family:'Barlow',sans-serif;">↩ Deshacer</button>
       </div>`;
     } else if (n > 0) {
       pie = `<div style="margin-top:8px;display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
@@ -10242,8 +10306,8 @@ function renderComisionDiaria(){
           ${_CUENTAS_COMISION_DIARIA.map(fd => `<option value="${fd}">${fd}</option>`).join('')}
         </select>
         <button onclick="pagarComisionDiaria('${_jsStr(v)}', (document.getElementById('com-fondo-${idv}')||{}).value)" ${dis}
-          title="Registrar que ya se le entregó la comisión. Queda como gasto del día."
-          style="background:#16a34a;color:#fff;border:none;border-radius:5px;padding:4px 9px;font-size:10px;font-weight:800;cursor:${cur};font-family:'Barlow',sans-serif;">✔ Entregada $${n.toFixed(2)}</button>
+          title="${rigeDiaria ? 'Registrar que ya se le entregó la comisión. Queda como gasto del día.' : 'Este día es anterior al 01/09/2026: su comisión se pagaba en el cierre del mes.'}"
+          style="background:${rigeDiaria?'#16a34a':'#9ca3af'};color:#fff;border:none;border-radius:5px;padding:4px 9px;font-size:10px;font-weight:800;cursor:${cur};font-family:'Barlow',sans-serif;">✔ Entregada $${n.toFixed(2)}</button>
       </div>`;
     } else {
       pie = '<div style="margin-top:8px;font-size:10px;color:var(--gris2);font-style:italic;">Sin comisión que entregar.</div>';
@@ -10263,9 +10327,9 @@ function renderComisionDiaria(){
     ${cerrado ? '<div style="margin-top:8px;font-size:11px;color:#b91c1c;font-weight:700;">Día cerrado: para registrar una entrega hay que desbloquearlo.</div>' : ''}
     ${d.sinVendedor > 0 ? `<div style="margin-top:8px;font-size:12px;font-weight:800;color:#b91c1c;">ADVERTENCIA: EXISTEN ${d.sinVendedor} SERVICIOS COMPLETADOS SIN VENDEDOR IDENTIFICADO.</div>` : ''}
     ${d.pendientes > 0 ? `<div style="margin-top:8px;font-size:12px;font-weight:800;color:#a16207;">CONTEO PARCIAL: EXISTEN ${d.pendientes} SERVICIOS TODAVÍA NO COMPLETADOS.</div>` : ''}
-    <div style="margin-top:8px;font-size:11px;color:var(--gris2);font-style:italic;">${_esMesComisionDiaria(Number((f||'').slice(5,7)), Number((f||'').slice(0,4)))
+    <div style="margin-top:8px;font-size:11px;color:var(--gris2);font-style:italic;">${rigeDiaria
       ? 'Desde el 01/09/2026 esta comisión se paga el mismo día con el Reporte del Día. No volver a pagarla en el cierre del mes.'
-      : 'Este día es anterior al 01/09/2026: su comisión se pagaba en el cierre del mes. El conteo se muestra solo como referencia.'}</div>`;
+      : '⚠ Este día es anterior al 01/09/2026: su comisión ya se pagaba en el CIERRE DEL MES. Registrar una entrega acá sería pagar dos veces.'}</div>`;
 }
 
 function renderPropinasBanco(){
@@ -11216,6 +11280,15 @@ async function descargarReporteDia() {
   // información operativa de los servicios recién listados, no una fila de dinero.
   // No registra ningún pago: Pedro paga con este papel en la mano.
   const _comDia = _reservasCompletadasPorVendedorDia(f);
+  // v124: el papel con el que se paga tiene que decir a quién YA se le entregó y de qué cuenta
+  // salió. Sin esto, un reporte reimpreso no distingue lo pagado de lo pendiente y se corre el
+  // riesgo de entregar dos veces. Sale del MISMO gasto que pinta el panel del cuaderno.
+  const _entregas = _comDia.orden.map(v => ({ v, g: _gastoComisionDiaria(day, v), n: _comDia.conteo[v] || 0 }));
+  const _hayEntregas = _entregas.some(e => e.g);
+  const _estadoEntregaHtml = _hayEntregas
+    ? `<div style="font-size:7.5pt;color:#111;margin-top:1mm;">Entregadas: ${_entregas.filter(e => e.g).map(e =>
+        `<b>${esc(e.v.toUpperCase())}</b> ${(parseFloat(e.g.monto)||0).toFixed(2)} (${esc(e.g.fondo || 'CAJA CHICA')})`).join(' · ')}${_entregas.some(e => !e.g && e.n > 0) ? ` &nbsp;|&nbsp; Pendientes: ${_entregas.filter(e => !e.g && e.n > 0).map(e => esc(e.v.toUpperCase())).join(', ')}` : ''}</div>`
+    : '<div style="font-size:7.5pt;color:#555;margin-top:1mm;font-style:italic;">Todavía no se registró ninguna entrega de estas comisiones.</div>';
   const _comDiaColores = { Pedro:'#1e4fa0', Fabio:'#16a34a', Roberto:'#d97706', Luis:'#7c3aed' };
   const comDiariaHtml = `
     <div style="page-break-inside:avoid;margin:5mm 0 2mm;">
@@ -11225,7 +11298,8 @@ async function descargarReporteDia() {
           (v, n) => `<span style="color:${_comDiaColores[v] || '#111'};">${esc(v.toUpperCase())} ${n}</span>`,
           ' <span style="color:#888;">-</span> ')}
       </div>
-      <div style="font-size:7.5pt;color:#555;margin-top:1mm;font-style:italic;">Servicios completados hoy, por el vendedor que ingresó la reservación. Solo el conteo — el pago no queda registrado en el programa.</div>
+      <div style="font-size:7.5pt;color:#555;margin-top:1mm;font-style:italic;">Servicios completados hoy, por el vendedor que ingresó la reservación.</div>
+      ${_estadoEntregaHtml}
       ${_comDia.sinVendedor > 0 ? `<div style="font-size:8.5pt;font-weight:800;color:#b91c1c;margin-top:1.5mm;">ADVERTENCIA: EXISTEN ${_comDia.sinVendedor} SERVICIOS COMPLETADOS SIN VENDEDOR IDENTIFICADO.</div>` : ''}
       ${_comDia.pendientes > 0 ? `<div style="font-size:8.5pt;font-weight:800;color:#a16207;margin-top:1.5mm;">CONTEO PARCIAL: EXISTEN ${_comDia.pendientes} SERVICIOS TODAVÍA NO COMPLETADOS.</div>` : ''}
     </div>`;
