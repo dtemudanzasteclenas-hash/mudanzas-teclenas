@@ -917,6 +917,18 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       </div>
     </div>
 
+    <!-- ===== COMISIÓN POR RESERVACIONES DIARIAS (v122) ===== -->
+    <!-- Mismo conteo que imprime el Reporte del Día: no es un panel aparte, lee las MISMAS
+         funciones (_reservasCompletadasPorVendedorDia + _textoComisionDiaria). Solo informa:
+         no registra pagos, gastos ni movimientos de ninguna cuenta. -->
+    <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #16a34a;overflow:hidden;">
+      <div style="background:#15803d;color:#fff;padding:11px 16px;">
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;" title="Servicios completados de este día, contados por el vendedor que ingresó la reservación.">💵 COMISIÓN POR RESERVACIONES DIARIAS</span>
+        <div style="font-size:10px;opacity:.85;margin-top:2px;">Servicios completados de este día, por el vendedor que ingresó la reservación. Es el mismo conteo que sale impreso en el Reporte del Día. Solo informa: el pago no queda registrado en el programa.</div>
+      </div>
+      <div id="comision-diaria-body" style="padding:12px 16px;font-size:12px;"></div>
+    </div>
+
     <!-- ===== PANEL DE AUDITORÍA DE MODIFICACIONES DE COSTO (v102, CAMBIO 1) ===== -->
     <div style="margin-top:20px;background:#fff;border-radius:10px;border:1.5px solid #0891b2;overflow:hidden;">
       <div style="background:#0e7490;color:#fff;padding:11px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
@@ -2720,7 +2732,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-01-v121';
+const APP_VERSION = '2026-09-01-v122';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -8637,6 +8649,8 @@ function renderCuaderno() {
   try { renderPropinasBanco(); } catch(e) { console.warn('renderPropinasBanco:', e); }
   // v117: faltantes y sobrantes de caja (historico auditable).
   try { renderDescuadres(30); } catch(e) { console.warn('renderDescuadres:', e); }
+  // v122: conteo de comisión diaria (el mismo del Reporte del Día).
+  try { renderComisionDiaria(); } catch(e) { console.warn('renderComisionDiaria:', e); }
 }
 
 function getFechaAnterior(f) {
@@ -10099,6 +10113,37 @@ function verificarPropinaBanco(fecha, id){
   try { renderPropinasBanco(); } catch(e){}
 }
 
+// v122: el MISMO conteo que imprime el Reporte del Día, ahora también en pantalla (debajo de
+// CUENTAS). No hay lógica nueva: reusa _reservasCompletadasPorVendedorDia (el cálculo) y
+// _textoComisionDiaria (el formato), así el papel y la pantalla no pueden decir cosas distintas.
+// SOLO LEE: no toca reservaciones, caja, ni ninguna cuenta.
+function renderComisionDiaria(){
+  const cont = document.getElementById('comision-diaria-body'); if (!cont) return;
+  const f = getPDFecha();
+  const d = _reservasCompletadasPorVendedorDia(f);
+  const colores = { Pedro:'#1e4fa0', Fabio:'#16a34a', Roberto:'#d97706', Luis:'#7c3aed' };
+  // La línea sale del formateador único; acá solo se le dice cómo pintar cada nombre.
+  const linea = _textoComisionDiaria(d,
+    (v, n) => `<span style="color:${colores[v] || '#111'};font-weight:800;">${escHtml(v.toUpperCase())} ${n}</span>`,
+    ' <span style="color:#999;">-</span> ');
+  const tarjetas = d.orden.map(v => {
+    const n = d.conteo[v] || 0; const c = colores[v] || '#1a3a6b';
+    return `<div style="background:#f8fafc;border-radius:8px;border-left:4px solid ${c};padding:10px 12px;">
+      <div style="font-size:10px;font-weight:700;color:var(--gris2);text-transform:uppercase;letter-spacing:.05em;">👤 ${escHtml(v)}</div>
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:800;color:${c};line-height:1.1;">${n}</div>
+      <div style="font-size:11px;color:var(--gris2);">servicio${n === 1 ? '' : 's'} completado${n === 1 ? '' : 's'}</div>
+    </div>`;
+  }).join('');
+  cont.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">${tarjetas}</div>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.6;">${linea}</div>
+    ${d.sinVendedor > 0 ? `<div style="margin-top:8px;font-size:12px;font-weight:800;color:#b91c1c;">ADVERTENCIA: EXISTEN ${d.sinVendedor} SERVICIOS COMPLETADOS SIN VENDEDOR IDENTIFICADO.</div>` : ''}
+    ${d.pendientes > 0 ? `<div style="margin-top:8px;font-size:12px;font-weight:800;color:#a16207;">CONTEO PARCIAL: EXISTEN ${d.pendientes} SERVICIOS TODAVÍA NO COMPLETADOS.</div>` : ''}
+    <div style="margin-top:8px;font-size:11px;color:var(--gris2);font-style:italic;">${_esMesComisionDiaria(Number((f||'').slice(5,7)), Number((f||'').slice(0,4)))
+      ? 'Desde el 01/09/2026 esta comisión se paga el mismo día con el Reporte del Día. No volver a pagarla en el cierre del mes.'
+      : 'Este día es anterior al 01/09/2026: su comisión se pagaba en el cierre del mes. El conteo se muestra solo como referencia.'}</div>`;
+}
+
 function renderPropinasBanco(){
   const cont = document.getElementById('propinas-banco-body'); if (!cont) return;
   const f = getPDFecha();
@@ -10175,6 +10220,7 @@ function _refrescarMarcasCosto(){
   try { if (typeof renderPD === 'function') renderPD(); } catch(e){ console.warn('renderPD (marcas costo):', e); }
   try { renderAuditoriaCostos(); } catch(e){}
   try { renderPropinasBanco(); } catch(e){}
+  try { renderComisionDiaria(); } catch(e){}
 }
 // Versión con debounce: para cuando el usuario está tipeando el monto de un ajuste en la lista
 // de otros ingresos (no re-renderizar en cada tecla).
