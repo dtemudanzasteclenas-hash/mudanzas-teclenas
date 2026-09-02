@@ -1070,6 +1070,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   <div class="card" style="margin-bottom:22px;border:2px solid #16a34a;">
     <div class="card-head"><h3>💵 Pago de comisiones — $1 por reservación ingresada</h3></div>
     <p style="font-size:12px;color:var(--gris2);margin:2px 0 14px;">Cuenta las reservaciones que cada quien <strong>ingresó al programa</strong> en el mes elegido. No cuenta las <strong>canceladas</strong>. Si dos tienen la misma información, solo cuenta para <strong>quien la ingresó primero</strong>.</p>
+    <div id="com-aviso-diaria"></div>
     <div id="com-pago1" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;"></div>
   </div>
 
@@ -2719,7 +2720,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-08-22-v119';
+const APP_VERSION = '2026-09-01-v121';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3576,7 +3577,10 @@ const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', react
   // v102 (2026-07-17): ajuste de cobro (cargo/descuento aparte, sin tocar el costo original).
   ajuste_cobro:'💵 Ajuste de cobro',
   // v104/v107: anulación/reactivación de ajustes y migración de ajustes al mover la fecha del servicio.
-  ajuste_anulado:'🚫 Ajuste invalidado', ajuste_reactivado:'↩️ Ajuste reactivado', ajuste_movido:'📅 Ajustes movidos con el servicio' };
+  ajuste_anulado:'🚫 Ajuste invalidado', ajuste_reactivado:'↩️ Ajuste reactivado', ajuste_movido:'📅 Ajustes movidos con el servicio',
+  // v120 (2026-08-22): edicion A MANO de un ajuste desde OTROS INGRESOS (importe o metodo).
+  // Cambiar el metodo MUEVE el dinero de bolsa (EFECTIVO <-> BANCO) y hasta v119 no dejaba NINGUN rastro.
+  ajuste_editado:'✏️ Ajuste editado a mano' };
 // Recorta valores largos (direcciones/obs) para que la bitácora no crezca sin control.
 function _auditTrunc(s) { s = String(s == null ? '' : s).trim(); return s ? (s.length > 45 ? s.slice(0, 45) + '…' : s) : '—'; }
 function _fmtAuditFechaHora(iso) {
@@ -7107,7 +7111,14 @@ function _programarSyncFinanzas() {
   if (typeof _pendingAppData !== 'undefined') _pendingAppData.add('mt_pd3');
   _finanzasSyncTimer = setTimeout(() => {
     try { syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('sync finanzas:', e); }
-    try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+    // v120: ENCADENAR. Antes esto era recalcCerramos() (dia visible + propagar UNO solo): corregir
+    // un gasto / otro ingreso / movimiento de un dia PASADO dejaba viejo el arranque de todos los
+    // dias siguientes hasta que alguien los visitaba uno por uno EN ORDEN. Es el mismo defecto que
+    // v109 arreglo para los ajustes, v117 para la pizarra y v118 para los cobros; los gastos y otros
+    // ingresos eran el ultimo caso abierto. Con el dia de HOY es una sola vuelta (sin costo).
+    try { if (typeof _recalcDesde === 'function') _recalcDesde(getPDFecha()); else if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+    // v120: subir al instante el rastro de una edicion a mano de un ajuste que quedo pendiente.
+    try { if (typeof _flushEdicionesAjuste === 'function') _flushEdicionesAjuste(); } catch(e) {}
     try { if (typeof buildTitulosDatalist === 'function') buildTitulosDatalist(); } catch(e) {}
     // v113: recalcular los avisos de gasto repetido cuando el usuario deja de escribir
     // (solo repinta bordes/renglón de aviso: NO re-renderiza la lista, REGLA 8.2).
@@ -9313,12 +9324,18 @@ function renderOtrosIngresos() {
       const anul = !!g.anulado;
       const badgeAnul = anul ? `<span title="Modificación invalidada${g.anuladoPor?' por '+escHtml(g.anuladoPor):''}. Reactivala desde la tabla de auditoría." style="display:inline-block;background:#fee2e2;color:#b91c1c;border:1px solid #d42b2b;border-radius:4px;font-size:9px;font-weight:800;padding:0 4px;margin-left:4px;">🚫 ANULADA</span>` : '';
       const roAnul = anul ? 'readonly title="Modificación anulada — reactivala desde la auditoría"' : '';
+      // v120: si a un AJUSTE le cambiaron el metodo a mano despues de registrarlo, el dinero se mudo
+      // de bolsa (efectivo <-> banco). Se avisa en la fila hasta que vuelva a su metodo original.
+      const _metReg = _metodoRegistroAjuste(g);
+      const badgeMet = (_metReg && _metReg !== metodoLabel(metSel))
+        ? '<span title="Se registró como ' + escHtml(_metReg) + ' y despues se cambió a ' + escHtml(metodoLabel(metSel)) + '. El dinero cambió de cuenta: revisá que el dinero esté donde dice." style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #d97706;border-radius:4px;font-size:9px;font-weight:800;padding:0 4px;margin-left:4px;">✏️ MÉTODO CAMBIADO: ' + escHtml(_metReg) + ' → ' + escHtml(metodoLabel(metSel)) + '</span>'
+        : '';
       return `
       <div style="display:grid;grid-template-columns:80px 1fr 1fr 100px 28px;gap:6px;align-items:center;margin-bottom:6px;${anul?'opacity:.7;':''}">
         <input type="number" value="${g.monto}" placeholder="0.00" step="0.01" oninput="updateOtroIngreso('${g._id}','monto',this.value)" ${roAnul} ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-weight:700;font-family:'Barlow',sans-serif;outline:none;color:${(parseFloat(g.monto)||0)<0?'#d42b2b':'#16a34a'};${anul?'background:#f8fafc;':''}">
         <div style="min-width:0;"><input type="text" value="${escHtml(g.titulo)}" placeholder="Ej: Venta cajas" list="dl-titulos-ingresos" oninput="updateOtroIngreso('${g._id}','titulo',this.value)" ${g.ajuste?'readonly title="Generado por un ajuste de cobro"':''} ${dis}
-          style="width:100%;border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;${g.ajuste?'background:#f8fafc;':''}${anul?'text-decoration:line-through;':''}">${badge}${badgeAnul}</div>
+          style="width:100%;border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;${g.ajuste?'background:#f8fafc;':''}${anul?'text-decoration:line-through;':''}">${badge}${badgeAnul}${badgeMet}</div>
         <input type="text" value="${escHtml(g.desc)}" placeholder="Descripción" oninput="updateOtroIngreso('${g._id}','desc',this.value)" ${dis}
           style="border:1px solid var(--gris1);border-radius:5px;padding:5px 7px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;">
         <select onchange="updateOtroIngreso('${g._id}','metodo',this.value)" ${dis} title="¿Cómo se recibió el dinero?"
@@ -9332,6 +9349,70 @@ function renderOtrosIngresos() {
   const el = document.getElementById('total-otros-ingresos'); if(el) el.textContent='$'+total.toFixed(2);
 }
 
+// ============ RASTRO DE LAS EDICIONES A MANO DE UN AJUSTE DE COBRO (v120) ============
+// EL AGUJERO QUE CIERRA (caso real del 22-ago-2026, reserva 702-795): un ajuste de cobro se
+// registra con su metodo ("+$20.00 EFECTIVO", eso queda en la bitacora) y despues, desde la lista
+// de OTROS INGRESOS del cuaderno, cualquiera puede cambiarle el METODO con un desplegable. Eso
+// MUEVE el dinero de bolsa — de CAJA CHICA a CUSCATLAN — y hasta v119 no dejaba NINGUN rastro: el
+// billete seguia en la caja y el programa lo daba por depositado, asi que el arqueo salia corto por
+// ese monto y era imposible saber por que. Lo mismo con el IMPORTE, que ademas cambia el precio
+// cobrado del servicio (_costoActual). Desde aca todo cambio a mano queda en la bitacora de la
+// reservacion (mt_audit) con quien, cuando y de que valor a que valor.
+// El importe se escribe con oninput (una llamada por tecla): los cambios se AGRUPAN y se vuelcan
+// 1.6 s despues de la ultima tecla, para que quede UN evento "de -> a" y no uno por letra.
+let _ajusteEditPend = {};
+let _ajusteEditTimer = null;
+function _marcarEdicionAjuste(g, campo, de, a){
+  if (!g || !g.ajuste) return;
+  if (String(de==null?'':de) === String(a==null?'':a)) return;
+  const k = g._id || g.resCodigo || 'x';
+  if (!_ajusteEditPend[k]) _ajusteEditPend[k] = { codigo: g.resCodigo||'', tipoMod: g.tipoMod||'', campos: {} };
+  const c = _ajusteEditPend[k].campos;
+  if (!c[campo]) c[campo] = { de: de };
+  c[campo].a = a;
+  clearTimeout(_ajusteEditTimer);
+  _ajusteEditTimer = setTimeout(_volcarEdicionesAjuste, 1600);
+}
+function _volcarEdicionesAjuste(){
+  const pend = _ajusteEditPend; _ajusteEditPend = {};
+  Object.keys(pend).forEach(k => {
+    const it = pend[k]; const partes = [];
+    if (it.campos.monto){
+      const de = parseFloat(it.campos.monto.de)||0, a = parseFloat(it.campos.monto.a)||0;
+      if (de !== a) partes.push('importe $'+de.toFixed(2)+' → $'+a.toFixed(2));
+    }
+    if (it.campos.metodo){
+      const de = it.campos.metodo.de, a = it.campos.metodo.a;
+      if (de !== a) partes.push('método '+metodoLabel(de)+' → '+metodoLabel(a)+' (el dinero cambia de cuenta)');
+    }
+    if (!partes.length) return;
+    _logAudit(it.codigo, 'ajuste_editado', (it.tipoMod?it.tipoMod+' · ':'') + partes.join(' · ') + ' · editado a mano en el cuaderno');
+  });
+}
+// Metodo CON EL QUE SE REGISTRO el ajuste, en formato etiqueta (EFECTIVO / CUSCA / TARJETA).
+// Los ajustes creados desde v120 lo traen en `_metOrig`. Los ANTERIORES no lo tienen, pero la
+// bitacora de la reservacion (mt_audit) si guarda el metodo del evento "ajuste_cobro": se lee de
+// ahi, emparejando por la marca de tiempo exacta del ajuste. SOLO LEE — no escribe ningun dato,
+// asi que tambien avisa de los cambios que ya se hicieron antes de esta version.
+function _metodoRegistroAjuste(g){
+  if (!g || !g.ajuste) return '';
+  if (g._metOrig) return metodoLabel(g._metOrig);
+  try {
+    const evs = (typeof auditData !== 'undefined' && auditData && auditData[g.resCodigo]) || [];
+    for (let i = 0; i < evs.length; i++){
+      const e = evs[i];
+      if (e && e.tipo === 'ajuste_cobro' && e.en === g.en){
+        const m = /^[+\u2212-]?\$[\d.,]+\s+(\S+)/.exec(e.detalle || '');
+        return m ? m[1] : '';
+      }
+    }
+  } catch(err) {}
+  return '';
+}
+
+// Vuelca YA lo que quedo en el debounce (se llama desde el debounce de finanzas).
+function _flushEdicionesAjuste(){ if (_ajusteEditTimer){ clearTimeout(_ajusteEditTimer); _ajusteEditTimer = null; } _volcarEdicionesAjuste(); }
+
 function updateOtroIngreso(id, campo, val) {
   if (isDiaCerrado()) return;
   const f=getPDFecha(); const day=getDayData(f);
@@ -9341,7 +9422,31 @@ function updateOtroIngreso(id, campo, val) {
   // v104: un ajuste ANULADO no se edita a mano — hay que reactivarlo desde la auditoría.
   // Sin este guard, escribirle un monto lo volvería a meter al dinero del día sin constancia.
   if (g.anulado) return;
+  const _viejo = g[campo];
+  // v120: MISMO guard anti-H1 que confirmarAjusteCobro y toggleAnularAjuste, que aca faltaba.
+  // El neto de TARJETA (96.228%) entra al banco el dia SIGUIENTE; si ese dia ya esta cerrado,
+  // poner o quitar TARJETA aca dejaria un neto fantasma congelado en un dia que ya no se recalcula.
+  if (campo === 'metodo'){
+    const _metAnt = g.metodo || _metodoDesdeDestino(g.destino);
+    if ((val === 'LINK' || _metAnt === 'LINK') && val !== _metAnt && typeof getFechaSiguiente === 'function' && isDiaCerrado(getFechaSiguiente(f))){
+      alert('🔒 El dinero de TARJETA entra al banco el día siguiente (' + fmtFecha(getFechaSiguiente(f)) + '), y ese día ya está cerrado.\n\nDesbloqueálo en Programación antes de cambiar este método de pago.');
+      renderOtrosIngresos();
+      return;
+    }
+  }
+  // REGLA DE ORO DE LAS PROPINAS (v120): tampoco se le puede sacar una propina de CUSCATLÁN
+  // cambiándole el método acá. Es justo la vía por la que $20 se movieron de bolsa sin rastro.
+  if (campo === 'metodo' && val !== _PROPINA_METODO_UNICO && _esPropinaTexto(g)){
+    alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina registrada en el programa es siempre dinero DEPOSITADO en CUSCATLÁN, así que no se le puede poner ' + metodoLabel(val) + '.\n\nSi esta propina en realidad la recibió el personal en efectivo, no corresponde tenerla como ingreso: borrala con el 🗑 (o invalidala desde el cuadro de auditoría si vino de un ajuste de cobro).');
+    renderOtrosIngresos();
+    return;
+  }
   g[campo]=val; g._ts=Date.now();
+  // v120: constancia de la edicion a mano (importe y metodo son los dos campos que mueven dinero).
+  if (g.ajuste && (campo === 'monto' || campo === 'metodo')){
+    if (campo === 'metodo' && g._metOrig === undefined) g._metOrig = _viejo || _metodoDesdeDestino(g.destino);
+    _marcarEdicionAjuste(g, campo, _viejo, val);
+  }
   // v104: si es un AJUSTE de cobro, su monto alimenta la marca "costo modificado" de la pizarra
   // y la auditoría. Refresco con debounce para no re-renderizar mientras se tipea.
   if (g.ajuste) _refrescarMarcasCostoDebounced();
@@ -9749,6 +9854,111 @@ function _prodDia(f){
   return t;
 }
 
+// ============================================================================
+// v121 — COMISIÓN DIARIA POR SERVICIOS COMPLETADOS (conteo, NO dinero)
+// ----------------------------------------------------------------------------
+// Desde el 01/09/2026 Pedro paga la comisión de $1 por reservación TODOS LOS DÍAS
+// usando el Reporte del Día, en vez de acumularla para el cierre del mes.
+// El PDF SOLO INFORMA EL CONTEO: no registra pagos, ni gastos, ni movimientos de
+// caja, ni nada bancario. Nada de esto toca una sola fórmula financiera.
+//
+// ⚠️ SON DOS MEDICIONES DISTINTAS, no se pueden mezclar:
+//   · Panel MENSUAL (histórico) → cuenta por el mes en que la reserva se INGRESÓ
+//     al programa (_comisionUnoPorReserva). Sigue intacto para consultar agosto
+//     y meses anteriores.
+//   · Conteo DIARIO (nuevo) → cuenta los servicios COMPLETADOS ese día en la
+//     pizarra, sin importar cuándo se agendaron.
+// Por eso el panel mensual, de septiembre-2026 en adelante, muestra un aviso para
+// que nadie vuelva a pagar en el cierre lo que ya se pagó día a día.
+const FECHA_INICIO_COMISION_DIARIA = '2026-09-01';
+
+// Los cuatro vendedores, SIEMPRE en este orden y SIEMPRE los cuatro (con 0 si no
+// tienen servicios). Se derivan de USUARIOS para no duplicar la lista de nombres;
+// si algún día cambia el roster, esto lo sigue solo.
+const _ORDEN_COMISION_DIARIA = ['Fabio', 'Roberto', 'Luis', 'Pedro'];
+function _vendedoresComisionDiaria() {
+  const canon = (USUARIOS || []).map(u => u.nombre);
+  const orden = _ORDEN_COMISION_DIARIA.filter(n => canon.includes(n));
+  canon.forEach(n => { if (!orden.includes(n)) orden.push(n); });
+  return orden;
+}
+// Nombre tipeado → nombre canónico de USUARIOS (trim + sin distinguir mayúsculas).
+// Devuelve null si no coincide con ninguno: NUNCA se adivina ni se le suma a otro.
+function _vendedorCanonico(v) {
+  const t = String(v == null ? '' : v).trim();
+  if (!t) return null;
+  const hit = (USUARIOS || []).find(u => String(u.nombre).trim().toLowerCase() === t.toLowerCase());
+  return hit ? hit.nombre : null;
+}
+
+// CONTEO de servicios COMPLETADOS en la pizarra de `f`, por vendedor propietario.
+// Devuelve DATOS, no HTML (así se puede probar y reusar sin tocar el PDF).
+//   { conteo:{Fabio,Roberto,Luis,Pedro}, orden[], sinVendedor, pendientes, total }
+// Reglas (fijadas por Pedro, 01-sep-2026):
+//   1. Se mira la PIZARRA del día `f` (dónde se EJECUTÓ), no `r.fecha`.
+//   2. Solo estado EXACTAMENTE 'completado'.
+//   3. Código de reservación válido (sin código no se cuenta).
+//   4. Canceladas fuera (_serviciosColumna ya las excluye).
+//   5. Una reserva cuenta UNA sola vez aunque esté en varios horarios o equipos
+//      → un ÚNICO Set compartido entre todas las columnas (dedupe global).
+//   6. Un servicio EXTRA fuera de cuota cuenta igual que uno en horario.
+//   7. El dueño es `r.vendedor` (lo fija quien la crea; editarla desde otro
+//      usuario no lo cambia). Si el admin reasignó con adminCambiarVendedor,
+//      esa función reescribe `r.vendedor`, así que el conteo usa al nuevo.
+// `pendientes` = servicios de la pizarra que todavía NO están completados (para
+// avisar que el conteo es parcial). `sinVendedor` = completados cuyo vendedor no
+// coincide con ninguno de USUARIOS (o va vacío): se informan aparte, jamás se
+// reparten entre los demás.
+// SOLO LEE: no escribe en reservas, pdData, caja, conciliación ni Supabase.
+function _reservasCompletadasPorVendedorDia(f) {
+  const orden = _vendedoresComisionDiaria();
+  const conteo = {};
+  orden.forEach(v => { conteo[v] = 0; });
+  const res = { conteo, orden, sinVendedor: 0, pendientes: 0, total: 0 };
+  let day = null;
+  try { day = (typeof pdData === 'object' && pdData) ? pdData[f] : null; } catch (e) { day = null; }
+  if (!day || !Array.isArray(day.columnas)) return res;
+  const vistos = new Set();   // dedupe GLOBAL entre equipos y horarios
+  day.columnas.forEach(col => {
+    (_serviciosColumna(col, vistos) || []).forEach(sv => {
+      if (!sv || !sv.codigo) return;                 // sin código válido no cuenta
+      const r = sv.r;
+      if (!r) return;                                 // reserva borrada
+      if (r.estado !== 'completado') { res.pendientes++; return; }
+      const v = _vendedorCanonico(r.vendedor);
+      if (!v || conteo[v] === undefined) { res.sinVendedor++; return; }
+      conteo[v]++; res.total++;
+    });
+  });
+  return res;
+}
+
+// ¿El mes elegido en el panel MENSUAL ya se paga día a día? (mes 1-12, año 4 dígitos)
+function _esMesComisionDiaria(mes, anio) {
+  const corte = String(FECHA_INICIO_COMISION_DIARIA || '').split('-');
+  if (corte.length < 2) return false;
+  const cA = parseInt(corte[0], 10), cM = parseInt(corte[1], 10);
+  const a = parseInt(anio, 10), m = parseInt(mes, 10);
+  if (!a || !m || !cA || !cM) return false;
+  return (a > cA) || (a === cA && m >= cM);
+}
+
+// FUENTE ÚNICA de la línea del conteo diario, tal cual la pidió Pedro:
+// "COMISIÓN POR RESERVACIONES DIARIAS: FABIO 3 - ROBERTO 2 - LUIS 0 - PEDRO 1."
+// Acá se decide TODO el formato: el orden de los nombres, las mayúsculas, el separador y el
+// punto final. El PDF NO rearma esta línea por su cuenta — le pasa `fmt` y `sep` para pintar
+// cada nombre de su color. Así es imposible que existan dos formatos distintos diciendo ser
+// el mismo (y que las pruebas validen uno mientras el papel imprime el otro).
+//   fmt(vendedor, cantidad) → cómo se ve cada par (por defecto texto plano "FABIO 3")
+//   sep                     → qué va entre uno y otro (por defecto " - ")
+function _textoComisionDiaria(datos, fmt, sep) {
+  const d = datos || { conteo: {}, orden: [] };
+  const _f = (typeof fmt === 'function') ? fmt : ((v, n) => v.toUpperCase() + ' ' + n);
+  const _s = (sep === undefined || sep === null) ? ' - ' : sep;
+  return 'COMISIÓN POR RESERVACIONES DIARIAS: '
+    + (d.orden || []).map(v => _f(v, d.conteo[v] || 0)).join(_s) + '.';
+}
+
 // Total del DÍA en precio VIGENTE contando TODAS las reservaciones de la fecha (asignadas a un
 // equipo o no), una sola vez por reserva y sin las canceladas. Es el número grande de la pizarra.
 function _totalResDiaVigente(f){
@@ -9783,6 +9993,33 @@ function _esPropinaTexto(g){
   const exacto = t => String(t||'').trim().toLowerCase().replace(/s$/,'') === 'propina';
   return exacto(g.motivo) || exacto(g.desc);
 }
+// ============ REGLA DE ORO DE LAS PROPINAS (v120, dictada por Pedro el 22-ago-2026) ============
+// "LAS PROPINAS QUE REGISTREMOS EN EL PROGRAMA SIEMPRE SERAN PORQUE LAS DEPOSITARON EN LA CUENTA
+//  DEL CUSCATLAN."
+// O sea: una propina que el cliente entrega EN EFECTIVO no se registra como ingreso — el dinero
+// pasa del cliente al personal sin tocar la empresa. La UNICA propina que entra al programa es la
+// que llego al banco, y por lo tanto su metodo SIEMPRE es CUSCA. Si se pudiera registrar con otro
+// metodo, el programa estaria metiendo dinero a CAJA CHICA que nunca entro a la caja (o difiriendo
+// al banco un neto de TARJETA que no existe) y taparia un faltante real.
+// Se aplica en los DOS unicos lugares donde se puede elegir el metodo de un ajuste:
+// confirmarAjusteCobro (al registrarlo) y updateOtroIngreso (al cambiarlo despues, a mano).
+const _PROPINA_METODO_UNICO = 'CUSCA';
+function _esPropinaAjuste(tipoMod, motivo, desc, titulo){
+  return _esPropinaTexto({ ajuste:true, tipoMod: tipoMod, motivo: motivo, desc: desc, titulo: titulo });
+}
+// Propinas del dia registradas FUERA de la regla (metodo distinto de CUSCA). Solo LEE: sirve para
+// avisar en el panel. No corrige registros historicos: eso lo decide Pedro dia por dia.
+function _propinasFueraDeRegla(f){
+  const day = pdData && pdData[f];
+  const out = [];
+  ((day && day.otrosIngresos) || []).forEach(g => {
+    if (!g || g.anulado || !_esPropinaTexto(g)) return;
+    const met = g.metodo || _metodoDesdeDestino(g.destino);
+    if (met && met !== _PROPINA_METODO_UNICO) out.push({ g, monto: parseFloat(g.monto)||0, metodo: met });
+  });
+  return out;
+}
+
 function _propinasBancoDelDia(f){
   const day = pdData && pdData[f];
   const out = [];
@@ -9926,6 +10163,7 @@ function renderPropinasBanco(){
     </div>
     <div style="margin-top:10px;">${sem}</div>
     ${(gastoManual.length && totEfectivo > 0) ? `<div style="margin-top:8px;background:#fee2e2;border-left:4px solid #d42b2b;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#991b1b;font-weight:700;">⚠ POSIBLE PROPINA DESCONTADA DOS VECES de CAJA CHICA: además de las casillas de propina de la pizarra ($${totEfectivo.toFixed(2)}) hay ${gastoManual.length} gasto(s) que dicen "propina" (${gastoManual.map(x=>escHtml(x.g.titulo||'')+' $'+x.monto.toFixed(2)).join(', ')}). Si es el mismo dinero, dejá UNO solo.</div>` : ''}
+    ${_propinasFueraDeRegla(f).length ? `<div style="margin-top:8px;background:#fee2e2;border-left:4px solid #d42b2b;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#991b1b;font-weight:700;">⚠ PROPINA FUERA DE LA REGLA: ${_propinasFueraDeRegla(f).map(x=>escHtml(x.g.resCodigo||x.g.titulo||'')+' $'+x.monto.toFixed(2)+' como '+escHtml(metodoLabel(x.metodo))).join(', ')}. Una propina solo se registra cuando la depositaron en CUSCATLÁN; si esa la recibió el personal en efectivo, no debería estar como ingreso.</div>` : ''}
     ${sinRevisar.length ? `<div style="margin-top:8px;background:#fef9c3;border-left:4px solid #d97706;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#854d0e;font-weight:700;">🔎 ${sinRevisar.length} propina(s) del banco SIN REVISAR por $${sinRevisar.reduce((t,x)=>t+x.monto,0).toFixed(2)}. Tocá "sin revisar" cuando confirmes que ese dinero entró a la cuenta (transferencia u otro medio). El programa no suma nada por su cuenta: solo deja constancia.</div>` : ''}
     <div style="margin-top:6px;font-size:11px;color:var(--gris2);text-align:right;">Mes ${mes}: al banco $${mesBanco.toFixed(2)} · en efectivo $${mesEfectivo.toFixed(2)}</div>`;
 }
@@ -10018,6 +10256,13 @@ function setAjusteSigno(sig){
 // Al elegir "Descuento", sugerir automáticamente el signo negativo (se puede cambiar a mano).
 function _ajusteTipoChange(){
   const t = document.getElementById('aj-tipo');
+  // REGLA DE ORO DE LAS PROPINAS (v120): si el tipo es Propina, el método queda FIJO en CUSCA
+  // (solo se registran las depositadas en el banco). Al cambiar a otro tipo se vuelve a liberar.
+  const met = document.getElementById('aj-metodo');
+  if (met){
+    if (t && t.value === 'Propina'){ met.value = _PROPINA_METODO_UNICO; met.disabled = true; met.title = 'Las propinas solo se registran cuando se depositaron en CUSCATLÁN.'; }
+    else if (met.disabled){ met.disabled = false; met.value = 'AUTO'; met.title = ''; }
+  }
   if (t && t.value === 'Descuento') setAjusteSigno('-');
   else if (t && _ajusteSigno === '-' && (t.value==='Servicio adicional'||t.value==='Venta de cajas'||t.value==='Venta de plástico stretch'||t.value==='Recargo'||t.value==='Propina')) setAjusteSigno('+');
   previewAjuste();
@@ -10053,6 +10298,8 @@ function abrirModificarCosto(){
   _ajusteSigno = '+';
   const set = (id,val)=>{ const e=document.getElementById(id); if(e) e.value=val; };
   set('aj-tipo','Servicio adicional'); set('aj-monto',''); set('aj-metodo','AUTO'); set('aj-motivo','');
+  // v120: soltar el bloqueo que deja la regla de las propinas si el modal se cerró con ese tipo.
+  try { const _m = document.getElementById('aj-metodo'); if (_m){ _m.disabled = false; _m.title = ''; } } catch(e){}
   _renderAjusteInfo(r);
   setAjusteSigno('+');
   closeVer();
@@ -10084,6 +10331,12 @@ function confirmarAjusteCobro(){
   // Método AUTOMÁTICO: mismo método de pago con que se cobró la reservación (nunca PENDIENTE/CANCELADO).
   if (metodo === 'AUTO') metodo = _metodoDeReserva(r.codigo);
   if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
+  // REGLA DE ORO DE LAS PROPINAS (v120): una propina solo se registra si la DEPOSITARON en
+  // CUSCATLÁN. La que el cliente da en efectivo no se registra — nunca pasa por la empresa.
+  if (_esPropinaAjuste(tipo, motivo, motivo, '') && metodo !== _PROPINA_METODO_UNICO){
+    alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina solo se registra acá cuando la DEPOSITARON en la cuenta de CUSCATLÁN, así que su método tiene que ser CUSCA (estabas por guardarla como ' + metodoLabel(metodo) + ').\n\nSi el cliente le dio la propina al personal EN EFECTIVO, NO se registra: ese dinero nunca entró a la empresa. Solo se anota en la casilla 🪙 de la pizarra lo que la empresa pagó de su caja.');
+    return;
+  }
   // CIERRE DE DÍA: solo bloquea si el DÍA DEL SERVICIO ya está cerrado (v107).
   if (isDiaCerrado(fecha)){ alert('🔒 El día del servicio ('+fmtFecha(fecha)+') ya está cerrado.\n\nDesbloquealo en Programación para ajustar el cobro de esta reservación.'); return; }
   // TARJETA se difiere al día SIGUIENTE al del servicio (96.228% a CUSCATLAN). Si ese día ya está
@@ -10108,6 +10361,10 @@ function confirmarAjusteCobro(){
     // --- vínculo y trazabilidad (CAMBIO 1) ---
     ajuste: true, resCodigo: r.codigo, resCliente: cliente, resVendedor: r.vendedor||'',
     tipoMod: tipo, motivo: motivo, signo: (signo<0?'-':'+'),
+    // v120: metodo CON EL QUE SE REGISTRO el ajuste. Si despues alguien lo cambia a mano en OTROS
+    // INGRESOS, el dinero se muda de bolsa (efectivo <-> banco): la fila del cuaderno y el panel de
+    // auditoria muestran "metodo cambiado: X -> Y" mientras `_metOrig` no coincida con `metodo`.
+    _metOrig: metodo,
     por: _quienSoy(), en: new Date().toISOString()
   });
   _logAudit(r.codigo, 'ajuste_cobro', `${signo<0?'−':'+'}$${montoAbs.toFixed(2)} ${metodoLabel(metodo)} · ${tipo}${motivo?' ('+_auditTrunc(motivo)+')':''} · día ${fmtFecha(fecha)}`);
@@ -10271,7 +10528,16 @@ function renderAuditoriaCostos(){
     const movCell = it.monto >= 0
       ? `<span style="font-weight:800;color:${it.anulado?'var(--gris2)':'#16a34a'};${it.anulado?'text-decoration:line-through;':''}">▲ Aumento +$${it.monto.toFixed(2)}</span>`
       : `<span style="font-weight:800;color:${it.anulado?'var(--gris2)':'#d42b2b'};${it.anulado?'text-decoration:line-through;':''}">▼ Disminución -$${Math.abs(it.monto).toFixed(2)}</span>`;
-    const detalle = `${escHtml(it.g.tipoMod||'')}${it.g.motivo?' · '+escHtml(it.g.motivo):''}`;
+    // v120: el panel no decia A QUE CUENTA entro el ajuste, asi que un cargo cobrado en efectivo y
+    // otro depositado se veian identicos. Ahora se muestra el metodo y, si lo cambiaron a mano
+    // despues de registrarlo, con que metodo se habia registrado.
+    const _metAj = it.g.metodo || _metodoDesdeDestino(it.g.destino);
+    const _metReg = _metodoRegistroAjuste(it.g);
+    const _metCambio = (_metReg && _metReg !== metodoLabel(_metAj))
+      ? ' <span style="color:#92400e;font-weight:800;">✏️ se registró como ' + escHtml(_metReg) + ' — el dinero cambió de cuenta</span>'
+      : '';
+    const metChip = '<span style="display:inline-block;border:1px solid ' + (COLOR_METODO[_metAj]||'#16a34a') + ';color:' + (COLOR_METODO[_metAj]||'#16a34a') + ';border-radius:4px;font-size:9px;font-weight:800;padding:0 4px;">' + escHtml(metodoLabel(_metAj)) + '</span>';
+    const detalle = metChip + ' ' + escHtml(it.g.tipoMod||'') + (it.g.motivo?' · '+escHtml(it.g.motivo):'') + _metCambio;
     // Constancia de la anulación: nunca se borra la fila, se marca.
     const selloAnulada = it.anulado
       ? `<div style="font-size:10px;font-weight:800;color:#b91c1c;margin-top:2px;">🚫 ANULADA por ${escHtml(it.g.anuladoPor||'—')}${it.g.anuladoEn?' · '+escHtml(new Date(it.g.anuladoEn).toLocaleDateString('es-SV',{day:'2-digit',month:'short',year:'numeric'})):''}${it.g.anuladoMotivo?' · '+escHtml(it.g.anuladoMotivo):''}</div>`
@@ -10775,6 +11041,25 @@ async function descargarReporteDia() {
     </div>`;
   }).join('') || '<div style="font-size:8.5pt;color:#888;font-style:italic;">No hay equipos creados para este día.</div>';
 
+  // ===== v121: COMISIÓN POR RESERVACIONES DIARIAS (solo el CONTEO) =====
+  // Va después del detalle de equipos y ANTES de gastos/movimientos a propósito: es
+  // información operativa de los servicios recién listados, no una fila de dinero.
+  // No registra ningún pago: Pedro paga con este papel en la mano.
+  const _comDia = _reservasCompletadasPorVendedorDia(f);
+  const _comDiaColores = { Pedro:'#1e4fa0', Fabio:'#16a34a', Roberto:'#d97706', Luis:'#7c3aed' };
+  const comDiariaHtml = `
+    <div style="page-break-inside:avoid;margin:5mm 0 2mm;">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:11pt;font-weight:800;color:#16a34a;border-bottom:2px solid #16a34a;padding-bottom:1mm;margin-bottom:2mm;">COMISIÓN POR RESERVACIONES DIARIAS</div>
+      <div style="font-size:10.5pt;font-weight:800;letter-spacing:.02em;line-height:1.6;">
+        ${_textoComisionDiaria(_comDia,
+          (v, n) => `<span style="color:${_comDiaColores[v] || '#111'};">${esc(v.toUpperCase())} ${n}</span>`,
+          ' <span style="color:#888;">-</span> ')}
+      </div>
+      <div style="font-size:7.5pt;color:#555;margin-top:1mm;font-style:italic;">Servicios completados hoy, por el vendedor que ingresó la reservación. Solo el conteo — el pago no queda registrado en el programa.</div>
+      ${_comDia.sinVendedor > 0 ? `<div style="font-size:8.5pt;font-weight:800;color:#b91c1c;margin-top:1.5mm;">ADVERTENCIA: EXISTEN ${_comDia.sinVendedor} SERVICIOS COMPLETADOS SIN VENDEDOR IDENTIFICADO.</div>` : ''}
+      ${_comDia.pendientes > 0 ? `<div style="font-size:8.5pt;font-weight:800;color:#a16207;margin-top:1.5mm;">CONTEO PARCIAL: EXISTEN ${_comDia.pendientes} SERVICIOS TODAVÍA NO COMPLETADOS.</div>` : ''}
+    </div>`;
+
   // ===== Sección 2: GASTOS =====
   const totalGastos = (day.gastos||[]).reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
   const gastosRows = (day.gastos||[]).map(g=>`<tr><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#d42b2b;width:22mm;">$${(parseFloat(g.monto)||0).toFixed(2)}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${esc(g.titulo||'')}${g.desc?' — '+esc(g.desc):''}</td><td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;font-size:7.5pt;color:#555;">${esc(g.fondo||'')}</td></tr>`).join('');
@@ -10922,6 +11207,7 @@ async function descargarReporteDia() {
     </table>
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:12pt;font-weight:900;color:#1a3a6b;border-bottom:2.5px solid #1a3a6b;padding-bottom:1mm;margin-bottom:3mm;">SERVICIOS Y EQUIPOS DEL DÍA</div>
     ${equiposHtml}
+    ${comDiariaHtml}
     ${gastosHtml}
     ${movHtml}
     ${otrosHtml}
@@ -11834,6 +12120,12 @@ function renderComisiones() {
   try { renderComisionesDescanso(); } catch(e) { console.warn('comisiones descanso:', e); }
 
   // ---- Pago de comisiones $1 (por mes de INGRESO, sin canceladas, sin duplicados) ----
+  // v121: este panel es HISTORICO. Del 01/09/2026 en adelante la comision se paga TODOS LOS
+  // DIAS con el Reporte del Dia, asi que el conteo del mes se sigue mostrando (no se oculta
+  // ni se borra nada) pero se avisa en grande que NO se vuelve a pagar en el cierre mensual.
+  const _diaria = _esMesComisionDiaria(mes, anio);
+  const _avisoEl = document.getElementById('com-aviso-diaria');
+  if (_avisoEl) _avisoEl.innerHTML = _diaria ? `<div style="background:#fffbeb;border:2px solid #d97706;border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:13px;font-weight:800;color:#92400e;line-height:1.5;">⚠️ DESDE EL 01/09/2026, LAS COMISIONES SE PAGAN DIARIAMENTE SEGÚN EL REPORTE DEL DÍA. NO VOLVER A PAGAR EN EL CIERRE MENSUAL.<div style="font-weight:600;font-size:12px;color:#a16207;margin-top:5px;">Los números de abajo quedan solo como consulta. El conteo del día a pagar sale del PDF "Reporte del Día".</div></div>` : '';
   const pago = _comisionUnoPorReserva(mes, anio);
   const ordenPago = ['Luis', 'Roberto', 'Fabio', 'Pedro'];
   Object.keys(pago.conteo).forEach(v => { if (!ordenPago.includes(v)) ordenPago.push(v); });
@@ -11851,8 +12143,8 @@ function renderComisiones() {
         <div style="font-size:12px;color:var(--gris2);margin-top:2px;">${n} reservación(es) × $1</div>
       </div>`;
     }).join('');
-    html += `<div style="background:#16a34a;border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow);color:#fff;">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;opacity:.9;">💵 TOTAL A PAGAR</div>
+    html += `<div style="background:${_diaria?'#6b7280':'#16a34a'};border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow);color:#fff;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;opacity:.9;">${_diaria?'📋 TOTAL DEL MES (YA PAGADO A DIARIO)':'💵 TOTAL A PAGAR'}</div>
       <div style="font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:800;">$${totalPago.toFixed(2)}</div>
       <div style="font-size:12px;margin-top:2px;opacity:.9;">${totalPago} reservación(es) ingresada(s)</div>
     </div>`;
