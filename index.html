@@ -1087,10 +1087,10 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <div id="com-pago1" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;"></div>
   </div>
 
-  <!-- COMISIONES POR DÍA DE DESCANSO (DOMINGOS TRABAJADOS) — v111 -->
+  <!-- BONO POR DÍA DE DESCANSO TRABAJADO (DOMINGOS Y ASUETOS) — v126 -->
   <div class="card" style="margin-bottom:22px;border:2px solid #d97706;">
-    <div class="card-head"><h3>🗓️ Comisiones por día de descanso — domingos trabajados</h3></div>
-    <p style="font-size:12px;color:var(--gris2);margin:2px 0 14px;">El único día de descanso es el <strong>domingo</strong>. Se cuentan los domingos en que la persona aparece en algún equipo de la <strong>programación diaria</strong>, contados <strong>desde su último pago</strong>. El contador solo se mueve cuando se registra un pago; los domingos ya pagados nunca vuelven a contar.</p>
+    <div class="card-head"><h3>🗓️ Bono por día de descanso trabajado — domingos y asuetos</h3></div>
+    <p style="font-size:12px;color:var(--gris2);margin:2px 0 14px;">Cada vez que alguien de <strong>planilla</strong> trabaja un <strong>domingo</strong> o un <strong>asueto nacional</strong> se le debe un bono de <strong>$50 (motorista)</strong> o <strong>$35 (ayudante)</strong>. Se cuentan los días en que la persona aparece en algún equipo de la <strong>programación diaria</strong>, desde su último pago. Un día pagado nunca vuelve a contar.</p>
     <div id="com-descanso" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;"></div>
   </div>
 
@@ -2733,7 +2733,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-02-v124';
+const APP_VERSION = '2026-09-15-v126';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6711,106 +6711,183 @@ function _equipoDuplicadoDelDia(f, miembro, exceptoIdx) {
   return '';
 }
 
-// ==================== COMISIONES POR DÍA DE DESCANSO (DOMINGOS) — v111 (2026-08-02) ====================
-// REGLA DE NEGOCIO: en Mudanzas Tecleñas el ÚNICO día de descanso es el DOMINGO. Cuando uno de los
-// empleados configurados abajo trabaja un domingo, acumula un "domingo trabajado". Al juntar N
-// domingos trabajados DESDE SU ÚLTIMO PAGO, corresponde pagarle una comisión fija.
+// ==================== BONO POR DÍA DE DESCANSO TRABAJADO (DOMINGOS Y ASUETOS) — v126 (2026-09-15) ====================
+// REGLA DE NEGOCIO (dictada por Pedro el 15-sep-2026; reemplaza a la de v111 "cada 4 domingos"):
+// cada vez que alguien de PLANILLA trabaja un DOMINGO o un ASUETO NACIONAL se le debe un BONO por
+// ese día: $50 si es MOTORISTA, $35 si no lo es. Se paga por día trabajado (ya no por ciclos).
+// El programa solo LLEVA LA CUENTA y avisa de forma discreta; el pago lo registra una persona.
 //
-// FUENTE DE VERDAD (no se inventan estructuras nuevas; se reusa lo que el programa ya guarda):
-//  • Domingos trabajados -> pdData[fecha].columnas[].miembros[].nombre. La programación diaria ya
-//    registra quién trabajó cada día: si un domingo el empleado aparece en CUALQUIER equipo, ese
-//    domingo lo trabajó. Solo cuentan domingos HASTA HOY (un domingo futuro pre-armado no cuenta).
-//  • Pagos de comisión   -> pdData[fecha].comisionesDescanso[]. Lista permanente que entra en
-//    _LISTAS_FIN, así hereda _id/_ts, tumbas y merge fino multi-dispositivo, y viaja en mt_pd3.
-//  • Salida de dinero    -> además se crea un GASTO normal (CAJA CHICA) enlazado por _comId, para
-//    que recalcCerramos descuente la comisión como cualquier otro gasto. Cero cambios al cuadre.
+// FUENTE DE VERDAD (se reusa lo que el programa ya guarda; no hay estructuras nuevas):
+//  • Día trabajado -> pdData[fecha].columnas[].miembros[]: si ese domingo/asueto la persona aparece
+//    en CUALQUIER equipo de la programación diaria, lo trabajó. Solo cuentan días HASTA HOY.
+//  • Quién es de planilla -> EMPLEADOS (+ BONO_DESCANSO_INCLUIR − BONO_DESCANSO_EXCLUIR).
+//  • Quién es motorista   -> MOTORISTAS.
+//  • Pagos -> pdData[fecha].comisionesDescanso[] (misma lista de v111: entra en _LISTAS_FIN, así hereda
+//    _id/_ts, tumbas y merge fino) + un GASTO normal de CAJA CHICA enlazado por _comId, para que
+//    recalcCerramos lo descuente como cualquier otro gasto. Cero cambios al cuadre.
 //
-// ANTI-DUPLICADO (clave): cada pago guarda las FECHAS EXACTAS de los domingos que cubrió
-// (domingos[]). Un domingo cubierto NUNCA vuelve a contar, aunque los pagos se registren fuera de
-// orden, pasen meses sin pagar o cambie el año. El contador NO se reinicia a mano: solo lo mueve
-// un pago registrado, y solo consume los domingos que ese pago cubrió.
+// ANTI-DUPLICADO: cada pago guarda las FECHAS EXACTAS que cubrió (dias[]; los pagos viejos de v111
+// traen domingos[]). Un día pagado NUNCA vuelve a contar. El contador solo lo mueve un pago.
 //
-// AMPLIABLE: para sumar un empleado nuevo basta agregarlo a COMISIONES_DESCANSO (nombre EXACTO
-// como aparece en EMPLEADOS/PERSONAL_ROSTER, su monto y cada cuántos domingos). Nada más.
+// ARRANQUE (estado real al 15-sep-2026 según Pedro): Joel y Mazariego llevan 2 días cada uno:
+// el domingo 13-sep (arrastre) y el asueto del 15-sep (ya lo cuenta el programa); el 06-sep ya se
+// les pagó. A Jorge y a Joelito se les acaba de pagar (0). Todo lo anterior a
+// BONO_DESCANSO_INICIO ya se liquidó fuera del programa y NO se cuenta; los días de arrastre se
+// listan explícitos en BONO_DESCANSO_ARRASTRE.
+const BONO_DESCANSO_MOTORISTA = 50;
+const BONO_DESCANSO_AYUDANTE  = 35;
+const BONO_DESCANSO_INICIO    = '2026-09-15';
+const BONO_DESCANSO_ARRASTRE  = {
+  'Jose Joel Hernandez Barrientos': ['2026-09-13'],
+  'Juan Carlos Mazariego'         : ['2026-09-13'],
+};
+// Personas de planilla que NO están en EMPLEADOS (Joelito figura en la planilla quincenal pero en
+// el programa vive en PERSONAL_ROSTER como apoyo). Nombre EXACTO como se guarda.
+const BONO_DESCANSO_INCLUIR = ['Joel de Jesus Hernandez Martinez'];
+// Personas de EMPLEADOS que NO reciben bono (vacío = todos). Nombre EXACTO.
+const BONO_DESCANSO_EXCLUIR = [];
+// Apodos con que se escribe a mano en la pizarra a gente de planilla (exactos, en minúsculas).
+// Los de _EMP_ALIAS (mongo/mazariego) se toman solos. NO poner apodos ambiguos ("joel" puede ser
+// el papá o el hijo): ante la duda no se cuenta el día antes que dárselo a la persona equivocada.
+const BONO_DESCANSO_ALIAS = { 'joelito': 'Joel de Jesus Hernandez Martinez', 'koky': 'Jorge Alberto Ramirez Alvarado' };
+
+// ASUETOS NACIONALES de El Salvador (Código de Trabajo, art. 190): fechas fijas + Semana Santa
+// (jueves, viernes y sábado santos, que cambian cada año y se calculan solos). Para un asueto
+// extraordinario decretado un año puntual, agregar la fecha ISO en ASUETOS_EXTRA.
+const ASUETOS_FIJOS = {
+  '01-01': '1 de enero', '05-01': 'Día del Trabajo', '05-10': 'Día de la Madre', '06-17': 'Día del Padre',
+  '08-06': '6 de agosto', '09-15': 'Independencia', '11-02': 'Día de los Difuntos', '12-25': 'Navidad',
+};
+const ASUETOS_EXTRA = {};   // ej. { '2027-03-19': 'asueto decretado' }
 const COMISION_DESCANSO_DIA = 0;   // Date.getDay(): 0 = domingo
 
-const COMISIONES_DESCANSO = [
-  { id:'joel-barrientos', alias:'Joel Hernández',        nombre:'Jose Joel Hernandez Barrientos',
-    monto:50, cada:4, variantes:['Joel Hernandez Barrientos','Jose Joel Hernandez Barrientos'] },
-  { id:'jorge-ramirez',   alias:'Jorge Alberto Ramírez', nombre:'Jorge Alberto Ramirez Alvarado',
-    monto:50, cada:4, variantes:['Jorge Alberto Ramirez','Jorge Ramirez Alvarado','Koky'] },
-  { id:'joelito',         alias:'Joelito',               nombre:'Joel de Jesus Hernandez Martinez',
-    monto:30, cada:4, variantes:['Joelito','Joel de Jesus Hernandez','Joel Hernandez Martinez'] },
-];
-
-// Normaliza un nombre para comparar sin depender de acentos, mayúsculas ni dobles espacios
-// ("José Joel Hernández Barrientos" === "Jose Joel Hernandez Barrientos").
-function _normNombrePersona(s) {
-  return String(s == null ? '' : s)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+function _isoLocalDe(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-
-// Índice nombre-normalizado -> id de empleado. Si una misma grafía apunta a DOS empleados
-// (ej. un "Joel Hernandez" ambiguo entre el papá y el hijo) se DESCARTA: preferimos no contar
-// un domingo antes que asignárselo a la persona equivocada.
-var _idxComDesc = null, _idxComDescN = -1;
-function _indiceComisionDescanso() {
-  // Cache invalidada si cambia la cantidad de empleados configurados (al agregar uno nuevo
-  // no hay que acordarse de limpiar nada a mano).
-  if (_idxComDesc && _idxComDescN === COMISIONES_DESCANSO.length) return _idxComDesc;
-  const m = new Map(), ambiguos = new Set();
-  COMISIONES_DESCANSO.forEach(cfg => {
-    [cfg.nombre, cfg.alias].concat(cfg.variantes || []).forEach(n => {
-      const k = _normNombrePersona(n);
-      if (!k) return;
-      if (m.has(k) && m.get(k) !== cfg.id) ambiguos.add(k); else m.set(k, cfg.id);
-    });
-  });
-  ambiguos.forEach(k => m.delete(k));
-  _idxComDesc = m; _idxComDescN = COMISIONES_DESCANSO.length;
-  return m;
+// Domingo de Pascua (algoritmo de Meeus/Jones/Butcher, calendario gregoriano).
+function _domingoPascua(anio) {
+  const a = anio % 19, b = Math.floor(anio / 100), c = anio % 100, d = Math.floor(b / 4), e = b % 4,
+        f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30,
+        i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+        mes = Math.floor((h + l - 7 * m + 114) / 31), dia = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(anio, mes - 1, dia, 12);
 }
-function _cfgComisionDescanso(id) { return COMISIONES_DESCANSO.find(c => c.id === id) || null; }
-function _empIdComisionDeNombre(nombre) { return _indiceComisionDescanso().get(_normNombrePersona(nombre)) || null; }
-
-function _esDiaDescanso(f) {
+// Nombre del asueto si la fecha es asueto nacional; '' si no lo es.
+function _asuetoNacional(f) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f || ''))) return '';
+  if (ASUETOS_EXTRA[f]) return ASUETOS_EXTRA[f];
+  const md = f.slice(5);
+  if (ASUETOS_FIJOS[md]) return ASUETOS_FIJOS[md];
+  const anio = parseInt(f.slice(0, 4), 10);
+  const p = _domingoPascua(anio);
+  const ss = { '-3': 'Jueves Santo', '-2': 'Viernes Santo', '-1': 'Sábado Santo' };
+  for (const off of [-3, -2, -1]) {
+    const d = new Date(p.getTime()); d.setDate(d.getDate() + off);
+    if (_isoLocalDe(d) === f) return ss[String(off)];
+  }
+  return '';
+}
+function _esDomingoISO(f) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f || ''))) return false;
   const d = new Date(f + 'T12:00:00');          // mediodía: inmune a zona horaria / DST
   return !isNaN(d.getTime()) && d.getDay() === COMISION_DESCANSO_DIA;
 }
-// Fecha de HOY en hora LOCAL (no UTC: en El Salvador, UTC-6, toISOString() ya es "mañana" a las 6pm).
-function _hoyISOLocal() {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+// Día de descanso = domingo O asueto nacional.
+function _esDiaDescanso(f) { return _esDomingoISO(f) || !!_asuetoNacional(f); }
+// Etiqueta corta del tipo de día de descanso ('' si no lo es).
+function _tipoDiaDescanso(f) {
+  const a = _asuetoNacional(f);
+  if (a) return 'asueto (' + a + ')';
+  return _esDomingoISO(f) ? 'domingo' : '';
 }
+// Fecha de HOY en hora LOCAL (no UTC: en El Salvador, UTC-6, toISOString() ya es "mañana" a las 6pm).
+function _hoyISOLocal() { return _isoLocalDe(new Date()); }
 function _fchCorta(f) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f || ''))) return String(f || '');
   const p = f.split('-');
   return p[2] + '/' + p[1] + '/' + p[0];
 }
+// Normaliza un nombre para comparar sin depender de acentos, mayúsculas ni dobles espacios.
+function _normNombrePersona(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
-// Domingos que el empleado TRABAJÓ (aparece en algún equipo de la programación de ese domingo),
-// hasta `hoy` inclusive. Devuelve fechas ISO ordenadas ascendente, sin repetidos.
+// Lista de personas con derecho a bono: {id, nombre, alias (cómo se muestra), monto, esMotorista}.
+// El id es el id interno (_empId) cuando existe; si no, el nombre normalizado.
+var _bonoDescCache = null, _bonoDescCacheN = -1;
+function _bonoDescansoLista() {
+  const n = EMPLEADOS.length + BONO_DESCANSO_INCLUIR.length + BONO_DESCANSO_EXCLUIR.length;
+  if (_bonoDescCache && _bonoDescCacheN === n) return _bonoDescCache;
+  const ex = new Set(BONO_DESCANSO_EXCLUIR.map(_normNombrePersona));
+  const vistos = new Set();
+  const out = [];
+  EMPLEADOS.concat(BONO_DESCANSO_INCLUIR).forEach(nombre => {
+    const k = _normNombrePersona(nombre);
+    if (!k || ex.has(k) || vistos.has(k)) return;
+    vistos.add(k);
+    const esM = (typeof MOTORISTAS !== 'undefined') && MOTORISTAS.has(nombre);
+    const id = (typeof _empIdDeNombre === 'function' && _empIdDeNombre(nombre)) || k;
+    const alias = (typeof _nombreCorto === 'function') ? _nombreCorto(nombre) : nombre;
+    out.push({ id: id, nombre: nombre, alias: alias, monto: esM ? BONO_DESCANSO_MOTORISTA : BONO_DESCANSO_AYUDANTE, esMotorista: esM, cada: 1 });
+  });
+  _bonoDescCache = out; _bonoDescCacheN = n;
+  return out;
+}
+function _cfgComisionDescanso(id) { return _bonoDescansoLista().find(c => c.id === id) || null; }
+
+// Índice grafía-normalizada -> id de la persona. Si una misma grafía apunta a DOS personas se
+// DESCARTA: preferimos no contar un día antes que asignárselo a la persona equivocada.
+var _idxComDesc = null, _idxComDescN = -1;
+function _indiceComisionDescanso() {
+  const lista = _bonoDescansoLista();
+  if (_idxComDesc && _idxComDescN === lista.length) return _idxComDesc;
+  const m = new Map(), ambiguos = new Set();
+  const add = (n, id) => { const k = _normNombrePersona(n); if (!k) return; if (m.has(k) && m.get(k) !== id) ambiguos.add(k); else m.set(k, id); };
+  lista.forEach(cfg => {
+    add(cfg.nombre, cfg.id);
+    if (typeof NOMBRE_MOSTRAR !== 'undefined' && NOMBRE_MOSTRAR[cfg.nombre]) add(NOMBRE_MOSTRAR[cfg.nombre], cfg.id);
+    if (typeof _EMP_ALIAS !== 'undefined' && typeof _EMP_ID !== 'undefined' && _EMP_ID[cfg.nombre]) {
+      Object.keys(_EMP_ALIAS).forEach(a => { if (_EMP_ALIAS[a] === _EMP_ID[cfg.nombre]) add(a, cfg.id); });
+    }
+    Object.keys(BONO_DESCANSO_ALIAS).forEach(a => { if (BONO_DESCANSO_ALIAS[a] === cfg.nombre) add(a, cfg.id); });
+  });
+  ambiguos.forEach(k => m.delete(k));
+  _idxComDesc = m; _idxComDescN = lista.length;
+  return m;
+}
+// Id de bono de un miembro de equipo (objeto {nombre, empId?} o texto). Prioridad: id interno guardado.
+function _empIdComisionDeNombre(miembro) {
+  const m = (miembro && typeof miembro === 'object') ? miembro : { nombre: miembro };
+  if (m.empId && _cfgComisionDescanso(String(m.empId))) return String(m.empId);
+  return _indiceComisionDescanso().get(_normNombrePersona(m.nombre)) || null;
+}
+
+// Días de descanso (domingos y asuetos) que la persona TRABAJÓ, hasta `hoy` inclusive, contando
+// SOLO desde BONO_DESCANSO_INICIO más los días de arrastre explícitos. ISO ascendente, sin repetir.
 function _domingosTrabajadosEmp(empId, hoy) {
-  if (!_cfgComisionDescanso(empId)) return [];
+  const cfg = _cfgComisionDescanso(empId);
+  if (!cfg) return [];
   const tope = hoy || _hoyISOLocal();
+  const arrastre = new Set(BONO_DESCANSO_ARRASTRE[cfg.nombre] || []);
   const out = [];
   const data = (typeof pdData !== 'undefined' && pdData) ? pdData : {};
   Object.keys(data).forEach(f => {
     if (!_esDiaDescanso(f) || f > tope) return;
+    if (f < BONO_DESCANSO_INICIO && !arrastre.has(f)) return;
     const day = data[f];
     if (!day || !Array.isArray(day.columnas)) return;
     const trabajo = day.columnas.some(col =>
       col && Array.isArray(col.miembros) &&
-      col.miembros.some(m => m && _empIdComisionDeNombre(m.nombre) === empId)
+      col.miembros.some(m => m && _empIdComisionDeNombre(m) === empId)
     );
     if (trabajo) out.push(f);
   });
   return out.sort();
 }
 
-// Historial COMPLETO de pagos de comisión de un empleado (todas las fechas de pdData).
+// Historial COMPLETO de pagos de bono de una persona (todas las fechas de pdData).
 function _historialComisionesEmp(empId) {
   const out = [];
   const data = (typeof pdData !== 'undefined' && pdData) ? pdData : {};
@@ -6824,67 +6901,58 @@ function _historialComisionesEmp(empId) {
   out.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : ((+a._ts || 0) - (+b._ts || 0))));
   return out;
 }
+function _diasDePago(p) { return (Array.isArray(p.dias) && p.dias.length) ? p.dias : ((Array.isArray(p.domingos) && p.domingos.length) ? p.domingos : []); }
 
-// ESTADO ACTUAL del empleado. Nunca reinicia nada: solo lee historial + domingos trabajados.
+// ESTADO ACTUAL de la persona. Nunca reinicia nada: solo lee historial + días trabajados.
 function _estadoComisionDescanso(empId, hoy) {
   const cfg = _cfgComisionDescanso(empId);
   if (!cfg) return null;
-  const cada = Math.max(1, parseInt(cfg.cada, 10) || 4);
   const hist = _historialComisionesEmp(empId);
-
-  // Domingos ya pagados. Un pago moderno trae el detalle exacto (domingos[]); uno legacy sin
-  // detalle solo puede cortar por su fecha (se ignora todo domingo <= la fecha de ese pago).
+  // Días ya pagados. Un pago moderno trae el detalle exacto; uno legacy sin detalle corta por fecha.
   const cubiertos = new Set();
   let corte = '';
   hist.forEach(p => {
-    if (Array.isArray(p.domingos) && p.domingos.length) p.domingos.forEach(d => cubiertos.add(d));
+    const ds = _diasDePago(p);
+    if (ds.length) ds.forEach(d => cubiertos.add(d));
     else if (p.fecha && p.fecha > corte) corte = p.fecha;
   });
-
   const trabajados = _domingosTrabajadosEmp(empId, hoy);
   const pendientes = trabajados.filter(d => !cubiertos.has(d) && (!corte || d > corte));
-  const ciclos = Math.floor(pendientes.length / cada);
   const ultimo = hist.length ? hist[hist.length - 1] : null;
-
+  const monto = parseFloat(cfg.monto) || 0;
   return {
-    empId, cfg, cada,
+    empId, cfg, cada: 1, monto,
     historial: hist,
-    ultimoPago:   ultimo ? ultimo.fecha : null,
-    montoUltimo:  ultimo ? (parseFloat(ultimo.monto) || 0) : 0,
-    domingosUltimoPago: ultimo && Array.isArray(ultimo.domingos) ? ultimo.domingos.slice() : [],
-    trabajados,
-    pendientes,                                  // domingos que aún no ha pagado nadie
+    ultimoPago:  ultimo ? ultimo.fecha : null,
+    montoUltimo: ultimo ? (parseFloat(ultimo.monto) || 0) : 0,
+    trabajados, pendientes,
     acumulados: pendientes.length,
-    enCiclo: pendientes.length % cada,           // avance dentro del ciclo en curso
-    faltan: ciclos > 0 ? 0 : (cada - (pendientes.length % cada)),
-    ciclos,                                      // cuántas comisiones completas se deben
-    montoDebido: ciclos * (parseFloat(cfg.monto) || 0),
-    debe: ciclos > 0
+    montoDebido: pendientes.length * monto,
+    debe: pendientes.length > 0
   };
 }
+// Resumen de todos los pendientes (para el aviso discreto): [{cfg, acumulados, montoDebido}], sin ceros.
+function _bonosDescansoPendientes(hoy) {
+  return _bonoDescansoLista().map(c => _estadoComisionDescanso(c.id, hoy)).filter(e => e && e.debe)
+    .sort((a, b) => b.acumulados - a.acumulados || (a.cfg.alias < b.cfg.alias ? -1 : 1));
+}
 
-// Registra el/los pago(s) de comisión que correspondan HOY. Consume los domingos MÁS ANTIGUOS
-// primero y deja el sobrante para el siguiente ciclo. Idempotente: recalcula el estado justo
-// antes de escribir, así dos clics seguidos no generan un pago de más.
+// Registra el pago de TODOS los días pendientes de la persona, hoy. Idempotente: recalcula el estado
+// justo antes de escribir, así dos clics seguidos no generan un pago de más.
 function registrarComisionDescanso(empId) {
   const est = _estadoComisionDescanso(empId);
-  if (!est) { alert('Ese empleado no está configurado para comisión por día de descanso.'); return; }
-  if (!est.debe) {
-    alert('Todavía no corresponde pagar.\n\n' + est.cfg.alias + ': ' + est.acumulados + ' de ' + est.cada +
-          ' domingos trabajados. Falta' + (est.faltan === 1 ? '' : 'n') + ' ' + est.faltan + ' domingo' + (est.faltan === 1 ? '' : 's') + '.');
-    return;
-  }
+  if (!est) { alert('Esa persona no está en la planilla del programa.'); return; }
+  if (!est.debe) { alert('No hay días de descanso pendientes de pagar para ' + est.cfg.alias + '.'); return; }
   const f = _hoyISOLocal();
   if (isDiaCerrado(f)) {
     alert('🔒 El día de hoy (' + _fchCorta(f) + ') está cerrado.\n\nDesbloquéalo en Programación para registrar el pago.');
     return;
   }
-  const n = est.ciclos;
-  const detalle = [];
-  for (let k = 0; k < n; k++) detalle.push(est.pendientes.slice(k * est.cada, (k + 1) * est.cada).map(_fchCorta).join(', '));
-  if (!confirm('¿Registrar pago de comisión por día de descanso?\n\n' + est.cfg.alias + '\n' +
-               n + ' comisión(es) × $' + (parseFloat(est.cfg.monto) || 0).toFixed(2) + ' = $' + est.montoDebido.toFixed(2) + '\n' +
-               'Domingos que se pagan:\n• ' + detalle.join('\n• ') + '\n\n' +
+  const dias = est.pendientes.slice();
+  const detalle = dias.map(d => _fchCorta(d) + ' (' + _tipoDiaDescanso(d) + ')').join('\n• ');
+  if (!confirm('¿Registrar pago del bono por día de descanso?\n\n' + est.cfg.alias + (est.cfg.esMotorista ? ' (motorista)' : '') + '\n' +
+               dias.length + ' día(s) × $' + est.monto.toFixed(2) + ' = $' + est.montoDebido.toFixed(2) + '\n' +
+               'Días que se pagan:\n• ' + detalle + '\n\n' +
                'Se anota como gasto de CAJA CHICA con fecha ' + _fchCorta(f) + '.')) return;
 
   const day = getDayData(f);
@@ -6892,43 +6960,38 @@ function registrarComisionDescanso(empId) {
   if (!Array.isArray(day.gastos)) day.gastos = [];
   const ahora = Date.now();
   const usuario = (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '';
-
-  for (let k = 0; k < n; k++) {
-    const cubre = est.pendientes.slice(k * est.cada, (k + 1) * est.cada);
-    const comId = _itemId();
-    const gastoId = _itemId();
-    day.comisionesDescanso.push({
-      _id: comId, _ts: ahora + k,
-      empId: empId, nombre: est.cfg.nombre, alias: est.cfg.alias,
-      monto: parseFloat(est.cfg.monto) || 0, cada: est.cada,
-      domingos: cubre, fecha: f, usuario: usuario, gastoId: gastoId
-    });
-    day.gastos.push({
-      _id: gastoId, _ts: ahora + k,
-      monto: (parseFloat(est.cfg.monto) || 0).toFixed(2),
-      titulo: 'COMISIÓN DÍA DE DESCANSO',
-      desc: est.cfg.alias + ' — ' + cubre.length + ' domingos: ' + cubre.map(_fchCorta).join(', '),
-      fondo: 'CAJA CHICA', _comId: comId
-    });
-  }
+  const comId = _itemId();
+  const gastoId = _itemId();
+  day.comisionesDescanso.push({
+    _id: comId, _ts: ahora,
+    empId: empId, nombre: est.cfg.nombre, alias: est.cfg.alias,
+    monto: est.montoDebido, tarifa: est.monto, cada: 1,
+    dias: dias, fecha: f, usuario: usuario, gastoId: gastoId
+  });
+  day.gastos.push({
+    _id: gastoId, _ts: ahora,
+    monto: est.montoDebido.toFixed(2),
+    titulo: 'BONO DÍA DE DESCANSO',
+    desc: est.cfg.alias + ' — ' + dias.length + ' día(s) × $' + est.monto.toFixed(2) + ': ' + dias.map(_fchCorta).join(', '),
+    fondo: 'CAJA CHICA', _comId: comId
+  });
 
   savePD();
   try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); } catch (e) {}
-  // v111: el gasto cae en `f` (hoy), que puede NO ser el día visible del cuaderno — el botón vive
-  // en Comisiones, independiente del selector de fecha. recalcCerramos() sin argumento recalculaba
-  // el día visible, así que el cerramos de `f` quedaba sin descontar el pago. Mismo criterio v109.
+  // El gasto cae en `f` (hoy), que puede NO ser el día visible del cuaderno: se recalcula ESE día y
+  // se encadena hacia adelante (criterio v109/F4).
   try { if (typeof _recalcDesde === 'function') _recalcDesde(f); else recalcCerramos(); } catch (e) {}
   try { renderComisionesDescanso(); } catch (e) {}
   try { if (typeof getPDFecha === 'function' && document.getElementById('pd-fecha') && getPDFecha() === f) { renderGastos(); renderCuaderno(); } } catch (e) {}
   alert('✅ Pago registrado: ' + est.cfg.alias + ' — $' + est.montoDebido.toFixed(2) +
-        '\n\nSe anotó como gasto de CAJA CHICA del ' + _fchCorta(f) + '. El contador arranca de nuevo desde el domingo siguiente.');
+        '\n\nSe anotó como gasto de CAJA CHICA del ' + _fchCorta(f) + '. Esos días ya no vuelven a contar.');
 }
 
 // Anular un pago mal registrado. NO es un "reinicio manual": elimina el pago y su gasto enlazado,
-// devolviendo esos domingos al contador. Solo admin y solo si el día del pago no está cerrado.
+// devolviendo esos días al contador. Solo admin y solo si el día del pago no está cerrado.
 function anularComisionDescanso(diaISO, comId) {
   if (!(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.rol === 'admin')) {
-    alert('Solo el administrador puede anular un pago de comisión.'); return;
+    alert('Solo el administrador puede anular un pago de bono.'); return;
   }
   const day = pdData && pdData[diaISO];
   const arr = day && day.comisionesDescanso;
@@ -6936,9 +6999,9 @@ function anularComisionDescanso(diaISO, comId) {
   if (idx < 0) { alert('No se encontró ese pago.'); return; }
   if (isDiaCerrado(diaISO)) { alert('🔒 El día ' + _fchCorta(diaISO) + ' está cerrado. Desbloquéalo para anular el pago.'); return; }
   const it = arr[idx];
-  if (!confirm('¿Anular este pago de comisión?\n\n' + (it.alias || it.nombre) + ' — $' + (parseFloat(it.monto) || 0).toFixed(2) +
-               ' del ' + _fchCorta(it.fecha || diaISO) + '\n\nLos ' + ((it.domingos || []).length) +
-               ' domingos que cubría vuelven a contar y se borra su gasto de CAJA CHICA.')) return;
+  if (!confirm('¿Anular este pago?\n\n' + (it.alias || it.nombre) + ' — $' + (parseFloat(it.monto) || 0).toFixed(2) +
+               ' del ' + _fchCorta(it.fecha || diaISO) + '\n\nLos ' + _diasDePago(it).length +
+               ' día(s) que cubría vuelven a contar y se borra su gasto de CAJA CHICA.')) return;
 
   if (!day._tomb) day._tomb = {};
   if (!day._tomb.comisionesDescanso) day._tomb.comisionesDescanso = {};
@@ -6955,60 +7018,51 @@ function anularComisionDescanso(diaISO, comId) {
   }
   savePD();
   try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); } catch (e) {}
-  // v111: el gasto anulado vive en `diaISO`, que suele ser un día PASADO. recalcCerramos() sin
-  // argumento recalculaba solo el día visible: el cerramos de diaISO seguía con el monto restado y
-  // el abrimos del día siguiente nunca se refrescaba (renderCuentas solo autocompleta si está
-  // VACÍO) → la cadena quedaba corta hasta visitar los días uno por uno EN ORDEN. Fix v109 (F4).
+  // El gasto anulado vive en `diaISO`, que suele ser un día PASADO: recalcular ESE día y encadenar (v109/F4).
   try { if (typeof _recalcDesde === 'function') _recalcDesde(diaISO); else recalcCerramos(); } catch (e) {}
   try { renderComisionesDescanso(); } catch (e) {}
   try { if (typeof getPDFecha === 'function' && document.getElementById('pd-fecha') && getPDFecha() === diaISO) { renderGastos(); renderCuaderno(); } } catch (e) {}
 }
 
-// Aviso compacto para el Cuaderno (bloque PAGOS AL PERSONAL).
-// v112 (2026-08-04): Pedro pidió OCULTAR este aviso en la interfaz. Se apaga SOLO la
-// visualización: el conteo de domingos, la acumulación, el cálculo, el registro del pago
-// y su gasto en CAJA CHICA siguen EXACTAMENTE igual (_estadoComisionDescanso,
-// registrarComisionDescanso, anularComisionDescanso, renderComisionesDescanso en la
-// sección 💰 Comisiones). Para volver a mostrarlo: poner esta constante en true.
-const MOSTRAR_AVISO_COMISION_DESCANSO = false;
+// AVISO DISCRETO para el Cuaderno (bloque PAGOS AL PERSONAL): una sola línea gris con la cuenta.
+// Pedido de Pedro (15-sep-2026): que el programa lleve la cuenta y avise "de una forma muy discreta".
+const MOSTRAR_AVISO_COMISION_DESCANSO = true;
 function _avisoComisionesDescansoHTML() {
   if (!MOSTRAR_AVISO_COMISION_DESCANSO) return '';
   let pend = [];
-  try { pend = COMISIONES_DESCANSO.map(c => _estadoComisionDescanso(c.id)).filter(e => e && e.debe); } catch (e) { return ''; }
+  try { pend = _bonosDescansoPendientes(); } catch (e) { return ''; }
   if (!pend.length) return '';
-  return '<div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:8px;padding:8px 10px;margin-bottom:10px;">' +
-    '<div style="font-size:12px;font-weight:800;color:#92400e;">⚠ Comisión por día de descanso pendiente</div>' +
-    pend.map(e => '<div style="font-size:12px;color:#92400e;margin-top:2px;">' + escHtml(e.cfg.alias) +
-      ' — <strong>$' + e.montoDebido.toFixed(2) + '</strong> (' + e.acumulados + ' domingos acumulados)</div>').join('') +
-    '<div style="font-size:10px;color:#b45309;font-style:italic;margin-top:4px;">Regístrala en la sección 💰 Comisiones.</div></div>';
+  const total = pend.reduce((s, e) => s + e.montoDebido, 0);
+  return '<div title="Bono por domingo o asueto trabajado: $' + BONO_DESCANSO_MOTORISTA + ' motorista · $' + BONO_DESCANSO_AYUDANTE + ' ayudante. Se registra en la sección Comisiones." ' +
+    'style="font-size:11px;color:var(--gris2);margin-bottom:8px;line-height:1.4;">🗓 Días de descanso trabajados sin pagar: ' +
+    pend.map(e => escHtml(e.cfg.alias) + ' <strong>' + e.acumulados + '</strong>').join(' · ') +
+    ' <span style="opacity:.75;">($' + total.toFixed(2) + ' · ver Comisiones)</span></div>';
+}
+// Chip discreto para la cabecera de Programación Diaria cuando el día visible es domingo o asueto.
+function _chipDiaDescansoHTML(f) {
+  const t = _tipoDiaDescanso(f);
+  if (!t) return '';
+  return ' <span style="font-size:11px;color:var(--gris2);font-weight:500;" title="La planilla que trabaje este día acumula bono por día de descanso ($' + BONO_DESCANSO_MOTORISTA + ' motorista · $' + BONO_DESCANSO_AYUDANTE + ' ayudante).">· 🗓 ' + escHtml(t) + ': cuenta como día de descanso trabajado</span>';
 }
 
 function renderComisionesDescanso() {
   const cont = document.getElementById('com-descanso');
   if (!cont) return;
   const esAdmin = !!(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.rol === 'admin');
-  cont.innerHTML = COMISIONES_DESCANSO.map(cfg => {
-    const e = _estadoComisionDescanso(cfg.id);
-    if (!e) return '';
-    const monto = parseFloat(cfg.monto) || 0;
+  const lista = _bonoDescansoLista();
+  const estados = lista.map(c => _estadoComisionDescanso(c.id)).filter(Boolean);
+  const visibles = estados.filter(e => e.debe || e.historial.length)
+    .sort((a, b) => (b.debe - a.debe) || (b.acumulados - a.acumulados) || (a.cfg.alias < b.cfg.alias ? -1 : 1));
+  const sinPend = estados.length - estados.filter(e => e.debe).length;
+  const totalPend = estados.reduce((s, e) => s + e.montoDebido, 0);
+
+  const cards = visibles.map(e => {
+    const cfg = e.cfg;
     const color = e.debe ? '#d97706' : '#1a3a6b';
-    const estadoHtml = e.debe
-      ? '<div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:7px;padding:8px 10px;margin-top:10px;">' +
-          '<div style="font-size:13px;font-weight:900;color:#92400e;">⚠ Comisión pendiente de pago</div>' +
-          '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:26px;font-weight:900;color:#b45309;line-height:1.1;">$' + e.montoDebido.toFixed(2) + '</div>' +
-          (e.ciclos > 1 ? '<div style="font-size:11px;color:#92400e;">' + e.ciclos + ' comisiones acumuladas × $' + monto.toFixed(2) + '</div>' : '') +
-          (e.enCiclo > 0 ? '<div style="font-size:11px;color:#92400e;">+' + e.enCiclo + ' domingo(s) ya avanzan el siguiente ciclo.</div>' : '') +
-        '</div>'
-      : '<div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:7px;padding:8px 10px;margin-top:10px;">' +
-          '<div style="font-size:12px;font-weight:700;color:#166534;">Falta' + (e.faltan === 1 ? '' : 'n') + ' <strong>' + e.faltan +
-          ' domingo' + (e.faltan === 1 ? '' : 's') + '</strong> para generar comisión de $' + monto.toFixed(2) + '.</div>' +
-        '</div>';
-
     const listaPend = e.pendientes.length
-      ? '<div style="font-size:10px;color:var(--gris2);margin-top:8px;line-height:1.5;"><strong>Domingos contados:</strong> ' +
-        e.pendientes.map(_fchCorta).join(' · ') + '</div>'
-      : '<div style="font-size:10px;color:var(--gris2);margin-top:8px;">Sin domingos trabajados desde el último pago.</div>';
-
+      ? '<div style="font-size:10px;color:var(--gris2);margin-top:8px;line-height:1.5;"><strong>Días contados:</strong> ' +
+        e.pendientes.map(d => _fchCorta(d) + ' <span style="opacity:.7;">' + escHtml(_tipoDiaDescanso(d)) + '</span>').join(' · ') + '</div>'
+      : '<div style="font-size:10px;color:var(--gris2);margin-top:8px;">Sin días pendientes desde el último pago.</div>';
     const hist = e.historial.slice().reverse();
     const histHtml = hist.length
       ? '<details style="margin-top:10px;"><summary style="font-size:11px;font-weight:700;color:var(--gris2);cursor:pointer;">📜 Historial de pagos (' + hist.length + ')</summary>' +
@@ -7017,26 +7071,28 @@ function renderComisionesDescanso() {
             '<div style="min-width:0;"><div style="font-size:12px;font-weight:700;">' + _fchCorta(p.fecha) +
               ' — $' + (parseFloat(p.monto) || 0).toFixed(2) + '</div>' +
               '<div style="font-size:10px;color:var(--gris2);word-break:break-word;">' +
-                ((p.domingos && p.domingos.length) ? 'Domingos: ' + p.domingos.map(_fchCorta).join(', ') : 'Sin detalle de domingos (registro previo)') +
+                (_diasDePago(p).length ? 'Días: ' + _diasDePago(p).map(_fchCorta).join(', ') : 'Sin detalle de días (registro previo)') +
                 (p.usuario ? ' · ' + escHtml(p.usuario) : '') + '</div></div>' +
             (esAdmin ? '<button onclick="anularComisionDescanso(\'' + p._dia + '\',\'' + p._id + '\')" title="Anular pago mal registrado" style="flex:0 0 auto;background:#fee2e2;border:none;border-radius:5px;padding:3px 7px;color:#d42b2b;font-size:10px;font-weight:700;cursor:pointer;font-family:\'Barlow\',sans-serif;">Anular</button>' : '') +
           '</div>').join('') + '</div></details>'
-      : '<div style="font-size:11px;color:var(--gris2);margin-top:10px;">Sin pagos registrados todavía.</div>';
-
-    return '<div style="background:#fff;border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow);border-left:4px solid ' + color + ';">' +
-      '<div style="font-size:14px;font-weight:800;">' + escHtml(cfg.alias) + '</div>' +
-      '<div style="font-size:10px;color:var(--gris2);margin-bottom:8px;">' + escHtml(cfg.nombre) + ' · $' + monto.toFixed(2) + ' cada ' + e.cada + ' domingos</div>' +
-      '<div style="display:flex;gap:14px;flex-wrap:wrap;">' +
-        '<div><div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Último pago</div>' +
-          '<div style="font-size:13px;font-weight:700;">' + (e.ultimoPago ? _fchCorta(e.ultimoPago) : '—') + '</div>' +
-          '<div style="font-size:10px;color:var(--gris2);">' + (e.ultimoPago ? '$' + e.montoUltimo.toFixed(2) : 'nunca') + '</div></div>' +
-        '<div><div style="font-size:10px;font-weight:800;color:var(--gris2);text-transform:uppercase;">Domingos acumulados</div>' +
-          '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:26px;font-weight:900;color:' + color + ';line-height:1.1;">' +
-            (e.debe ? e.acumulados : e.acumulados + ' de ' + e.cada) + '</div></div>' +
-      '</div>' + estadoHtml + listaPend +
-      (e.debe ? '<button onclick="registrarComisionDescanso(\'' + cfg.id + '\')" style="width:100%;margin-top:10px;background:#16a34a;border:none;border-radius:7px;padding:9px;color:#fff;font-size:13px;font-weight:800;cursor:pointer;font-family:\'Barlow\',sans-serif;">💵 Registrar pago de $' + e.montoDebido.toFixed(2) + '</button>' : '') +
+      : '';
+    return '<div style="background:#fff;border-radius:var(--r);padding:14px 16px;box-shadow:var(--shadow);border-left:4px solid ' + color + ';">' +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">' +
+        '<div style="font-size:14px;font-weight:800;">' + escHtml(cfg.alias) + (cfg.esMotorista ? ' <span style="color:#d42b2b;font-size:11px;font-weight:900;">(M)</span>' : '') + '</div>' +
+        '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:24px;font-weight:900;color:' + color + ';line-height:1;">' + (e.debe ? '$' + e.montoDebido.toFixed(2) : '$0.00') + '</div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:var(--gris2);">' + escHtml(cfg.nombre) + ' · $' + e.monto.toFixed(2) + ' por día · ' +
+        (e.debe ? '<strong>' + e.acumulados + ' día' + (e.acumulados === 1 ? '' : 's') + ' pendiente' + (e.acumulados === 1 ? '' : 's') + '</strong>' : 'al día') +
+        (e.ultimoPago ? ' · último pago ' + _fchCorta(e.ultimoPago) : '') + '</div>' +
+      listaPend +
+      (e.debe ? '<button onclick="registrarComisionDescanso(\'' + cfg.id + '\')" style="width:100%;margin-top:10px;background:#16a34a;border:none;border-radius:7px;padding:8px;color:#fff;font-size:12px;font-weight:800;cursor:pointer;font-family:\'Barlow\',sans-serif;">💵 Registrar pago de $' + e.montoDebido.toFixed(2) + '</button>' : '') +
       histHtml + '</div>';
   }).join('');
+
+  cont.innerHTML = (cards || '<div style="font-size:12px;color:var(--gris2);">Nadie tiene días de descanso pendientes de pagar.</div>') +
+    '<div style="grid-column:1/-1;font-size:11px;color:var(--gris2);">' +
+      (totalPend > 0 ? 'Total pendiente: <strong>$' + totalPend.toFixed(2) + '</strong> · ' : '') +
+      sinPend + ' persona' + (sinPend === 1 ? '' : 's') + ' de planilla al día. Se cuenta desde el ' + _fchCorta(BONO_DESCANSO_INICIO) + '; lo anterior ya se liquidó fuera del programa.</div>';
 }
 
 // ==================== ROSTER OFICIAL DE APOYO (28) ====================
@@ -7223,7 +7279,7 @@ function renderPD() {
   const day = getDayData(f);
   const fechaLabel = new Date(f+'T12:00:00').toLocaleDateString('es-SV',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const lbl = document.getElementById('pd-fecha-label');
-  if (lbl) lbl.textContent = fechaLabel.charAt(0).toUpperCase()+fechaLabel.slice(1);
+  if (lbl) { lbl.innerHTML = escHtml(fechaLabel.charAt(0).toUpperCase()+fechaLabel.slice(1)); try { lbl.innerHTML += _chipDiaDescansoHTML(f); } catch(e) {} }
 
 
   // Tarjetas de estadísticas — v111: una sola implementación (renderStats2). Antes había acá una
@@ -9294,6 +9350,14 @@ function delGasto(id) {
   const f=getPDFecha(); const day=getDayData(f);
   const idx=(day.gastos||[]).findIndex(x=>x._id===id);
   if (idx<0) return;
+  // v126: el gasto de un BONO POR DÍA DE DESCANSO está enlazado (_comId) a un pago que marca esos
+  // días como pagados. Si se borra solo el gasto, los días quedan "pagados" sin que el dinero haya
+  // salido de la caja (y el pago ya no se puede anular). Se obliga a anularlo desde Comisiones,
+  // que borra pago + gasto juntos y devuelve los días al contador.
+  if (day.gastos[idx] && day.gastos[idx]._comId) {
+    alert('Este gasto es el pago de un bono por día de descanso.\n\nPara borrarlo, anulalo desde la sección Comisiones (📜 Historial de pagos → Anular): así los días vuelven a contar y el gasto se quita junto con el pago.');
+    return;
+  }
   // v101: registrar la "tumba" del borrado para que el merge NO lo resucite desde otra compu.
   if (!day._tomb) day._tomb={}; if(!day._tomb.gastos) day._tomb.gastos={};
   day._tomb.gastos[id]=Date.now();
