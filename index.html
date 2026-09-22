@@ -1792,25 +1792,49 @@ function _mergeItems(aArr, bArr, aTomb, bTomb) {
 function _claveColumna(col, i) {
   return String((col && (col.camion || col.nombre)) || ('#' + i)).trim().toUpperCase();
 }
+// v128: une dos mapas de tumbas quedándose con la MÁS NUEVA de cada clave (antes Object.assign dejaba
+// la del lado base aunque la del otro lado fuera más reciente).
+function _maxTumbas(a, b) {
+  const out = Object.assign({}, a || {});
+  Object.entries(b || {}).forEach(([k, t]) => { if ((+t || 0) > (+out[k] || 0)) out[k] = t; });
+  return out;
+}
+// v128: claves de TODAS las columnas de un día, distinguiendo equipos con el MISMO camión. La primera
+// conserva la clave de siempre (compatible con las tumbas ya guardadas); la 2ª, 3ª… llevan " #2", " #3".
+// Antes dos equipos con el mismo camión (caso real: P697518 el 22-sep-2026) tenían la misma clave y el
+// merge emparejaba los dos con el mismo equipo del otro lado: uno se duplicaba y el otro se perdía.
+function _clavesColumnas(cols) {
+  const vistos = {};
+  return (cols || []).map((c, i) => {
+    const k = _claveColumna(c, i);
+    vistos[k] = (vistos[k] || 0) + 1;
+    return vistos[k] === 1 ? k : k + ' #' + vistos[k];
+  });
+}
 function _mergeColumnas(base, otro) {
   const A = Array.isArray(base && base.columnas) ? base.columnas : [];
   const B = Array.isArray(otro && otro.columnas) ? otro.columnas : [];
-  if (!B.length) return A;
-  if (!A.length) return B;
-  const tumbas = Object.assign({}, otro._tombCol || {}, base._tombCol || {});
+  const kA = _clavesColumnas(A), kB = _clavesColumnas(B);
+  const tumbas = _maxTumbas(otro && otro._tombCol, base && base._tombCol);
+  // v128: la tumba vale para los DOS lados. Antes solo se miraba en las columnas que existían en un
+  // solo lado; si el lado base todavía traía el equipo borrado (p. ej. la copia vieja de otra compu),
+  // el equipo revivía y volvía a descontar sus pagos/propinas/comisión de CAJA CHICA.
+  const viva = (c, k) => { const t = +tumbas[k] || 0; return !(t && t >= (+c._ts || 0)); };
+  if (!B.length) return A.filter((c, i) => viva(c, kA[i]));
+  if (!A.length) return B.filter((c, i) => viva(c, kB[i]));
   const idxB = new Map();
-  B.forEach((c, i) => { const k = _claveColumna(c, i); if (!idxB.has(k)) idxB.set(k, c); });
-  const clavesA = new Set(A.map((c, i) => _claveColumna(c, i)));
-  const out = A.map((c, i) => {
-    const g = idxB.get(_claveColumna(c, i));
-    if (!g) return c;
-    return ((+g._ts || 0) > (+c._ts || 0)) ? g : c;   // empate o sin sello -> gana el lado base
+  B.forEach((c, i) => { if (!idxB.has(kB[i])) idxB.set(kB[i], c); });
+  const clavesA = new Set(kA);
+  const out = [];
+  A.forEach((c, i) => {
+    const g = idxB.get(kA[i]);
+    const elegida = (g && (+g._ts || 0) > (+c._ts || 0)) ? g : c;   // empate o sin sello -> gana el lado base
+    if (viva(elegida, kA[i])) out.push(elegida);
   });
   B.forEach((c, i) => {
-    const k = _claveColumna(c, i);
+    const k = kB[i];
     if (clavesA.has(k)) return;
-    const t = +tumbas[k] || 0;
-    if (t && t >= (+c._ts || 0)) return;   // borrada después de su última edición: no resucita
+    if (!viva(c, k)) return;   // borrada después de su última edición: no resucita
     clavesA.add(k);
     out.push(c);
   });
@@ -1854,6 +1878,19 @@ function _mergePdDataSeguro(local, nube) {
   return out;
 }
 
+// v128 (S4): ¿hay en lo unido algún ítem financiero (por _id) que la nube no tenga? Las tumbas ya las
+// resolvió el merge (un ítem borrado no está en lo unido), así que lo que falte es algo sin subir.
+function _faltanEnNube(unido, nube) {
+  const LISTAS = ['gastos', 'otrosIngresos', 'movimientos', 'cobrosPendientes'];
+  for (const [f, d] of Object.entries(unido || {})) {
+    const n = (nube || {})[f] || {};
+    for (const k of LISTAS) {
+      const ids = new Set(((n[k]) || []).map(x => x && x._id).filter(Boolean));
+      if (((d && d[k]) || []).some(x => x && x._id && !ids.has(x._id))) return true;
+    }
+  }
+  return false;
+}
 async function syncAllFromSupabase(silent, hardReplace=false) {
   if (!sb || _syncInProgress) return;
   _syncInProgress = true;
@@ -1874,6 +1911,10 @@ async function syncAllFromSupabase(silent, hardReplace=false) {
       // cuando tiene >= que el local.
       pdData = _mergePdDataSeguro(pdData || {}, pd);
       safeSetLS('mt_pd3', JSON.stringify(pdData));
+      // v128 (S4): si después de unir quedaron anotaciones de ESTE equipo que la nube no tiene
+      // (gastos, ingresos, movimientos o cobros), subirlas. Antes quedaban solo en este navegador
+      // hasta la próxima edición, y un borrado de caché (versión nueva, recargar datos) las perdía.
+      try { if (_faltanEnNube(pdData, pd)) syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('resubir faltantes:', e); }
     }
 
     const ag = await loadFromSupabase('mt_aggrid');
@@ -2028,7 +2069,7 @@ function startAutoRefresh() {
         // (loadReservasFromSupabase devuelve null si hay error, [] solo si la nube tiene 0 filas
         // reales.) Si alguna vez se vacía la nube de verdad, usar forceSync manual.
         if (sbRes !== null && sbRes.length > 0) {
-          reservas = sbRes;
+          reservas = _conPendientesLocales(sbRes);   // v128
           safeSetLS('mt2_reservas', JSON.stringify(reservas));
         }
         renderAllSections();
@@ -2174,7 +2215,12 @@ async function _supabaseHeartbeat() {
     const { error } = await sb.from('reservaciones').select('codigo', { count: 'exact', head: true });
     if (!error) {
       _lastSupabasePing = Date.now();
+      // v128 (S2): si la conexión VOLVIÓ (estaba caída), subir YA la cola de reservaciones pendientes.
+      // Antes solo se reintentaba al recargar, con el evento 'online' del navegador (que no se dispara si
+      // la red siguió "conectada" pero Supabase falló) o con clic en el aviso.
+      const _volvio = !supabaseOK;
       supabaseOK = true;
+      if (_volvio && _getPendingSaves().length > 0) setTimeout(() => { try { reintentarSavesPendientes(true); } catch(e) {} }, 500);
     } else {
       supabaseOK = false;
     }
@@ -2252,7 +2298,7 @@ function scheduleFullSyncAndRender(delay = 600) {
       // Luego reservaciones
       const sbRes = await loadReservasFromSupabase();
       if (sbRes !== null && sbRes.length > 0) {
-        reservas = sbRes;
+        reservas = _conPendientesLocales(sbRes);   // v128
         safeSetLS('mt2_reservas', JSON.stringify(reservas));
       }
     } catch(e) { console.warn('fullSync error:', e); }
@@ -2344,7 +2390,7 @@ async function forceSync() {
     // FIX A3 (2026-05-30): en sync MANUAL sí aceptamos nube vacía (Pedro lo pidió a propósito),
     // así puede reflejar una limpieza real. El polling automático sigue exigiendo >0 por seguridad.
     if (sbRes !== null) {
-      reservas = sbRes;
+      reservas = _conPendientesLocales(sbRes);   // v128
       safeSetLS('mt2_reservas', JSON.stringify(reservas));
       console.log('🔄 forceSync: ' + reservas.length + ' reservaciones');
     }
@@ -2368,7 +2414,7 @@ async function hardReloadDatos() {
       if (!ok) { alert('❌ No hay conexión con la nube. Revisa tu internet e intenta de nuevo.'); return; }
     }
     const sbRes = await loadReservasFromSupabase();
-    if (sbRes !== null) { reservas = sbRes; safeSetLS('mt2_reservas', JSON.stringify(reservas)); }
+    if (sbRes !== null) { reservas = _conPendientesLocales(sbRes); safeSetLS('mt2_reservas', JSON.stringify(reservas)); }
     await syncAllFromSupabase(false);
     renderAllSections();
     alert(`✅ Datos recargados: ${reservas.length} reservaciones, ${Object.keys(agGrid).length} fechas en agenda.`);
@@ -2471,6 +2517,20 @@ function _filaReservaSupabase(r) {
 async function saveReservaToSupabase(r) {
   if (!sb || !supabaseOK) return null;
   try {
+    // v128 (S3): el guardado sube la fila COMPLETA desde la copia local. Si esta computadora tenía una
+    // copia vieja (p. ej. estaba editando y no bajaba cambios) y OTRA ya la canceló, este upsert la
+    // "des-cancelaba" y pisaba sus datos, rompiendo la regla v110 (una cancelada es inmutable). Antes
+    // de subir se mira la nube: si allá está CANCELADA, manda la nube y no se sube nada.
+    if (r && r.codigo && r.estado !== 'cancelado') {
+      const { data: _enNube, error: _errN } = await sb.from('reservaciones').select('estado,obs').eq('codigo', r.codigo).limit(1);
+      if (!_errN && _enNube && _enNube[0] && _enNube[0].estado === 'cancelado') {
+        r.estado = 'cancelado';
+        r.obs = _enNube[0].obs || r.obs || '';
+        try { safeSetLS('mt2_reservas', JSON.stringify(reservas)); } catch(e) {}
+        if (typeof showSaveToast === 'function') showSaveToast('⚠️ La reservación ' + r.codigo + ' ya estaba CANCELADA en otra computadora: no se guardaron los cambios.', 'warn');
+        return _enNube;   // "resuelto": no queda en la cola ni se reintenta
+      }
+    }
     const row = _filaReservaSupabase(r);
 
     // Upsert by codigo
@@ -2493,20 +2553,8 @@ async function saveReservaToSupabase(r) {
   }
 }
 
-async function deleteReservaFromSupabase(codigo) {
-  if (!sb || !supabaseOK) return false;
-  try {
-    const { error } = await sb
-      .from('reservaciones')
-      .delete()
-      .eq('codigo', codigo);
-    if (error) throw error;
-    return true;
-  } catch(e) {
-    console.error('Error eliminando reservación:', e);
-    return false;
-  }
-}
+// v128: se eliminó deleteReservaFromSupabase. Una reservación NUNCA se borra (solo cambia de estado)
+// y la base bloquea el DELETE desde la app (ver SEGURIDAD-BORRADO-v128.sql).
 
 async function saveAllReservasToSupabase() {
   if (!supabaseOK) return;
@@ -2749,7 +2797,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-22-v127';
+const APP_VERSION = '2026-09-22-v128';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -2768,7 +2816,10 @@ function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/<
       } else {
         console.log('🔄 Versión nueva detectada. Limpiando caché local de datos...');
         // Limpiar solo datos de sync (no PIN, no comentarios)
-        ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc'].forEach(k => localStorage.removeItem(k));
+        // v128 (S4): mt_pd3 (cuaderno/pizarra) YA NO se borra. Desde v101/v117 el merge con la nube es
+        // ítem por ítem y no pisa nada, así que conservarlo es seguro; borrarlo perdía para siempre los
+        // gastos/ingresos que por una carrera de sincronización no habían llegado a la nube.
+        ['mt2_reservas', 'mt_aggrid', 'mt_conc'].forEach(k => localStorage.removeItem(k));
       }
       localStorage.setItem('mt_app_version', APP_VERSION);
     }
@@ -2842,8 +2893,9 @@ let verIdx = null;
 let verCodigo = null;
 function _resolveVerR() {
   if (verCodigo) {
-    const r = reservas.find(rv => rv.codigo === verCodigo);
-    if (r) return r;
+    // v128: si hay código y ya no existe (otra compu lo renumeró/limpió con el modal abierto), NO caer
+    // a la posición en la lista: esa posición ahora es OTRA reservación (el bug que v44 quiso evitar).
+    return reservas.find(rv => rv.codigo === verCodigo) || null;
   }
   if (verIdx !== null && reservas[verIdx]) return reservas[verIdx];
   return null;
@@ -2851,7 +2903,7 @@ function _resolveVerR() {
 function _resolveVerIdx() {
   if (verCodigo) {
     const i = reservas.findIndex(rv => rv.codigo === verCodigo);
-    if (i >= 0) return i;
+    return i >= 0 ? i : null;   // v128: mismo criterio que _resolveVerR
   }
   return verIdx;
 }
@@ -2891,7 +2943,7 @@ async function initData() {
     if (sbReservas !== null) {
       if (sbReservas.length > 0) {
         // Reemplazo TOTAL de reservas (no merge)
-        reservas = sbReservas;
+        reservas = _conPendientesLocales(sbReservas);   // v128
         safeSetLS('mt2_reservas', JSON.stringify(reservas));
         console.log('📦 ' + reservas.length + ' reservaciones cargadas de Supabase (antes tenías ' + localReservasAntes + ')');
       } else if (localReservasAntes > 0) {
@@ -2965,6 +3017,29 @@ function save() {
 
 // Cola persistente de saves pendientes — si Supabase falla, guardamos aquí y reintentamos.
 // Esto previene pérdida silenciosa de reservaciones cuando hay error de red/RLS/timeout.
+// v128 (S2): reservaciones que este dispositivo guardó y AÚN no llegaron a la nube: las de la cola
+// persistente (mt_pending_saves) y las que se están subiendo ahora (reintentos en curso). Cada vez
+// que un sync reemplaza la lista con la de la nube, estas se vuelven a poner encima (la versión local
+// es la más nueva). Antes desaparecían de la pantalla, renderAgenda borraba su celda por no
+// encontrarlas y esa agenda sin la celda se subía a todas las computadoras.
+const _subiendoAhora = new Map();
+function _conPendientesLocales(lista) {
+  const out = Array.isArray(lista) ? lista.slice() : [];
+  const locales = [..._getPendingSaves(), ..._subiendoAhora.values()];
+  if (!locales.length) return out;
+  const idx = new Map(out.map((r, i) => [r && r.codigo, i]));
+  const nuevas = new Map();   // se agregan AL FINAL: un unshift en medio corría las posiciones de idx
+  locales.forEach(p => {
+    if (!p || !p.codigo) return;
+    if (idx.has(p.codigo)) {
+      const i = idx.get(p.codigo);
+      // Una CANCELADA en la nube manda (v110): no se revive con una copia local vieja.
+      if (out[i] && out[i].estado === 'cancelado' && p.estado !== 'cancelado') return;
+      out[i] = p;
+    } else nuevas.set(p.codigo, p);
+  });
+  return nuevas.size ? [...nuevas.values(), ...out] : out;
+}
 function _getPendingSaves() {
   try { return JSON.parse(localStorage.getItem('mt_pending_saves') || '[]'); } catch(e) { return []; }
 }
@@ -3029,9 +3104,11 @@ function saveSingle(r) {
     _addPendingSave(r);
     return;
   }
+  _subiendoAhora.set(r.codigo, r);   // v128: protegida de un sync que reemplace la lista mientras sube
   // Intento 1
   saveReservaToSupabase(r).then(result => {
     if (result) {
+      _subiendoAhora.delete(r.codigo);
       _removePendingSave(r.codigo); // por si estaba en cola previa
       return;
     }
@@ -3049,8 +3126,9 @@ function _retrySaveWithBackoff(rOrig, intento) {
   if (intento > maxIntentos) {
     console.error('❌ ' + maxIntentos + ' reintentos fallidos para ' + codigo + '. Guardado en cola pendiente.');
     // Volver a buscar por código — si el usuario editó la reserva, queremos guardar la versión más reciente
-    const rActual = reservas.find(rv => rv.codigo === codigo) || rOrig;
+    const rActual = reservas.find(rv => rv.codigo === codigo) || _subiendoAhora.get(codigo) || rOrig;
     _addPendingSave(rActual);
+    _subiendoAhora.delete(codigo);   // v128: ya quedó en la cola persistente
     if (typeof showSaveToast === 'function') {
       showSaveToast('⚠️ Reservación ' + codigo + ' guardada localmente — falta sincronizar con la nube', 'warn');
     }
@@ -3064,6 +3142,7 @@ function _retrySaveWithBackoff(rOrig, intento) {
     const rActual = reservas.find(rv => rv.codigo === codigo) || rOrig;
     saveReservaToSupabase(rActual).then(result => {
       if (result) {
+        _subiendoAhora.delete(codigo);   // v128
         _removePendingSave(codigo);
         console.log('✅ Reservación ' + codigo + ' sincronizada en intento ' + intento);
         if (typeof showSaveToast === 'function') showSaveToast('✅ Reservación sincronizada con la nube', 'ok');
@@ -3206,7 +3285,7 @@ function renderTable(id, data, withTel) {
           <td><strong>${escHtml(r.nombre)} ${escHtml(r.apellido)}</strong></td>
           ${withTel ? `<td>${escHtml(r.tel)}</td>` : ''}
           <td>${fmtFecha(r.fecha)}</td>
-          <td>${r.hora}</td>
+          <td>${escHtml(r.hora)}</td>
           <td style="font-size:11px;">${unidadLabel}</td>
           <td>${srvBadges(r)}</td>
           <td><span class="est ${r.estado}">${r.estado}</span></td>
@@ -3515,7 +3594,7 @@ function _abrirVentanaImpresionBlob(fullDocument, features) {
 }
 
 function imprimirAgendaDia() {
-  const f = document.getElementById('ag-fecha')?.value || new Date().toISOString().slice(0,10);
+  const f = document.getElementById('ag-fecha')?.value || _hoyISO();   // v128: fecha LOCAL (con UTC, de las 6 p. m. en adelante era mañana)
   const resDia = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado');
 
   if (resDia.length === 0) { alert('No hay servicios agendados para esta fecha.'); return; }
@@ -3627,6 +3706,10 @@ let descuentosData; try { descuentosData = JSON.parse(localStorage.getItem('mt_d
 let _descuentoPendiente = null;   // { origen, tipo, resumen } — descuento puesto en el formulario, AÚN sin guardar
 let _descUltimo = null;           // último resultado de validación del cuadro naranja
 let _descValidando = false, _descGuardando = false;
+// v128: código de reservación del intento con descuento que falló por RED (respuesta perdida). El
+// reintento del MISMO formulario reusa ese código: si el intento anterior sí se guardó, se reconoce
+// (_descYaQuedoGuardado) en vez de crear otra reservación con otro código.
+let _descCodigoIntento = null;
 
 // Normaliza lo que se tipea: acepta 123456, 123-456 o "123 456". Devuelve el formato 000-000.
 function _normCodigoDescuento(raw) {
@@ -3903,7 +3986,14 @@ async function _aplicarDescuentoEnNube(r, d) {
     });
     if (error) {
       const codigo = _codigoErrorDescuento(error);
-      return (codigo === 'RED' && await _descYaQuedoGuardado(r.codigo, d.origen)) || { ok: false, codigo, error };
+      // v128: en un REINTENTO con el mismo código (ver _descCodigoIntento), "ya usado" o "el código de
+      // la reservación ya existe" pueden significar que el intento anterior SÍ se guardó y solo se
+      // perdió la respuesta. Si el uso registrado es de este origen para esta reservación, es éxito.
+      if (codigo === 'RED' || codigo === 'DESC_YA_USADO' || codigo === 'DESC_DESTINO_EXISTE') {
+        const rec = await _descYaQuedoGuardado(r.codigo, d.origen);
+        if (rec) return rec;
+      }
+      return { ok: false, codigo, error };
     }
     return { ok: true, reserva_id: data && data.reserva_id, created_at: data && data.created_at, descuento: data && data.descuento };
   } catch(e) {
@@ -4129,7 +4219,7 @@ function addAgCol() {
 }
 
 function renderAgenda() {
-  const f = document.getElementById('ag-fecha')?.value || new Date().toISOString().slice(0,10);
+  const f = document.getElementById('ag-fecha')?.value || _hoyISO();   // v128: fecha LOCAL (con UTC, de las 6 p. m. en adelante era mañana)
   if (!document.getElementById('ag-fecha').value) document.getElementById('ag-fecha').value = _hoyISO();
 
   const day = getAgDay(f);
@@ -4189,8 +4279,13 @@ function renderAgenda() {
   // UBICACIÓN MANUAL: solo ubicamos si hay celda destino designada (col+row) por el usuario.
   // Las reservaciones sin destino se muestran en el banner "Sin ubicar" para arrastrar manualmente.
   let anyPlaced = false;
-  if (unplaced.length > 0) {
+  // v128: la celda elegida es SOLO para la reservación recién creada desde esa celda
+  // (window._agendaTargetCodigo, que fija el guardado). Antes cualquier redibujo con el formulario
+  // abierto (p. ej. un sync) metía ahí la primera reservación sin ubicar del día, aunque fuera otra.
+  const _tCod = window._agendaTargetCodigo || null;
+  if (unplaced.length > 0 && _tCod) {
     unplaced.forEach(r => {
+      if (r.codigo !== _tCod) return;
       // Solo ubicar si hay target explícito (usuario hizo clic en celda específica al crear)
       const tCol = (typeof window._agendaTargetCol === 'number') ? window._agendaTargetCol : null;
       const tRow = window._agendaTargetRow || null;
@@ -4210,6 +4305,7 @@ function renderAgenda() {
     // Limpiar target después de intentar ubicar
     window._agendaTargetCol = null;
     window._agendaTargetRow = null;
+    window._agendaTargetCodigo = null;   // v128
     if (anyPlaced) {
       // CRÍTICO: usar flush sin debounce para que la ubicación se suba a Supabase ANTES
       // de que un Realtime push (disparado por saveSingle al crear la reserva) traiga la
@@ -4541,7 +4637,7 @@ function renderSinUbicar(f) {
         style="display:inline-flex;align-items:center;gap:6px;background:${bg};color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;cursor:${esCancelada ? 'pointer' : 'grab'};margin:3px;${opacity}"
         title="${esCancelada ? 'Cancelada — registro histórico. Clic para verla o duplicarla.' : 'Arrastrá a una celda vacía.'}">
         <span style="${textDecor}">📦 ${nombre}</span>
-        <span style="opacity:.85;font-size:11px;${textDecor}">${r.hora}</span>
+        <span style="opacity:.85;font-size:11px;${textDecor}">${escHtml(r.hora)}</span>
         ${etiquetaCancelada}
       </div>`;
   }).join('');
@@ -4615,9 +4711,15 @@ function _claveDuplicado(r) {
     (r.descarga||'').trim().toLowerCase()
   ].join('|');
 }
+// v128: las reservaciones NUNCA se borran. "Limpiar duplicados" ahora CANCELA la copia sobrante
+// con esta marca en las observaciones (primera línea). La marca sirve para: no volver a agruparla
+// como duplicado, no contarla como cancelación del cliente y no mostrarla en "Sin ubicar".
+const _MARCA_DUPLICADO_RE = /^DUPLICADO de \S+/m;
+function _esDuplicadoCancelado(r) { return !!(r && r.estado === 'cancelado' && _MARCA_DUPLICADO_RE.test(String(r.obs || ''))); }
 function _agruparDuplicados() {
   const grupos = {};
   (reservas||[]).forEach(r => {
+    if (_esDuplicadoCancelado(r)) return;   // v128: ya limpiada (cancelada como duplicado)
     const k = _claveDuplicado(r);
     if (!grupos[k]) grupos[k] = [];
     grupos[k].push(r);
@@ -4639,15 +4741,17 @@ function diagnosticarDuplicados() {
   alert(`🔍 DIAGNÓSTICO DE DUPLICADOS\n\nTotal reservaciones: ${(reservas||[]).length}\nGrupos de duplicados: ${duplicados.length}\nReservaciones sobrantes para borrar: ${totalSobrantes}\n\n— Primeros grupos —\n${preview}\n\nSi querés borrarlos:\n1. Apretá "💾 Backup completo" primero.\n2. Después "🧹 Limpiar duplicados".`);
 }
 
-// Borra las copias sobrantes. Para cada grupo de duplicados:
+// Limpia las copias sobrantes. Para cada grupo de duplicados:
 //  - Si hay una con código MUD... (formato viejo), esa se queda (es la original).
-//  - Si no hay MUD, se queda la primera por orden y se borran las demás.
-// Actualiza agGrid y pdData para que las celdas apunten al sobreviviente.
+//  - Si no hay MUD, se queda la primera por orden.
+// v128: las sobrantes ya NO se borran (regla: una reservación nunca se elimina, solo cambia de
+// estado, y la base bloquea el borrado desde la app). Se CANCELAN con la marca "DUPLICADO de X"
+// y se ocultan de la agenda. agGrid y pdData se reapuntan al sobreviviente igual que antes.
 async function limpiarDuplicados() {
   const duplicados = _agruparDuplicados();
   if (duplicados.length === 0) { alert('No hay duplicados que limpiar.'); return; }
   const totalSobrantes = duplicados.reduce((s,g) => s + (g.length - 1), 0);
-  if (!confirm(`Voy a borrar ${totalSobrantes} reservación(es) duplicada(s) repartidas en ${duplicados.length} grupos.\n\n• Criterio estricto: SOLO se borran si coinciden nombre + apellido + teléfono + fecha + hora + costo + dirección de carga + dirección de descarga.\n• Conservo la copia con código MUD... (la original).\n• Si en un grupo no hay MUD, conservo la primera.\n• Actualizo la agenda y la pizarra para que apunten a la sobreviviente.\n• Antes de borrar nada, descargo un JSON con las reservaciones que voy a eliminar (por si necesitás restaurar alguna).\n\n⚠️ Asegurate de tener el "💾 Backup completo" ya guardado.\n\n¿Continuar?`)) return;
+  if (!confirm(`Voy a CANCELAR ${totalSobrantes} reservación(es) duplicada(s) repartidas en ${duplicados.length} grupos (no se borra ninguna: quedan canceladas con la nota "DUPLICADO de …").\n\n• Criterio estricto: SOLO se toman si coinciden nombre + apellido + teléfono + fecha + hora + costo + dirección de carga + dirección de descarga.\n• Conservo la copia con código MUD... (la original).\n• Si en un grupo no hay MUD, conservo la primera.\n• Actualizo la agenda y la pizarra para que apunten a la sobreviviente.\n• Antes de tocar nada, descargo un JSON con las reservaciones que voy a cancelar, tal como están ahora.\n\n⚠️ Asegurate de tener el "💾 Backup completo" ya guardado.\n\n¿Continuar?`)) return;
   // Activar flag: scheduleFullSyncAndRender NO debe hacer hardReplace mientras corre esta limpieza.
   _limpiezaEnCurso = true;
   // Mapping: codigo_a_borrar -> codigo_sobreviviente (para reapuntar agGrid/pdData)
@@ -4655,8 +4759,8 @@ async function limpiarDuplicados() {
   const codigosABorrar = [];
   const borradasParaBackup = [];
   // v127 (REGLA 8): una reservación que participa en un código de descuento (como origen o
-  // como beneficiada) NO se borra: su código está registrado en la tabla descuentos_codigo y
-  // borrarla dejaría el uso apuntando a una reservación inexistente.
+  // como beneficiada) NO se toca: su código está registrado en la tabla descuentos_codigo y
+  // reapuntar sus referencias a otra reservación rompería esa relación.
   const _enDescuento = c => (descuentosData || []).some(d => d && (d.codigo_origen === c || d.codigo_destino === c));
   let _protegidasDesc = 0;
   duplicados.forEach(g => {
@@ -4671,11 +4775,11 @@ async function limpiarDuplicados() {
       }
     });
   });
-  // Backup de seguridad: descargar las reservaciones que se van a borrar ANTES de borrarlas.
+  // Backup de seguridad: descargar las reservaciones que se van a cancelar, tal como están ANTES.
   try {
     const blob = new Blob([JSON.stringify({
       fecha: new Date().toISOString(),
-      motivo: 'duplicados borrados por limpiarDuplicados()',
+      motivo: 'duplicados cancelados por limpiarDuplicados() (v128: ya no se borran)',
       cantidad: borradasParaBackup.length,
       reservaciones: borradasParaBackup
     }, null, 2)], { type: 'application/json' });
@@ -4686,8 +4790,21 @@ async function limpiarDuplicados() {
     document.body.appendChild(a); a.click();
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
   } catch(e) { console.warn('No se pudo descargar backup de borrados:', e); }
-  // Quitar del array reservas
-  reservas = reservas.filter(r => !codigosABorrar.includes(r.codigo));
+  // v128: CANCELAR las copias sobrantes (NUNCA se borran). Van con la marca "DUPLICADO de X" en la
+  // primera línea de obs y ocultas de la agenda (agGrid.hidden) para que no aparezcan en "Sin ubicar".
+  const _hoyTxt = new Date().toLocaleDateString('es-SV', { day: '2-digit', month: 'long', year: 'numeric' });
+  const canceladasDup = [];
+  reservas.forEach(r => {
+    if (!codigosABorrar.includes(r.codigo)) return;
+    const obsPrev = String(r.obs || '').trim();
+    r.estado = 'cancelado';
+    r.obs = `DUPLICADO de ${reapuntar[r.codigo]} — cancelada por "Limpiar duplicados" el ${_hoyTxt} (${_quienSoy()})` + (obsPrev ? '\n' + obsPrev : '');
+    const dAg = getAgDay(r.fecha);
+    Object.keys(dAg.cells || {}).forEach(k => { if (dAg.cells[k] === r.codigo) delete dAg.cells[k]; });
+    if (!Array.isArray(dAg.hidden)) dAg.hidden = [];
+    if (!dAg.hidden.includes(r.codigo)) dAg.hidden.push(r.codigo);
+    canceladasDup.push(r);
+  });
   // Reapuntar agGrid
   Object.values(agGrid||{}).forEach(day => {
     if (day && day.cells) {
@@ -4701,6 +4818,13 @@ async function limpiarDuplicados() {
     (day.columnas||[]).forEach(col => {
       Object.values(col.slots||{}).forEach(slot => {
         if (slot && reapuntar[slot.reservaCodigo]) slot.reservaCodigo = reapuntar[slot.reservaCodigo];
+      });
+      // v128 (REGLA 8): también los SERVICIOS EXTRA (v114). Sin esto quedaban apuntando al código
+      // viejo y dejaban de sumar al cuadre.
+      if (Array.isArray(col.serviciosExtra)) col.serviciosExtra = col.serviciosExtra.map(it => {
+        const c = (typeof it === 'string') ? it : it && it.codigo;
+        if (!c || !reapuntar[c]) return it;
+        return (typeof it === 'string') ? reapuntar[c] : Object.assign({}, it, { codigo: reapuntar[c] });
       });
     });
     if (Array.isArray(day.cobrosPendientes)) {
@@ -4739,12 +4863,13 @@ async function limpiarDuplicados() {
   safeSetLS('mt2_reservas', JSON.stringify(reservas));
   safeSetLS('mt_aggrid', JSON.stringify(agGrid));
   safeSetLS('mt_pd3', JSON.stringify(pdData));
-  // Borrar de Supabase los códigos duplicados + actualizar tabla comentarios
-  let ok = 0, err = 0;
+  // v128: bitácora de la cancelación en cada copia + guardar en la nube (upsert normal por código,
+  // con reintentos y cola offline de saveSingle). Ya no hay DELETE: la base lo bloquea.
+  canceladasDup.forEach(r => {
+    _logAudit(r.codigo, 'cancelada', `duplicado de ${reapuntar[r.codigo]} — "Limpiar duplicados"`);
+    saveSingle(r);
+  });
   if (supabaseOK) {
-    for (const cv of codigosABorrar) {
-      try { const r = await deleteReservaFromSupabase(cv); if (r) ok++; else err++; } catch(e) { err++; }
-    }
     // Actualizar tabla comentarios en Supabase: reapuntar reservacion_codigo viejo → sobreviviente
     for (const cv of codigosABorrar) {
       const nuevo = reapuntar[cv];
@@ -4761,7 +4886,7 @@ async function limpiarDuplicados() {
     }
   }
   _limpiezaEnCurso = false;
-  alert(`✅ Limpieza completada.\n\n• ${codigosABorrar.length} duplicados borrados localmente\n• ${ok} borrados de la nube${err>0?'\n• '+err+' fallaron — tocá de nuevo para reintentar':''}${_protegidasDesc>0?'\n• '+_protegidasDesc+' NO se borraron porque tienen un código de descuento registrado':''}\n\nReservaciones restantes: ${reservas.length}`);
+  alert(`✅ Limpieza completada.\n\n• ${canceladasDup.length} duplicado(s) CANCELADO(S) con la nota "DUPLICADO de …" (no se borró ninguna reservación)\n• La agenda y la pizarra apuntan a la reservación que quedó${_protegidasDesc>0?'\n• '+_protegidasDesc+' NO se tocaron porque tienen un código de descuento registrado':''}${!supabaseOK?'\n\n⚠️ Sin conexión: los cambios se suben solos cuando vuelva internet.':''}`);
   renderAll();
   try { renderAgenda(); } catch(e) {}
   try { renderPD(); } catch(e) {}
@@ -4846,6 +4971,12 @@ async function migrarTodosLosCodigosA6Digitos() {
       Object.values(col.slots||{}).forEach(slot => {
         const v = slot && slot.reservaCodigo;
         if (v && mapping[v] && !fallidos.has(v)) slot.reservaCodigo = mapping[v];
+      });
+      // v128 (REGLA 8): también los SERVICIOS EXTRA (v114).
+      if (Array.isArray(col.serviciosExtra)) col.serviciosExtra = col.serviciosExtra.map(it => {
+        const c = (typeof it === 'string') ? it : it && it.codigo;
+        if (!c || !mapping[c] || fallidos.has(c)) return it;
+        return (typeof it === 'string') ? mapping[c] : Object.assign({}, it, { codigo: mapping[c] });
       });
     });
     if (Array.isArray(day.cobrosPendientes)) {
@@ -5266,19 +5397,39 @@ function confirmarHoraCambio() {
   const inp  = document.getElementById('hc-hora-custom');
   let horaFinal = sel.value === 'Otra hora' ? inp.value.trim() : sel.value;
   if (!horaFinal) { alert('Por favor ingresa un horario.'); return; }
-  // Actualizar hora Y horasOcupadas — CRÍTICO: sin esto la pizarra no ve la reservación en el nuevo horario
   const r = reservas.find(rv => rv.codigo === codigo);
+  const day = getAgDay(f);
+  // v128: mismos controles que "Editar". Antes arrastrar cambiaba la hora de una CANCELADA (v110) o de
+  // un servicio de un día CERRADO, sin dejar rastro en la bitácora.
+  if (r && _bloquearSiCancelada(r, 'modificar')) { cancelarHoraCambio(); return; }
+  if (isDiaCerrado(f)) { alert(`🔒 El día ${fmtFecha(f)} ya está cerrado.\n\nDesbloquealo en Programación para cambiar horarios.`); cancelarHoraCambio(); return; }
+  // v128: ya no se INTERCAMBIAN celdas. El intercambio movía a la otra reservación sin cambiarle la
+  // hora, y la limpieza de la agenda la mandaba a "Sin ubicar".
+  const dstCodigo = day.cells[dstKey];
+  if (dstCodigo && dstCodigo !== codigo) { alert('⚠️ Esa celda ya tiene otra reservación. Mové primero esa, o elegí una celda libre.'); cancelarHoraCambio(); return; }
+  // Actualizar hora Y horasOcupadas — CRÍTICO: sin esto la pizarra no ve la reservación en el nuevo horario
   if (r) {
+    const _horasViejas = (r.horasOcupadas || [r.hora] || []).slice();
     r.hora = horaFinal;
     r.horasOcupadas = [horaFinal];
     saveSingle(r);
+    if (_horasViejas.join('|') !== horaFinal) {
+      _logAudit(r.codigo, 'cambio_hora', `${_horasViejas.join(' + ') || '—'} → ${horaFinal} (arrastrando en la agenda)`);
+      // v128: igual que guardarEdicion con horas cambiadas: la pizarra de ese día deja de tenerla en el
+      // horario viejo (si no, seguía asignada ahí y contando en el cuadre de ese horario).
+      const pdDay = pdData[f];
+      let cambioPD = false;
+      (pdDay && pdDay.columnas || []).forEach((col, ci) => {
+        [...HORARIOS, 'otra'].forEach(h => {
+          if (col.slots?.[h]?.reservaCodigo === r.codigo) { col.slots[h].reservaCodigo = ''; col.slots[h].costo = ''; cambioPD = true; _sellarColumna(f, ci); }
+        });
+      });
+      if (cambioPD) { savePD(); try { _recalcDesde(f); } catch(e) {} }
+    }
   }
   // Move in grid
-  const day = getAgDay(f);
-  const dstCodigo = day.cells[dstKey];
   day.cells[dstKey] = codigo;
-  if (dstCodigo) day.cells[srcKey] = dstCodigo;
-  else delete day.cells[srcKey];
+  delete day.cells[srcKey];
   saveAgGrid();
   _pendingMove = null;
   document.getElementById('mo-hora-cambio').classList.remove('open');
@@ -5488,6 +5639,7 @@ function openNueva() {
   try { _avisoCanceladorVisto.clear(); } catch(e) {}
   // v127: cada formulario nuevo arranca SIN descuento (nunca se hereda de un formulario anterior).
   _descuentoPendiente = null;
+  _descCodigoIntento = null;   // v128: un formulario nuevo nunca reusa el código de otro intento
   _pintarDescuentoForm();
 
   updateHoraLabels();
@@ -5495,6 +5647,8 @@ function openNueva() {
 }
 function closeNueva() {
   document.getElementById('mo-nueva').classList.remove('open');
+  // v128: cerrar SIN guardar libera la celda elegida en la agenda (si se guardó, ya quedó asignada al código).
+  if (!window._agendaTargetCodigo) { window._agendaTargetCol = null; window._agendaTargetRow = null; }
   // v127: cerrar sin guardar descarta el descuento puesto (el código nunca se consumió).
   if (_descuentoPendiente) { _descuentoPendiente = null; _pintarEstadoDescuento(_descUltimo); }
   resetTipoCliente();
@@ -5778,7 +5932,19 @@ function fmtCosto(input) {
   input.value = v;
 }
 
+// v128: candado contra el doble clic en "Guardar reservación". El guardado espera a la nube (genera
+// un código único consultando Supabase), y durante esa espera un segundo clic creaba OTRA reservación
+// con otro código: dos mudanzas iguales, dos WhatsApp y $1 de comisión doble. Vale con o sin descuento.
+let _guardandoNueva = false;
 async function guardar() {
+  if (_guardandoNueva) return;
+  _guardandoNueva = true;
+  const _btn = document.getElementById('btn-guardar-nueva');
+  if (_btn) _btn.disabled = true;
+  try { await _guardarNuevaReserva(); }
+  finally { _guardandoNueva = false; if (_btn) _btn.disabled = false; }
+}
+async function _guardarNuevaReserva() {
   // v127: con descuento, el guardado viaja a la nube (con espera); un segundo clic mientras
   // tanto NO debe intentar consumir el código otra vez.
   if (_descGuardando) return;
@@ -5840,7 +6006,7 @@ async function guardar() {
   const horasExtra = horasSeleccionadas.slice(1);
 
   let _codNuevo;
-  try { _codNuevo = await _genCodUnicoNube(); }
+  try { _codNuevo = (_desc && _descCodigoIntento && _descCodigoIntento.origen === _desc.origen) ? _descCodigoIntento.codigo : await _genCodUnicoNube(); }
   catch(e) { _descGuardando = false; throw e; }
   const r = {
     codigo: _codNuevo,
@@ -5891,6 +6057,8 @@ async function guardar() {
       if (_btnG) { _btnG.disabled = false; _btnG.textContent = '💾 Guardar reservación'; }
     }
     if (!res || !res.ok) {
+      // v128: si fue la red, el próximo intento reusa este código (ver _descCodigoIntento).
+      _descCodigoIntento = (res && res.codigo === 'RED') ? { codigo: r.codigo, origen: _desc.origen } : null;
       alert(_mensajeErrorDescuento(res || {}));
       if (res && res.codigo === 'DESC_YA_USADO') {
         // Otro usuario lo usó primero: quitar el descuento del formulario y refrescar el caché.
@@ -5919,16 +6087,21 @@ async function guardar() {
     _logAudit(_desc.origen, 'descuento_codigo_usado', `Usado en ${r.codigo} · −$${DESCUENTO_MONTO.toFixed(2)} · ${_tipoTxt}`);
     try { flushSyncToSupabase('mt_audit', auditData); } catch(e) {}
     _descuentoPendiente = null;
+    _descCodigoIntento = null;   // v128
     _descUltimo = { estado: 'aplicado', destino: r.codigo };
     _pintarEstadoDescuento(_descUltimo);
     const _inpD = document.getElementById('codigo-descuento'); if (_inpD) _inpD.value = '';
   }
   registrarClienteEnSupabase(r).catch(e => console.warn('Error registrando cliente:', e));
+  // v128: si se creó desde una celda de la agenda, esa celda es para ESTA reservación (renderAgenda).
+  if (typeof window._agendaTargetCol === 'number' && window._agendaTargetRow) window._agendaTargetCodigo = r.codigo;
   closeNueva();
   renderAll();
   // Also refresh agenda to show the new reservation
   const agFecha = document.getElementById('ag-fecha');
   if (agFecha) { agFecha.value = r.fecha; renderAgenda(); }
+  // v128: la celda elegida ya se usó (o no cupo): se libera siempre para que no quede "recordada".
+  window._agendaTargetCol = null; window._agendaTargetRow = null; window._agendaTargetCodigo = null;
   alert(`✅ Reservación ${r.codigo} guardada correctamente.`);
   // Auto-abrir WhatsApp con el mensaje de confirmación pre-cargado
   try { abrirWhatsAppAuto(r); } catch(e) { console.warn('No se pudo abrir WhatsApp:', e); }
@@ -6396,7 +6569,8 @@ function guardarEdicion() {
     const pdOld = pdData[oldFecha];
     if (pdOld?.columnas) {
       let cambioPD = false;
-      pdOld.columnas.forEach(col => {
+      pdOld.columnas.forEach((col, ci) => {
+        let cambioCol = false;
         [...HORARIOS, 'otra'].forEach(h => {
           if (col.slots?.[h]?.reservaCodigo === r.codigo) {
             col.slots[h].reservaCodigo = '';
@@ -6405,9 +6579,16 @@ function guardarEdicion() {
             delete col.slots[h].cobrado;
             delete col.slots[h].fechaCobro;
             delete col.slots[h].metodoCobro;
-            cambioPD = true;
+            cambioPD = true; cambioCol = true;
           }
         });
+        // v128: también si estaba como SERVICIO EXTRA. Antes se quedaba en el equipo del día viejo
+        // y ese día lo seguía sumando al cuadre (y al asignarlo en el día nuevo entraba dos veces).
+        if (Array.isArray(col.serviciosExtra) && col.serviciosExtra.some(it => (typeof it === 'string' ? it : it && it.codigo) === r.codigo)) {
+          col.serviciosExtra = col.serviciosExtra.filter(it => (typeof it === 'string' ? it : it && it.codigo) !== r.codigo);
+          cambioPD = true; cambioCol = true;
+        }
+        if (cambioCol) _sellarColumna(oldFecha, ci);   // v128: sin sello, el merge podía devolver la columna vieja
       });
       // FIX M3 (2026-05-30): quitar cobros pendientes registrados para esta reserva en el día viejo.
       if (Array.isArray(pdOld.cobrosPendientes)) {
@@ -6462,12 +6643,13 @@ function guardarEdicion() {
     const pdDay = pdData[r.fecha];
     if (pdDay?.columnas) {
       let cambioPD = false;
-      pdDay.columnas.forEach(col => {
+      pdDay.columnas.forEach((col, ci) => {
         [...HORARIOS, 'otra'].forEach(h => {
           if (col.slots?.[h]?.reservaCodigo === r.codigo) {
             col.slots[h].reservaCodigo = '';
             col.slots[h].costo = '';
             cambioPD = true;
+            _sellarColumna(r.fecha, ci);   // v128
           }
         });
       });
@@ -6475,6 +6657,19 @@ function guardarEdicion() {
     }
   }
   saveSingle(r);
+  // v128 (F4): lo editado (fecha, horario o precio) cambia lo que el cuadre suma en vivo. Antes solo
+  // se recalculaba si había ajustes que mover, así que el cierre del día viejo y el arranque de los
+  // días siguientes quedaban viejos hasta que alguien los visitaba uno por uno.
+  {
+    const _pV = parseFloat(oldCosto), _pN = parseFloat(r.costo);
+    const _cambioDinero = fechaCambio || horasCambiaron || ((isNaN(_pV) || isNaN(_pN)) ? String(oldCosto || '') !== String(r.costo || '') : _pV.toFixed(2) !== _pN.toFixed(2));
+    if (_cambioDinero) {
+      try {
+        const _fs = [oldFecha, newFecha].filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x || '')).sort();
+        _fs.forEach(x => _recalcDesde(x));
+      } catch(e) { console.warn('_recalcDesde (edición):', e); }
+    }
+  }
   // AUDITORIA v96 (2026-07-06): registrar en la bitácora TODOS los cambios sensibles con
   // valor viejo → nuevo (antes solo fecha y precio). Permite rastrear si alguien baja un
   // precio o cambia datos de un servicio (control anti "gasto hormiga").
@@ -6629,10 +6824,12 @@ function _limpiarPDDataYCobrosPorCancelacion(r) {
   if (!r) return;
   // v127: política del código de descuento al cancelar (hoy: el código usado SIGUE usado).
   _politicaDescuentoAlCancelar(r);
+  const _diasTocados = new Set();   // v128: días cuyo dinero cambió → se recalculan en cadena al final
   // 1) Desasignar slots del día de la reserva
   const pdDay = pdData[r.fecha];
   if (pdDay?.columnas) {
-    pdDay.columnas.forEach(col => {
+    pdDay.columnas.forEach((col, ci) => {
+      let cambioCol = false;
       [...HORARIOS, 'otra'].forEach(h => {
         const slot = col.slots?.[h];
         if (slot && slot.reservaCodigo === r.codigo) {
@@ -6642,20 +6839,39 @@ function _limpiarPDDataYCobrosPorCancelacion(r) {
           delete slot.cobrado;
           delete slot.fechaCobro;
           delete slot.metodoCobro;
+          cambioCol = true;
         }
       });
+      // v128: si estaba como SERVICIO EXTRA también se quita (antes seguía sumando al cuadre).
+      if (Array.isArray(col.serviciosExtra) && col.serviciosExtra.some(it => (typeof it === 'string' ? it : it && it.codigo) === r.codigo)) {
+        col.serviciosExtra = col.serviciosExtra.filter(it => (typeof it === 'string' ? it : it && it.codigo) !== r.codigo);
+        cambioCol = true;
+      }
+      if (cambioCol) { _sellarColumna(r.fecha, ci); _diasTocados.add(r.fecha); }
     });
   }
   // 2) Remover entradas en cobrosPendientes[] de CUALQUIER día (porque el cobro se puede
   //    haber registrado en otro día distinto al de la reserva)
-  Object.values(pdData).forEach(day => {
+  // v128: EXCEPTO en días CERRADOS. Ese dinero ya entró, se contó y el día quedó cuadrado; quitarlo
+  // cambiaba un cierre auditado en silencio (y la conciliación de ese día). Se deja y se avisa.
+  const _cobrosEnCerrados = [];
+  Object.entries(pdData).forEach(([fd, day]) => {
     if (Array.isArray(day.cobrosPendientes)) {
+      if (!day.cobrosPendientes.some(cb => cb.codigo === r.codigo)) return;
+      if (isDiaCerrado(fd)) {
+        day.cobrosPendientes.filter(cb => cb.codigo === r.codigo).forEach(cb => _cobrosEnCerrados.push(`$${(parseFloat(cb.monto)||0).toFixed(2)} ${metodoLabel(cb.metodo||'')} el ${fmtFecha(fd)}`));
+        return;
+      }
       // v101: tumba de los cobros quitados (no resucitar por merge).
       if (!day._tomb) day._tomb={}; if(!day._tomb.cobrosPendientes) day._tomb.cobrosPendientes={};
       day.cobrosPendientes.forEach(cb => { if (cb.codigo === r.codigo && cb._id) day._tomb.cobrosPendientes[cb._id]=Date.now(); });
       day.cobrosPendientes = day.cobrosPendientes.filter(cb => cb.codigo !== r.codigo);
+      _diasTocados.add(fd);
     }
   });
+  if (_cobrosEnCerrados.length) {
+    alert(`ℹ️ Esta reservación tiene cobro(s) registrado(s) en día(s) YA CERRADO(S):\n\n   • ${_cobrosEnCerrados.join('\n   • ')}\n\nNo se tocaron: ese dinero ya entró y el día está cuadrado. Si hay que devolverlo al cliente, registralo como gasto el día de la devolución.`);
+  }
   // 3) Limpiar flags de cobro Crédito Fiscal en la propia reserva
   delete r._cobrado;
   delete r._fechaCobro;
@@ -6666,6 +6882,10 @@ function _limpiarPDDataYCobrosPorCancelacion(r) {
   //    INVALIDAN (monto 0.00 + montoAnulado), que es reversible desde la auditoría y queda en la
   //    bitácora. Se pregunta antes, porque a veces el cargo SÍ se cobró (p. ej. cajas ya entregadas).
   _anularAjustesPorCancelacion(r);
+  // 5) v128 (F4): el servicio salió de la pizarra y/o se quitaron cobros → el cierre de esos días y el
+  //    arranque de los siguientes cambian. Antes solo se guardaba y quedaban viejos (p. ej. al cancelar
+  //    desde Notificaciones un servicio de un día pasado). Del más viejo al más nuevo.
+  try { [..._diasTocados].sort().forEach(fd => _recalcDesde(fd)); } catch(e) { console.warn('_recalcDesde (cancelación):', e); }
 }
 
 // Invalida los ajustes de cobro VIVOS de una reserva cancelada, previa confirmación. Respeta el día
@@ -6767,7 +6987,7 @@ function _clienteCanceladorFrecuente(tel) {
   const nums = _numsTel(tel);
   if (!nums.length) return null;
   const canceladas = (reservas || []).filter(r =>
-    r && r.estado === 'cancelado' &&
+    r && r.estado === 'cancelado' && !_esDuplicadoCancelado(r) &&   // v128: una copia duplicada no es una cancelación del cliente
     _numsTel(r.tel).some(n => nums.includes(n))
   );
   const porMes = {};
@@ -7605,19 +7825,28 @@ function _editandoFinanzasReciente() {
 // Debounce para el sync real + recálculo de cuentas: se ejecuta una sola vez,
 // ~1.5s después de que el usuario deja de escribir.
 var _finanzasSyncTimer = null;
+// v128: día donde se hizo la edición financiera pendiente. El recálculo diferido usaba getPDFecha() al
+// dispararse; si en ese 1.5 s se cambiaba de fecha, se recalculaba el día NUEVO y el editado quedaba viejo.
+var _finanzasFechaPend = null;
 function _programarSyncFinanzas() {
   clearTimeout(_finanzasSyncTimer);
   // Marcar pendiente YA (el sync real va con 1.5s de debounce). Así el flush de salida
   // sube el gasto aunque la pestaña se cierre antes de que dispare el debounce.
   if (typeof _pendingAppData !== 'undefined') _pendingAppData.add('mt_pd3');
+  // v128: persistir la marca (antes solo quedaba en memoria: un recargo en ese 1.5 s la perdía y la
+  // versión nueva podía borrar el caché con el gasto sin subir).
+  try { if (typeof _persistPendingKeys === 'function') _persistPendingKeys(); } catch(e) {}
+  const _fEd = getPDFecha();
+  if (!_finanzasFechaPend || _fEd < _finanzasFechaPend) _finanzasFechaPend = _fEd;   // el más viejo manda la cadena
   _finanzasSyncTimer = setTimeout(() => {
+    const _fRec = _finanzasFechaPend || getPDFecha(); _finanzasFechaPend = null;
     try { syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('sync finanzas:', e); }
     // v120: ENCADENAR. Antes esto era recalcCerramos() (dia visible + propagar UNO solo): corregir
     // un gasto / otro ingreso / movimiento de un dia PASADO dejaba viejo el arranque de todos los
     // dias siguientes hasta que alguien los visitaba uno por uno EN ORDEN. Es el mismo defecto que
     // v109 arreglo para los ajustes, v117 para la pizarra y v118 para los cobros; los gastos y otros
     // ingresos eran el ultimo caso abierto. Con el dia de HOY es una sola vuelta (sin costo).
-    try { if (typeof _recalcDesde === 'function') _recalcDesde(getPDFecha()); else if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+    try { if (typeof _recalcDesde === 'function') _recalcDesde(_fRec); else if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
     // v120: subir al instante el rastro de una edicion a mano de un ajuste que quedo pendiente.
     try { if (typeof _flushEdicionesAjuste === 'function') _flushEdicionesAjuste(); } catch(e) {}
     try { if (typeof buildTitulosDatalist === 'function') buildTitulosDatalist(); } catch(e) {}
@@ -7645,7 +7874,9 @@ function _flushFinanzasPendiente() {
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   try { if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData); else syncToSupabase('mt_pd3', pdData); } catch(e) { console.warn('flush finanzas:', e); }
-  try { if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
+  // v128: recalcular el día que se EDITÓ (encadenado), no el que quedó a la vista tras cambiar la fecha.
+  const _fRec = _finanzasFechaPend; _finanzasFechaPend = null;
+  try { if (_fRec && typeof _recalcDesde === 'function') _recalcDesde(_fRec); else if (typeof recalcCerramos === 'function') recalcCerramos(); } catch(e) {}
 }
 
 // Cambio de fecha en el cuaderno/pizarra: primero asegura subir lo pendiente del día actual,
@@ -8132,7 +8363,7 @@ function buildColumna2(col, idx, f) {
           <div onclick="assignSlot('${f}',${idx},'${h}','${r.codigo}')"
             style="background:#fef9f0;border:1.5px solid #d9770633;border-radius:8px;padding:8px 10px;margin-bottom:6px;cursor:pointer;"
             onmouseover="this.style.borderColor='#d97706'" onmouseout="this.style.borderColor='#d9770633'">
-            <div style="font-size:10px;font-weight:800;color:#d97706;">⏰ ${r.codigo} · ${r.hora}</div>
+            <div style="font-size:10px;font-weight:800;color:#d97706;">⏰ ${escHtml(r.codigo)} · ${escHtml(r.hora)}</div>
             <div style="font-size:12px;font-weight:700;color:#1a2236;margin-top:2px;">${escHtml(r.nombre)} ${escHtml(r.apellido)} <span style="font-size:11px;font-weight:600;color:#6b7280;">· 📞 ${escHtml(r.tel)}</span></div>
             <div style="font-size:11px;color:#6b7280;">📦 ${escHtml(r.carga)}</div>
             <div style="font-size:11px;color:#6b7280;">🏠 ${escHtml(r.descarga)}</div>
@@ -8357,6 +8588,7 @@ function addServicioExtra(f, colIdx, codigo) {
   }
   const ya = col.serviciosExtra.some(it => (typeof it === 'string' ? it : it.codigo) === codigo);
   if (!ya) col.serviciosExtra.push({ codigo: codigo, metodo: 'EFECTIVO' });
+  _sellarColumna(f, colIdx);   // v128: sin sello, el merge podía quedarse con la columna vieja y perder el extra
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
@@ -8375,11 +8607,20 @@ function updateServicioExtraMetodo(f, colIdx, codigo, metodo) {
   const day = getDayData(f);
   const col = day.columnas[colIdx];
   if (!col || !Array.isArray(col.serviciosExtra)) return;
+  // v128: igual que en los horarios. Si este extra estaba PENDIENTE y ya se registró su cobro, el
+  // dinero vive en ese cobro: cambiarle el método acá lo contaría dos veces.
+  const _itAct = col.serviciosExtra.find(it => (typeof it === 'string' ? it : it.codigo) === codigo);
+  const _metAct = (_itAct && typeof _itAct === 'object' && _itAct.metodo) || 'EFECTIVO';
+  if (_metAct === 'PENDIENTE' && metodo !== 'PENDIENTE' && _yaCobrado(codigo)) {
+    alert('🔒 Este servicio extra ya se COBRÓ (está registrado en el cuaderno del día del cobro).\n\nSi cambiás el método acá, se contaría dos veces. Si el cobro se registró mal, eliminalo en el cuaderno de ese día.');
+    renderPD(); return;
+  }
   col.serviciosExtra = col.serviciosExtra.map(it => {
     const c = (typeof it === 'string') ? it : it.codigo;
     if (c === codigo) return { codigo: c, metodo: metodo };
     return (typeof it === 'string') ? { codigo: c, metodo: 'EFECTIVO' } : it;
   });
+  _sellarColumna(f, colIdx);   // v128
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
@@ -8398,6 +8639,7 @@ function delServicioExtra(f, colIdx, codigo) {
   const col = day.columnas[colIdx];
   if (!col || !Array.isArray(col.serviciosExtra)) return;
   col.serviciosExtra = col.serviciosExtra.filter(it => (typeof it === 'string' ? it : it.codigo) !== codigo);
+  _sellarColumna(f, colIdx);   // v128
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
   if (typeof flushSyncToSupabase === 'function') flushSyncToSupabase('mt_pd3', pdData);
@@ -8428,7 +8670,7 @@ function assignSlot(f, colIdx, hora, codigo) {
   if (!day.columnas[colIdx]) return;
   if (!day.columnas[colIdx].slots[hora]) day.columnas[colIdx].slots[hora] = {costo:'',metodo:'EFECTIVO',reservaCodigo:''};
   day.columnas[colIdx].slots[hora].reservaCodigo = codigo;
-  
+
   // Auto-assign other horasOcupadas in same column
   const r = reservas.find(rv => rv.codigo === codigo);
   if (r && r.horasOcupadas && r.horasOcupadas.length > 1) {
@@ -8439,6 +8681,14 @@ function assignSlot(f, colIdx, hora, codigo) {
           day.columnas[colIdx].slots[h].reservaCodigo = codigo;
         }
       }
+    });
+  }
+  // v128: si este servicio YA tiene su cobro registrado (era PENDIENTE y se cobró), sus celdas lo
+  // tienen que saber. Si no, quedan en EFECTIVO por defecto y el cuadre lo suma otra vez.
+  const _cob = _cobroRegistradoDe(codigo);
+  if (_cob) {
+    Object.values(day.columnas[colIdx].slots || {}).forEach(_sl => {
+      if (_sl && _sl.reservaCodigo === codigo) { _sl.metodo = 'PENDIENTE'; _sl.cobrado = true; _sl.fechaCobro = _cob.fecha; _sl.metodoCobro = _cob.metodo; }
     });
   }
   // CRÍTICO: activar ventana de gracia (bloquea polling/Realtime hardReplace) + guardar local
@@ -8453,6 +8703,17 @@ function assignSlot(f, colIdx, hora, codigo) {
   else savePD();
 }
 
+// v128: deja un horario de la pizarra en blanco. Antes deassignSlot solo borraba el código y el
+// horario conservaba método, precio y marcas de cobro del servicio anterior: el próximo servicio
+// asignado ahí los heredaba (p. ej. CUSCA → su dinero iba a la cuenta equivocada, o "cobrado" →
+// nunca aparecía por cobrar). El cobro ya registrado NO se toca: vive en cobrosPendientes.
+function _vaciarSlot(sl) {
+  if (!sl) return;
+  sl.reservaCodigo = '';
+  sl.costo = '';
+  sl.metodo = 'EFECTIVO';
+  delete sl.cobrado; delete sl.fechaCobro; delete sl.metodoCobro;
+}
 function deassignSlot(f, colIdx, hora) {
   if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
     alert('⚠️ Este día está cerrado. Desbloqueá para desasignar servicios.');
@@ -8473,12 +8734,12 @@ function deassignSlot(f, colIdx, hora) {
     if (r && r.horasOcupadas && r.horasOcupadas.length > 1) {
       r.horasOcupadas.forEach(h => {
         if (day.columnas[colIdx].slots[h]?.reservaCodigo === codigo) {
-          day.columnas[colIdx].slots[h].reservaCodigo = '';
+          _vaciarSlot(day.columnas[colIdx].slots[h]);   // v128
         }
       });
     }
   }
-  day.columnas[colIdx].slots[hora].reservaCodigo = '';
+  _vaciarSlot(day.columnas[colIdx].slots[hora]);   // v128
   _sellarColumna(f, colIdx);   // v117
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
@@ -8537,6 +8798,14 @@ function updateSlot2(f, idx, hora, campo, valor) {
   // (con quién y valor viejo → nuevo). Solo si el slot tiene una reservación asignada.
   const _slotAud = day.columnas[idx].slots[hora];
   const _codAud = _slotAud.reservaCodigo;
+  // v128: un PENDIENTE que YA se cobró (slot.cobrado) tiene su dinero en el cobro registrado
+  // (cobrosPendientes del día de cobro). Si además se le cambia el método a EFECTIVO/CUSCA/TARJETA,
+  // el cuadre lo cuenta OTRA VEZ en este día (caso real: 327-157 del 10-jul-2026, $840 dos veces).
+  if (campo === 'metodo' && _slotAud.cobrado && valor !== (_slotAud.metodo || 'EFECTIVO')) {
+    alert(`🔒 Este servicio ya se COBRÓ el ${fmtFecha(_slotAud.fechaCobro || '')} (${metodoLabel(_slotAud.metodoCobro || '')}).\n\nEl dinero ya está registrado en el cuaderno de ese día. Si cambiás el método acá, se contaría dos veces.\n\nSi el cobro se registró mal, eliminá ese cobro en el cuaderno del día del cobro y el servicio vuelve a quedar pendiente.`);
+    if (typeof renderPD === 'function') renderPD();
+    return;
+  }
   if (_codAud && campo === 'metodo' && (_slotAud.metodo || 'EFECTIVO') !== valor) {
     _logAudit(_codAud, 'cambio_metodo', `${hora}: ${_slotAud.metodo || 'EFECTIVO'} → ${valor}`);
   }
@@ -8908,6 +9177,14 @@ function guardarColumna() {
   if (oldCol && Array.isArray(oldCol.serviciosExtra)) col.serviciosExtra = oldCol.serviciosExtra;
   if (oldCol && oldCol.finalizada) col.finalizada = oldCol.finalizada;
   col._ts = Date.now();   // v117: sello para el merge por columna entre computadoras
+  // v128: si al editar se CAMBIÓ el camión, el equipo cambia de clave en el merge (se empareja por
+  // camión). Sin tumba para la clave vieja, otra computadora que todavía tenía el equipo viejo lo
+  // devolvía como equipo aparte: dos equipos y los pagos/propinas/comisión descontados dos veces.
+  if (oldCol) {
+    const _colsNuevas = day.columnas.slice(); _colsNuevas[editColIdx] = col;
+    const _kViejo = _clavesColumnas(day.columnas)[editColIdx], _kNuevo = _clavesColumnas(_colsNuevas)[editColIdx];
+    if (_kViejo !== _kNuevo) { if (!day._tombCol) day._tombCol = {}; day._tombCol[_kViejo] = Date.now(); }
+  }
   if (editColIdx !== null) day.columnas[editColIdx] = col;
   else day.columnas.push(col);
 
@@ -8932,7 +9209,7 @@ function elimColumna(idx) {
     // v117: TUMBA de la columna, para que el merge con otra computadora no la resucite.
     try {
       if (!day._tombCol) day._tombCol = {};
-      day._tombCol[_claveColumna(day.columnas[idx], idx)] = Date.now();
+      day._tombCol[_clavesColumnas(day.columnas)[idx]] = Date.now();   // v128: clave que distingue equipos con el mismo camión
     } catch(e) {}
     day.columnas.splice(idx, 1);
     savePD();
@@ -9495,7 +9772,9 @@ function cerrarDia() {
     const pendCobro = (day.columnas||[]).reduce((n,col)=>{
       return n + [...HORARIOS,'otra'].filter(h=>{
         const sl=col.slots?.[h]; return sl && sl.metodo==='PENDIENTE' && !sl.cobrado && sl.reservaCodigo;
-      }).length;
+      }).length
+        // v128: también los servicios EXTRA en PENDIENTE sin cobrar.
+        + (col.serviciosExtra||[]).filter(it => it && typeof it === 'object' && it.metodo==='PENDIENTE' && !it.cobrado && !_yaCobrado(it.codigo)).length;
     },0);
     let resumen = `📋 ANTES DE CERRAR EL DÍA ${f}\n\n`;
     resumen += `✅ ${confirmados} servicio(s) completado(s)\n`;
@@ -9759,6 +10038,15 @@ function updateGasto(id, campo, val) {
   // equivocada (era la causa del "gasto híbrido" duplicado).
   const g = (day.gastos||[]).find(x=>x._id===id);
   if (!g) return;
+  // v128: el gasto de un BONO POR DÍA DE DESCANSO (_comId) está enlazado a su pago. delGasto ya lo
+  // protegía (v126), pero se podía cambiar el MONTO o la BOLSA acá: los días seguían marcados como
+  // pagados y la salida de CAJA CHICA cambiaba sin rastro. Se corrige desde Comisiones (anular y registrar).
+  if (g._comId && (campo === 'monto' || campo === 'fondo')) {
+    alert('🔒 Este gasto es el pago de un BONO POR DÍA DE DESCANSO.\n\nNo se edita desde acá: si el monto está mal, anulá el pago en Comisiones y registralo de nuevo.');
+    // Devolver SOLO ese campo a su valor (sin re-render de la lista: REGLA 8.2).
+    try { const _el = document.querySelector(`[oninput*="'${id}','${campo}'"],[onchange*="'${id}','${campo}'"]`); if (_el) _el.value = g[campo] || ''; } catch(e) {}
+    return;
+  }
   g[campo]=val; g._ts=Date.now();
   // v111: recolorear el selector de FONDO sin re-renderizar la lista (REGLA 8.2: re-dibujar
   // acá destruiría el input que el usuario está escribiendo).
@@ -9950,6 +10238,13 @@ function updateOtroIngreso(id, campo, val) {
   }
   // REGLA DE ORO DE LAS PROPINAS (v120): tampoco se le puede sacar una propina de CUSCATLÁN
   // cambiándole el método acá. Es justo la vía por la que $20 se movieron de bolsa sin rastro.
+  // v128: un AJUSTE de cobro no puede pasar a PENDIENTE (su dinero dejaría de contar y el cobro del
+  // pendiente no lo recupera, porque registra solo la BASE).
+  if (campo === 'metodo' && g.ajuste && (val === 'PENDIENTE' || val === 'CANCELADO')){
+    alert('⚠️ Un ajuste de cobro no puede quedar PENDIENTE: ese dinero no entraría a ninguna cuenta. Elegí EFECTIVO, CUSCA o TARJETA.');
+    try { renderOtrosIngresos(); } catch(e) {}
+    return;
+  }
   if (campo === 'metodo' && val !== _PROPINA_METODO_UNICO && _esPropinaTexto(g)){
     alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina registrada en el programa es siempre dinero DEPOSITADO en CUSCATLÁN, así que no se le puede poner ' + metodoLabel(val) + '.\n\nSi esta propina en realidad la recibió el personal en efectivo, no corresponde tenerla como ingreso: borrala con el 🗑 (o invalidala desde el cuadro de auditoría si vino de un ajuste de cobro).');
     renderOtrosIngresos();
@@ -10135,6 +10430,20 @@ function confirmarCobroModal() {
       }
     });
   });
+  // v128: servicio EXTRA en PENDIENTE (no está en un horario). Se marca el ítem como cobrado, igual
+  // que un slot; el monto es el costo de la reservación (los extras no tienen costo propio).
+  if (!slotMarcado) {
+    dayOrig.columnas.forEach((col, ci) => {
+      (col.serviciosExtra || []).forEach(it => {
+        if (slotMarcado || !it || typeof it !== 'object' || it.codigo !== codigo || it.metodo !== 'PENDIENTE' || it.cobrado) return;
+        it.cobrado = true; it.fechaCobro = fechaCobro; it.metodoCobro = metodoFinal;
+        _sellarColumna(fechaOriginal, ci);
+        const res = reservas.find(r => r.codigo === codigo);
+        montoCobrado = res ? (parseFloat(res.costo) || 0) : 0;
+        slotMarcado = true;
+      });
+    });
+  }
   if (!slotMarcado) {
     const res = reservas.find(r => r.codigo === codigo);
     // FIX F2 (2026-07-02): el fallback tampoco debe re-cobrar una reserva ya marcada.
@@ -10196,6 +10505,12 @@ function delCobroPendiente(id) {
           delete slot.cobrado;
           delete slot.fechaCobro;
           delete slot.metodoCobro;
+        }
+      });
+      // v128: lo mismo para un servicio EXTRA pendiente cobrado.
+      (col.serviciosExtra || []).forEach(it => {
+        if (it && typeof it === 'object' && it.codigo === cobro.codigo && it.cobrado && (!it.fechaCobro || it.fechaCobro === cobro.fecha)) {
+          delete it.cobrado; delete it.fechaCobro; delete it.metodoCobro;
         }
       });
     });
@@ -11060,6 +11375,8 @@ function confirmarAjusteCobro(){
   const montoAbs = parseFloat(document.getElementById('aj-monto').value);
   // Método AUTOMÁTICO: mismo método de pago con que se cobró la reservación (nunca PENDIENTE/CANCELADO).
   if (metodo === 'AUTO') metodo = _metodoDeReserva(r.codigo);
+  // v128: nunca PENDIENTE: su dinero no entraba a ninguna cuenta (el cobro del pendiente registra la BASE).
+  if (metodo === 'PENDIENTE' || metodo === 'CANCELADO') { alert('⚠️ Un ajuste de cobro necesita el método con que el cliente paga (EFECTIVO, CUSCA o TARJETA).\n\nSi todavía no pagó, registrá el ajuste cuando pague.'); return; }
   if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
   // REGLA DE ORO DE LAS PROPINAS (v120): una propina solo se registra si la DEPOSITARON en
   // CUSCATLÁN. La que el cliente da en efectivo no se registra — nunca pasa por la empresa.
@@ -12036,7 +12353,7 @@ function imprimirPD() {
     });
     const crewHtml = _miembrosOrd.map((m,i) => {
       const esM = MOTORISTAS.has(m.nombre);
-      const _nm = _nombreDisplay(m.nombre);   // v114: alias de pantalla
+      const _nm = escHtml(_nombreDisplay(m.nombre));   // v128: escapar (texto escrito a mano)   // v114: alias de pantalla
       const display = esM ? `<b>(M) ${_nm}</b>` : _nm;
       return `<div class="crew ${esM?'lider':''}">${esM?'&#9733; ':''}${display}${parseFloat(m.pago)>0?` <span class="pago">(+$${parseFloat(m.pago).toFixed(0)})</span>`:''}</div>`;
     }).join('');
@@ -12063,23 +12380,23 @@ function imprimirPD() {
       return `<div class="slot">
         <div class="slot-header">
           <span class="pos">#${posicion}</span>
-          <span class="hora">${horaLabel}${sv.extra?' &middot; EXTRA':''}</span>
+          <span class="hora">${escHtml(horaLabel)}${sv.extra?' &middot; EXTRA':''}</span>
           <span class="precio"${_anulado?' style="text-decoration:line-through;opacity:.6;"':''}>$${costo.toFixed(2)}${_modSv?` <span style="font-size:.65em;font-weight:700;">✏️</span>`:''}</span>
         </div>
         ${_anulado?`<div style="font-size:7pt;font-weight:700;color:#991b1b;">CANCELADO — no suma al total</div>`:''}
         ${_modSv?`<div style="font-size:7pt;font-weight:700;color:#0e7490;">✏️ Precio ajustado — antes $${sv.base.toFixed(2)}</div>`:''}
         <div class="dirs">
-          <div class="dir"><span class="dir-icon">&#9650;</span>${r.carga}</div>
-          <div class="dir"><span class="dir-icon">&#9660;</span>${r.descarga}</div>
+          <div class="dir"><span class="dir-icon">&#9650;</span>${escHtml(r.carga)}</div>
+          <div class="dir"><span class="dir-icon">&#9660;</span>${escHtml(r.descarga)}</div>
         </div>
-        <div class="cliente">${r.nombre} ${r.apellido} &nbsp;|&nbsp; ${r.tel}</div>
-        ${r.obs?`<div class="obs">&#9888; ${r.obs}</div>`:''}
+        <div class="cliente">${escHtml(r.nombre)} ${escHtml(r.apellido)} &nbsp;|&nbsp; ${escHtml(r.tel)}</div>
+        ${r.obs?`<div class="obs">&#9888; ${escHtml(r.obs)}</div>`:''}
       </div>`;
     }).join('');
 
     return `<div class="equipo">
       <div class="equipo-header">
-        <div class="equipo-titulo">${col.nombre}</div>
+        <div class="equipo-titulo">${escHtml(col.nombre)}</div>
         <div class="equipo-sub">${unidadLabel} &middot; ${camionNombre}</div>
         <div class="equipo-total">$${colTotal.toFixed(2)}</div>
       </div>
@@ -12100,14 +12417,14 @@ function imprimirPD() {
   // v114: comisión por reseñas entregada a cada equipo (CAJA CHICA, no es propina).
   const _comisEqPD = _comisionesEquipoDelDia(f);
   const totalComisPD = _comisEqPD.reduce((s,c)=>s+c.monto,0);
-  const comisRowsPD = _comisEqPD.map(c=>`<tr style="background:#f5f3ff;"><td>$${c.monto.toFixed(2)}</td><td>Comisi&oacute;n por rese&ntilde;as – Equipo ${c.equipo}</td><td>CAJA CHICA</td></tr>`).join('');
+  const comisRowsPD = _comisEqPD.map(c=>`<tr style="background:#f5f3ff;"><td>$${c.monto.toFixed(2)}</td><td>Comisi&oacute;n por rese&ntilde;as – Equipo ${escHtml(c.equipo)}</td><td>CAJA CHICA</td></tr>`).join('');
   const totalGastosFull = totalGastos + totalPers + totalPropinas + totalComisPD;
 
   const hayGastos = day.gastos.length > 0 || totalPers > 0 || totalPropinas > 0 || totalComisPD > 0;
   const gastosHtml = hayGastos ? `
     <table class="t-gastos">
       <thead><tr><th>Monto</th><th>Descripción</th><th>Fondo</th></tr></thead>
-      <tbody>${day.gastos.map(g=>`<tr><td>$${parseFloat(g.monto||0).toFixed(2)}</td><td>${g.titulo||''}${g.desc?' — '+g.desc:''}</td><td>${g.fondo||''}</td></tr>`).join('')}${persRow}${propRow}${comisRowsPD}</tbody>
+      <tbody>${day.gastos.map(g=>`<tr><td>$${parseFloat(g.monto||0).toFixed(2)}</td><td>${escHtml(g.titulo||'')}${g.desc?' — '+escHtml(g.desc):''}</td><td>${escHtml(g.fondo||'')}</td></tr>`).join('')}${persRow}${propRow}${comisRowsPD}</tbody>
       <tfoot><tr><td><b>$${totalGastosFull.toFixed(2)}</b></td><td colspan="2"><b>TOTAL GASTOS</b></td></tr></tfoot>
     </table>` : '';
 
@@ -12964,6 +13281,15 @@ function renderComisiones() {
 // ¿Este código ya tiene un cobro registrado? La fuente de verdad es pdData.cobrosPendientes[]
 // (se guarda en app_data y SÍ persiste en la nube). El flag r._cobrado NO persiste en Supabase
 // — por eso un cobro de Crédito Fiscal "se deshacía solo" tras cualquier sync.
+// v128: el cobro registrado de un código (el primero que aparezca), o null. Mismo criterio que _yaCobrado.
+function _cobroRegistradoDe(codigo) {
+  if (!codigo) return null;
+  for (const [f, day] of Object.entries(pdData || {})) {
+    const cb = Array.isArray(day?.cobrosPendientes) ? day.cobrosPendientes.find(x => x && x.codigo === codigo) : null;
+    if (cb) return { fecha: cb.fecha || f, metodo: cb.metodo || '' };
+  }
+  return null;
+}
 function _yaCobrado(codigo) {
   if (!codigo) return false;
   for (const day of Object.values(pdData || {})) {
@@ -12995,6 +13321,18 @@ function renderNotificaciones() {
           _codigosYaAgregados.add(r.codigo);
           pagosPendientes.push({ reserva: r, fecha, equipo: col.nombre });
         }
+      });
+      // v128: los SERVICIOS EXTRA en PENDIENTE también se deben cobrar. Antes solo se miraban los
+      // horarios y un extra pendiente no aparecía nunca aquí (casos reales: 196-168, 383-556 y
+      // 147-408, $1,310 sin registro de cobro).
+      (col.serviciosExtra || []).forEach(it => {
+        if (!it || typeof it !== 'object' || it.metodo !== 'PENDIENTE' || it.cobrado) return;
+        const r = reservas.find(rv => rv.codigo === it.codigo);
+        if (!r || r.estado === 'cancelado') return;
+        if (_codigosYaAgregados.has(r.codigo)) return;
+        if (_yaCobrado(r.codigo)) return;
+        _codigosYaAgregados.add(r.codigo);
+        pagosPendientes.push({ reserva: r, fecha, equipo: col.nombre });
       });
     });
   });
@@ -13035,7 +13373,7 @@ function renderNotificaciones() {
     html += pasadosSinCerrar.slice(0,30).map(r => {
       return `<div style="background:#fff;border-radius:7px;padding:8px 12px;margin-bottom:6px;border-left:4px solid #d97706;">
         <div style="font-size:12px;font-weight:700;color:#92400e;">${escHtml(r.nombre)} ${escHtml(r.apellido||'')}</div>
-        <div style="font-size:11px;color:#6b7280;">📞 ${escHtml(r.tel)} · ${fmtFecha(r.fecha)} · ${r.hora} · <span title="${_costoModificado(r.codigo)?_notaCostoMod(r.codigo).trim():''}" style="${_costoModificado(r.codigo)?'color:#0891b2;font-weight:800;':''}">$${_costoActual(r).toFixed(2)}${_costoModificado(r.codigo)?' ✏️':''}</span></div>
+        <div style="font-size:11px;color:#6b7280;">📞 ${escHtml(r.tel)} · ${fmtFecha(r.fecha)} · ${escHtml(r.hora)} · <span title="${_costoModificado(r.codigo)?_notaCostoMod(r.codigo).trim():''}" style="${_costoModificado(r.codigo)?'color:#0891b2;font-weight:800;':''}">$${_costoActual(r).toFixed(2)}${_costoModificado(r.codigo)?' ✏️':''}</span></div>
         <div style="display:flex;gap:5px;margin-top:6px;">
           <button onclick="cambiarEstRapido('${r.codigo}','completado')" class="btn btn-sm" style="background:#16a34a;color:#fff;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">✅ Se hizo</button>
           <button onclick="eliminar('${r.codigo}')" class="btn btn-sm" style="background:#fee2e2;color:#d42b2b;border:none;border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">✕ Se canceló</button>
@@ -13060,8 +13398,8 @@ function renderNotificaciones() {
       const idx = reservas.indexOf(p.r);
       return `<div style="background:#fff;border-radius:7px;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;border-left:4px solid #d42b2b;">
         <div>
-          <div style="font-size:12px;font-weight:700;color:#991b1b;">${p.r.nombre} ${p.r.apellido||''}</div>
-          <div style="font-size:11px;color:#6b7280;">📞 ${p.r.tel} · ${fmtFecha(p.fecha)}${p.equipo ? ' · '+p.equipo : ''}</div>
+          <div style="font-size:12px;font-weight:700;color:#991b1b;">${escHtml(p.r.nombre)} ${escHtml(p.r.apellido||'')}</div>
+          <div style="font-size:11px;color:#6b7280;">📞 ${escHtml(p.r.tel)} · ${fmtFecha(p.fecha)}${p.equipo ? ' · '+escHtml(p.equipo) : ''}</div>
           <div style="font-size:11px;color:#6b7280;">${p.r.tipoCliente === 'Crédito Fiscal' ? '🏢 Crédito Fiscal' : ''}</div>
         </div>
         <div style="text-align:right;">
@@ -13101,7 +13439,7 @@ function renderNotificaciones() {
             <div style="font-size:13px;font-weight:700;color:var(--azul);">${escHtml(r.nombre)} ${escHtml(r.apellido)}</div>
             <div style="font-size:11px;color:var(--gris2);">📞 ${escHtml(r.tel)} · ${r.codigo}</div>
             <div style="font-size:11px;color:var(--gris2);margin-top:2px;">📦 ${escHtml((r.carga||'').substring(0,40))}${r.carga?.length>40?'…':''}</div>
-            <div style="font-size:11px;font-weight:800;color:${urgColor};margin-top:4px;">${urgencia} · ${fmtFecha(r.fecha)} · ${r.hora}</div>
+            <div style="font-size:11px;font-weight:800;color:${urgColor};margin-top:4px;">${urgencia} · ${fmtFecha(r.fecha)} · ${escHtml(r.hora)}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
             <button onclick="cambiarEstRapido('${r.codigo}','confirmado')" class="btn btn-g btn-sm">✅ Confirmar</button>
@@ -13361,8 +13699,9 @@ function alertaPendientesUrgentes() {
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
         <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
-        <option value="PENDIENTE">PENDIENTE (no suma aún)</option>
       </select>
+      <!-- v128: se quitó PENDIENTE. Un ajuste PENDIENTE subía el precio a cobrar pero su dinero no entraba
+           nunca a ninguna cuenta (el cobro de pendientes registra solo la BASE). -->
     </div>
     <div class="fg" style="margin-top:12px;">
       <label>Motivo / detalle</label>
