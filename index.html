@@ -598,13 +598,15 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   <button class="sb-btn" onclick="openWAReader()"><span class="ic">💬</span>Leer WhatsApp</button>
   <button class="sb-btn" onclick="nav('clientes')"><span class="ic">👥</span>Clientes</button>
   <button class="sb-btn" onclick="nav('comisiones')"><span class="ic">💰</span>Comisiones</button>
-  <!-- Buscador rápido por código (para sistema de descuentos) -->
+  <!-- Código de descuento (v127): valida el código de una reservación anterior; NO lo consume.
+       Se consume solo al guardar la reservación nueva con el descuento (mt_aplicar_descuento). -->
   <div style="margin-top:16px;padding:12px 11px;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;">
     <div style="font-size:11px;font-weight:800;color:#92400e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">🎟️ Código de descuento</div>
-    <input type="text" id="codigo-descuento" placeholder="000-000" inputmode="numeric"
-      onkeydown="if(event.key==='Enter')buscarPorCodigoDescuento()"
+    <input type="text" id="codigo-descuento" placeholder="000-000" inputmode="numeric" maxlength="9"
+      onkeydown="if(event.key==='Enter')buscarPorCodigoDescuento()" oninput="onCodigoDescuentoInput()"
       style="width:100%;border:1.5px solid #d97706;border-radius:6px;padding:7px 10px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;background:#fff;box-sizing:border-box;text-align:center;font-weight:700;letter-spacing:.05em;">
-    <button onclick="buscarPorCodigoDescuento()" style="width:100%;margin-top:6px;background:#d97706;color:#fff;border:none;border-radius:6px;padding:7px 0;font-size:12px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">Buscar reservación</button>
+    <button id="btn-desc-buscar" onclick="buscarPorCodigoDescuento()" style="width:100%;margin-top:6px;background:#d97706;color:#fff;border:none;border-radius:6px;padding:7px 0;font-size:12px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">Buscar reservación</button>
+    <div id="desc-estado"><div style="margin-top:6px;padding:7px 8px;border-radius:6px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:11px;line-height:1.4;font-weight:600;">🟠 Sin validar</div></div>
   </div>
 </aside>
 
@@ -1145,7 +1147,9 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
             <div id="f-horas-info" style="margin-top:6px;font-size:11px;color:var(--azul2);font-weight:600;display:none;"></div>
           </div>
         </div>
-        <div class="fg"><label>Costo del servicio *</label><input type="text" id="f-costo" placeholder="Ej: $85.00" oninput="fmtCosto(this)"></div>
+        <div class="fg"><label>Costo del servicio *</label><input type="text" id="f-costo" placeholder="Ej: $85.00" oninput="fmtCosto(this);_descPreviewPrecio()"></div>
+        <!-- v127: código de descuento de la reservación nueva (lo pinta _pintarDescuentoForm) -->
+        <div class="fg" id="f-desc-box"></div>
         <div class="fg"><label>N° de hombres asignados</label><input type="number" id="f-personal" placeholder="Ej: 5" min="1" value="5"></div>
         <div class="fg"><label>Tipo de cliente *</label>
           <div style="display:flex;gap:10px;margin-top:2px;flex-wrap:wrap;">
@@ -1286,7 +1290,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   </div>
   <div class="mf">
     <button class="btn btn-gh" onclick="closeNueva()">Cancelar</button>
-    <button class="btn btn-g" onclick="guardar()">💾 Guardar reservación</button>
+    <button class="btn btn-g" id="btn-guardar-nueva" onclick="guardar()">💾 Guardar reservación</button>
   </div>
 </div>
 </div>
@@ -1313,6 +1317,8 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
       Sí se puede ver, imprimir y <strong>duplicar</strong>.<br>
       ➡️ Para reagendar al cliente usá el botón <strong>“📋 Duplicar”</strong>: crea una reservación NUEVA e independiente.
     </div>
+    <!-- v127: código de descuento (recibido por esta reservación y/o su código ya usado en otra) -->
+    <div id="ver-aviso-descuento" style="display:none;background:#fef3c7;border:1.5px solid #fde68a;border-left:5px solid #d97706;border-radius:8px;padding:9px 14px;margin:10px 0;font-size:12.5px;color:#78350f;line-height:1.5;"></div>
     <div id="ver-aviso-cancelador" style="display:none;background:#fef3c7;border:1.5px solid #fcd34d;border-left:5px solid #d97706;border-radius:8px;padding:10px 14px;margin:10px 0;font-size:12.5px;color:#92400e;line-height:1.5;"></div>
 
     <!-- PDF -->
@@ -1901,6 +1907,10 @@ async function syncAllFromSupabase(silent, hardReplace=false) {
       auditData = _mergeAudit(auditData || {}, aud);
       safeSetLS('mt_audit', JSON.stringify(auditData));
     }
+    // v127: usos de códigos de descuento (tabla propia; la nube es la fuente de verdad).
+    // null = sin conexión o tabla aún no creada → se conserva el caché local.
+    const _desc = await loadDescuentosFromSupabase();
+    if (_desc) { descuentosData = _desc; _descGuardarCache(); }
 
     if (!silent) console.log('✅ Datos sincronizados desde Supabase' + (hardReplace ? ' (hard replace)' : ''));
     updateSyncIndicator();
@@ -2429,10 +2439,10 @@ async function loadReservasFromSupabase() {
   }
 }
 
-async function saveReservaToSupabase(r) {
-  if (!sb || !supabaseOK) return null;
-  try {
-    const row = {
+// Fila de la tabla `reservaciones` (snake_case) a partir de una reservación local. Fuente
+// ÚNICA: la usan saveReservaToSupabase y la función atómica de descuentos (v127).
+function _filaReservaSupabase(r) {
+    return {
       codigo: r.codigo,
       nombre: r.nombre,
       apellido: r.apellido || '',
@@ -2456,7 +2466,13 @@ async function saveReservaToSupabase(r) {
       empaque: r.empaque || null,
       vendedor: r.vendedor || ''
     };
-    
+}
+
+async function saveReservaToSupabase(r) {
+  if (!sb || !supabaseOK) return null;
+  try {
+    const row = _filaReservaSupabase(r);
+
     // Upsert by codigo
     const { data, error } = await sb
       .from('reservaciones')
@@ -2733,7 +2749,7 @@ function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-15-v126';
+const APP_VERSION = '2026-09-22-v127';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3429,7 +3445,7 @@ function pdfBuildBloque(r) {
     </div>
 
     <div class="costo-final">
-      <span class="costo-lbl">COSTO TOTAL${costoMod ? ` <span style="font-size:6.5pt;font-weight:700;opacity:.85;">✏️ AJUSTADO (antes $${esc(costoOrigFmt)})</span>` : ''}</span>
+      <span class="costo-lbl">COSTO TOTAL${costoMod ? ` <span style="font-size:6.5pt;font-weight:700;opacity:.85;">✏️ AJUSTADO (antes $${esc(costoOrigFmt)})</span>` : ''}${_notaDescuento(r.codigo) ? ` <span style="font-size:6.5pt;font-weight:700;opacity:.85;">🎟️ ${esc(_notaDescuento(r.codigo).toUpperCase())}</span>` : ''}</span>
       <span class="costo-val">$${esc(costoFmt)}</span>
       <span class="hombres">${esc(personalFmt)} HOMBRES</span>
     </div>
@@ -3581,6 +3597,362 @@ function _mergeAudit(local, nube) {
   return res;
 }
 
+// ==================== CÓDIGOS DE DESCUENTO — v127 (2026-09-22) ====================
+// $10 de descuento cuando un cliente anterior RECOMIENDA el servicio o cuando un cliente
+// REGRESA. El "código de descuento" es el código (000-000) de una reservación ANTERIOR, y cada
+// código se puede usar UNA sola vez.
+//
+// DÓNDE VIVE: tabla Supabase `descuentos_codigo` (una fila por uso: origen → destino, monto,
+// tipo, precio antes del descuento, quién y cuándo) — ver DESCUENTOS-SUPABASE.sql. NO se usan
+// columnas nuevas en `reservaciones`: esa tabla tiene columnas fijas y un campo desconocido
+// haría fallar el guardado de TODAS las reservaciones. El código ORIGINAL nunca se toca.
+//
+// CÓMO SE EVITA EL DOBLE USO: el descuento solo se aplica al GUARDAR la reservación nueva, y
+// lo hace la función `mt_aplicar_descuento` en UNA transacción: bloquea la reservación origen,
+// revalida (existe, elegible, no usada), inserta la reservación nueva e inserta el uso. Si algo
+// falla no queda NADA guardado y el código sigue disponible. Dos pestañas/compus a la vez: la
+// segunda choca con el bloqueo/índice único y recibe DESC_YA_USADO. Buscar/validar SOLO LEE.
+// Sin conexión no se aplica (no se puede garantizar el uso único desde este navegador).
+//
+// PRECIO: la reservación nueva guarda su `costo` YA DESCONTADO (base − $10). Así el cuadre,
+// cobros, comisiones, impresión y WhatsApp siguen leyendo UN solo campo, sin fórmulas nuevas,
+// y editarla después NO vuelve a restar nada (el descuento se resta una sola vez, al crearla).
+const DESCUENTO_MONTO = 10.00;            // ⚠️ igual a c_monto de mt_aplicar_descuento (SQL)
+// Política al CANCELAR la reservación beneficiada: hoy NO se devuelve el código (no existe una
+// regla que diga lo contrario). Para cambiarla: poner true y completar _politicaDescuentoAlCancelar
+// con una función SQL que pase el uso a estado 'revertido' (el índice único solo mira 'aplicado').
+const DESCUENTO_LIBERAR_AL_CANCELAR = false;
+const DESCUENTO_TIPOS = { recomendacion: 'Recomendación de un cliente', cliente_regresa: 'Cliente que regresa' };
+let descuentosData; try { descuentosData = JSON.parse(localStorage.getItem('mt_descuentos') || '[]'); if (!Array.isArray(descuentosData)) descuentosData = []; } catch(e) { descuentosData = []; }
+let _descuentoPendiente = null;   // { origen, tipo, resumen } — descuento puesto en el formulario, AÚN sin guardar
+let _descUltimo = null;           // último resultado de validación del cuadro naranja
+let _descValidando = false, _descGuardando = false;
+
+// Normaliza lo que se tipea: acepta 123456, 123-456 o "123 456". Devuelve el formato 000-000.
+function _normCodigoDescuento(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { ok: false, error: 'vacio' };
+  const sinSep = s.replace(/[\s-]/g, '');
+  if (/[^0-9]/.test(sinSep)) return { ok: false, error: 'invalido' };
+  if (sinSep.length < 6) return { ok: false, error: 'corto' };
+  if (sinSep.length > 6) return { ok: false, error: 'largo' };
+  return { ok: true, codigo: sinSep.slice(0, 3) + '-' + sinSep.slice(3) };
+}
+// ¿La reservación puede prestar su código? No cancelada y (completada, o confirmada con el
+// servicio ya realizado). ⚠️ Misma regla que mt_aplicar_descuento en el SQL.
+function _elegibilidadDescuento(r) {
+  if (!r) return { ok: false, motivo: 'no existe' };
+  if (r.estado === 'cancelado') return { ok: false, motivo: 'la reservación está cancelada' };
+  if (r.estado === 'completado') return { ok: true };
+  if (r.estado === 'confirmado' && r.fecha && String(r.fecha).slice(0, 10) <= _hoyISO()) return { ok: true };
+  return { ok: false, motivo: r.estado === 'pendiente' ? 'la reservación todavía está pendiente de confirmar' : 'el servicio todavía no se ha realizado' };
+}
+// Reservaciones antiguas sin registro en la tabla = código NO utilizado.
+function _descUsoDeOrigen(codigo) { return (descuentosData || []).find(d => d && d.codigo_origen === codigo && d.estado === 'aplicado') || null; }
+function _descuentoDeReserva(codigo) { return (descuentosData || []).find(d => d && d.codigo_destino === codigo && d.estado === 'aplicado') || null; }
+function _descGuardarCache() { try { safeSetLS('mt_descuentos', JSON.stringify(descuentosData || [])); } catch(e) {} }
+function _descAgregarCache(fila) {
+  if (!fila) return;
+  descuentosData = (descuentosData || []).filter(d => !(d && ((fila.id && d.id === fila.id) || (d.codigo_origen === fila.codigo_origen && d.estado === 'aplicado' && fila.estado === 'aplicado'))));
+  descuentosData.push(fila);
+  _descGuardarCache();
+}
+// Lee TODOS los usos (tabla chica). null = sin conexión o tabla aún no creada (se conserva el caché).
+async function loadDescuentosFromSupabase() {
+  if (!sb || !supabaseOK) return null;
+  try {
+    const { data, error } = await sb.from('descuentos_codigo').select('*').order('usado_en', { ascending: true }).limit(5000);
+    if (error) throw error;
+    return data || [];
+  } catch(e) { console.warn('descuentos: tabla no disponible —', e && e.message); return null; }
+}
+// Precio del servicio SIN el descuento (para duplicar sin heredar el descuento).
+function _precioSinDescuento(r) {
+  const d = r && _descuentoDeReserva(r.codigo);
+  if (!d) return r ? r.costo : '';
+  return ((parseFloat(r.costo) || 0) + (parseFloat(d.monto) || DESCUENTO_MONTO)).toFixed(2);
+}
+function _fmtMontoDesc(d) { return (parseFloat(d && d.monto) || DESCUENTO_MONTO).toFixed(2); }
+// Texto corto para WhatsApp e impresión. '' si la reservación no tiene descuento.
+function _notaDescuento(codigo) {
+  const d = _descuentoDeReserva(codigo);
+  return d ? `incluye descuento de $${_fmtMontoDesc(d)}, código ${d.codigo_origen}` : '';
+}
+// Hook de la política al cancelar (ver DESCUENTO_LIBERAR_AL_CANCELAR). Hoy NO hace nada: el
+// código usado sigue usado aunque la reservación beneficiada se cancele.
+function _politicaDescuentoAlCancelar(r) {
+  if (!DESCUENTO_LIBERAR_AL_CANCELAR || !r) return;
+  // Pendiente de definir por Pedro. Aquí iría la llamada a una función SQL de reversión.
+}
+// Nombre + inicial del apellido: suficiente para confirmar que es la reservación correcta sin
+// exponer datos del cliente (ni teléfono ni direcciones).
+function _descResumen(r) {
+  if (!r) return '';
+  const nom = String(r.nombre || '').trim().split(/\s+/)[0] || '';
+  const ap = String(r.apellido || '').trim();
+  const est = { completado: 'completada', confirmado: 'confirmada', pendiente: 'pendiente', cancelado: 'cancelada' }[r.estado] || (r.estado || '');
+  return `${nom}${ap ? ' ' + ap[0].toUpperCase() + '.' : ''} · servicio ${r.fecha ? fmtFecha(String(r.fecha).slice(0, 10)) : '—'} · ${est}`;
+}
+
+// Consulta la reservación y su uso. Con conexión manda la NUBE (fuente de verdad); sin conexión
+// se responde con lo local, marcado offline (se puede ver, NO aplicar).
+async function _consultarCodigoDescuento(codigo) {
+  const local = (reservas || []).find(x => x && x.codigo === codigo) || null;
+  const out = { r: local, uso: _descUsoDeOrigen(codigo), online: false, tablaOK: null, soloLocal: false };
+  if (!sb || !supabaseOK) return out;
+  try {
+    const [qr, qd] = await Promise.all([
+      sb.from('reservaciones').select('codigo,nombre,apellido,fecha,estado').eq('codigo', codigo).limit(1),
+      sb.from('descuentos_codigo').select('*').eq('codigo_origen', codigo).eq('estado', 'aplicado').limit(1)
+    ]);
+    if (qr.error) throw qr.error;
+    out.online = true;
+    const n = qr.data && qr.data[0];
+    if (n) out.r = { codigo: n.codigo, nombre: n.nombre, apellido: n.apellido, fecha: n.fecha, estado: n.estado };
+    else { out.soloLocal = !!local; out.r = null; }
+    if (qd.error) { out.tablaOK = false; }
+    else {
+      out.tablaOK = true;
+      out.uso = (qd.data && qd.data[0]) || null;
+      if (out.uso) _descAgregarCache(out.uso);
+    }
+  } catch(e) { console.warn('consulta de código de descuento:', e && e.message); }
+  return out;
+}
+// Valida un código SIN consumirlo. estado: formato | no_existe | no_sync | usado | no_elegible | valido
+async function validarCodigoDescuento(raw) {
+  const n = _normCodigoDescuento(raw);
+  if (!n.ok) return { estado: 'formato', error: n.error };
+  const q = await _consultarCodigoDescuento(n.codigo);
+  if (!q.r) return { estado: q.soloLocal ? 'no_sync' : 'no_existe', codigo: n.codigo };
+  if (q.uso) return { estado: 'usado', codigo: n.codigo, r: q.r, uso: q.uso };
+  const el = _elegibilidadDescuento(q.r);
+  if (!el.ok) return { estado: 'no_elegible', codigo: n.codigo, r: q.r, motivo: el.motivo };
+  return { estado: 'valido', codigo: n.codigo, r: q.r, online: q.online, tablaOK: q.tablaOK };
+}
+const _DESC_MSG_FORMATO = { vacio: 'Escribí los 6 dígitos del código.', corto: 'Faltan dígitos: el código tiene 6 (000-000).', largo: 'Sobran dígitos: el código tiene 6 (000-000).', invalido: 'Solo números: el código tiene 6 dígitos (000-000).' };
+// HTML del estado (lo usan el cuadro naranja y el formulario: un solo criterio visual).
+function _descEstadoHTML(st, dondeForm) {
+  const caja = (bg, bd, col, html) => `<div style="margin-top:6px;padding:7px 8px;border-radius:6px;background:${bg};border:1px solid ${bd};color:${col};font-size:11px;line-height:1.4;font-weight:600;">${html}</div>`;
+  const rojo = h => caja('#fee2e2', '#fca5a5', '#991b1b', h);
+  if (!st) return caja('#fff7ed', '#fdba74', '#9a3412', '🟠 Sin validar');
+  switch (st.estado) {
+    case 'buscando': return caja('#fff7ed', '#fdba74', '#9a3412', '⏳ Verificando…');
+    case 'formato': return rojo('🔴 ' + (_DESC_MSG_FORMATO[st.error] || 'Código inválido.'));
+    case 'no_existe': return rojo('🔴 Código de reservación no encontrado');
+    case 'no_sync': return rojo('🔴 Esa reservación todavía no está en la nube. Esperá a que sincronice y volvé a probar.');
+    case 'no_elegible': return rojo('🔴 Esta reservación no es válida para descuento' + (st.motivo ? `<br><span style="font-weight:500;opacity:.85;">(${escHtml(st.motivo)})</span>` : ''));
+    case 'usado': {
+      const u = st.uso || {};
+      const cuando = u.usado_en ? _fmtAuditFechaHora(u.usado_en) : '';
+      return rojo('🔴 Este código de descuento ya fue utilizado' + ((u.codigo_destino || cuando) ? `<br><span style="font-weight:500;opacity:.85;">${cuando ? 'el ' + escHtml(cuando) : ''}${u.codigo_destino ? ' en ' + escHtml(u.codigo_destino) : ''}</span>` : ''));
+    }
+    case 'error': return rojo('🔴 ' + escHtml(st.msg || 'No se pudo verificar. Probá de nuevo.'));
+    case 'aplicado': return caja('#dcfce7', '#86efac', '#166534', `✓ Descuento de $${DESCUENTO_MONTO.toFixed(2)} aplicado${st.destino ? `<br><span style="font-weight:500;">en ${escHtml(st.destino)}</span>` : ''}`);
+    case 'pendiente': return caja('#dcfce7', '#86efac', '#166534', `🟢 ${escHtml(st.codigo)} puesto en la reservación nueva<br><span style="font-weight:500;">se consume al guardarla</span>`);
+    case 'valido': {
+      let h = `🟢 ✓ Código válido — descuento disponible: $${DESCUENTO_MONTO.toFixed(2)}<br><span style="font-weight:500;">${escHtml(_descResumen(st.r))}</span>`;
+      if (!st.online) h += `<br><span style="color:#92400e;">⚠ Sin conexión: se puede ver, no aplicar.</span>`;
+      else if (st.tablaOK === false) h += `<br><span style="color:#92400e;">⚠ Descuentos aún no activados en la nube.</span>`;
+      if (!dondeForm) {
+        h += `<div style="display:flex;gap:4px;margin-top:6px;">
+          <button type="button" id="btn-desc-aplicar" onclick="aplicarDescuentoNuevaReserva()" style="flex:1;background:#16a34a;color:#fff;border:none;border-radius:5px;padding:5px 0;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">Aplicar en nueva reservación</button>
+          <button type="button" onclick="verReservaDescuento('${escHtml(st.codigo)}')" title="Abrir la reservación" style="background:#fff;color:#166534;border:1px solid #86efac;border-radius:5px;padding:5px 7px;font-size:11px;font-weight:700;cursor:pointer;">ver</button></div>`;
+      }
+      return caja('#dcfce7', '#86efac', '#166534', h);
+    }
+  }
+  return '';
+}
+function _pintarEstadoDescuento(st) {
+  const el = document.getElementById('desc-estado');
+  if (el) el.innerHTML = _descEstadoHTML(st, false);
+}
+// Al escribir en el cuadro naranja: vuelve a "sin validar" (un resultado viejo no debe quedar
+// pegado a otro código).
+function onCodigoDescuentoInput() { _descUltimo = null; _pintarEstadoDescuento(null); }
+
+// Cuadro naranja del menú: VALIDA el código (no lo consume).
+async function buscarPorCodigoDescuento() {
+  if (_descValidando) return;
+  const inp = document.getElementById('codigo-descuento');
+  if (!inp) return;
+  const n = _normCodigoDescuento(inp.value);
+  if (n.ok) inp.value = n.codigo;
+  const btn = document.getElementById('btn-desc-buscar');
+  _descValidando = true; if (btn) btn.disabled = true;
+  _pintarEstadoDescuento({ estado: 'buscando' });
+  try {
+    const st = await validarCodigoDescuento(inp.value);
+    _descUltimo = st;
+    _pintarEstadoDescuento(st);
+  } catch(e) {
+    console.warn('validar código de descuento:', e);
+    _descUltimo = null;
+    _pintarEstadoDescuento({ estado: 'error', msg: 'No se pudo verificar. Probá de nuevo.' });
+  } finally { _descValidando = false; if (btn) btn.disabled = false; }
+}
+// Comportamiento de siempre del buscador: ir a Reservaciones filtrado por el cliente y abrirla.
+function verReservaDescuento(codigo) {
+  const r = (reservas || []).find(rv => rv.codigo === codigo);
+  if (!r) { alert('Esa reservación todavía no está en este dispositivo. Esperá a que sincronice.'); return; }
+  nav('reservaciones');
+  setTimeout(() => {
+    const qRes = document.getElementById('q-res');
+    if (qRes) { qRes.value = r.tel || ''; filtrarRes(); }
+    verRes(r.codigo);
+  }, 100);
+}
+// Botón verde del cuadro naranja: abre una reservación nueva con el descuento puesto.
+function aplicarDescuentoNuevaReserva() {
+  const st = _descUltimo;
+  if (!st || st.estado !== 'valido') return;
+  if (!st.online || !supabaseOK) { alert('⚠️ Sin conexión a la nube.\n\nEl descuento solo se puede aplicar con internet, para garantizar que el código se use una sola vez.'); return; }
+  if (st.tablaOK === false) { alert('⚠️ El sistema de descuentos todavía no está activado en la nube.\n\nAvisale a Pedro (falta correr DESCUENTOS-SUPABASE.sql en Supabase).'); return; }
+  const mo = document.getElementById('mo-nueva');
+  if (!mo || !mo.classList.contains('open')) openNueva();
+  _ponerDescuentoPendiente(st);
+}
+function _ponerDescuentoPendiente(st) {
+  _descuentoPendiente = { origen: st.codigo, tipo: 'recomendacion', resumen: _descResumen(st.r) };
+  _pintarDescuentoForm();
+  _pintarEstadoDescuento({ estado: 'pendiente', codigo: st.codigo });
+}
+function quitarDescuentoPendiente() {
+  _descuentoPendiente = null;
+  _pintarDescuentoForm();
+  _pintarEstadoDescuento(_descUltimo);
+}
+function _descTipoCambio(v) { if (_descuentoPendiente) _descuentoPendiente.tipo = (v === 'cliente_regresa') ? 'cliente_regresa' : 'recomendacion'; }
+// Recuadro del formulario "Nueva reservación". Sin descuento: campo para validar un código ahí
+// mismo (sirve también al DUPLICAR, donde el menú lateral queda detrás del formulario).
+function _pintarDescuentoForm() {
+  const box = document.getElementById('f-desc-box');
+  if (!box) return;
+  const d = _descuentoPendiente;
+  if (!d) {
+    box.innerHTML = `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <span style="font-size:11.5px;font-weight:700;color:#92400e;">🎟️ ¿Código de descuento?</span>
+      <input type="text" id="f-desc-cod" placeholder="000-000" inputmode="numeric" maxlength="9" onkeydown="if(event.key==='Enter'){event.preventDefault();validarDescuentoForm();}" oninput="const m=document.getElementById('f-desc-msg');if(m)m.innerHTML='';"
+        style="width:100px;border:1.5px solid #d97706;border-radius:6px;padding:5px 8px;font-size:12.5px;font-weight:700;text-align:center;font-family:'Barlow',sans-serif;outline:none;">
+      <button type="button" id="btn-f-desc" onclick="validarDescuentoForm()" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:'Barlow',sans-serif;">Validar y aplicar</button>
+    </div><div id="f-desc-msg"></div>`;
+    return;
+  }
+  box.innerHTML = `<div style="background:#dcfce7;border:1.5px solid #86efac;border-radius:8px;padding:8px 10px;color:#166534;font-size:12px;line-height:1.5;">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+      <div><strong>🎟️ Descuento −$${DESCUENTO_MONTO.toFixed(2)}</strong> con el código <strong>${escHtml(d.origen)}</strong><br>
+        <span style="font-weight:500;">${escHtml(d.resumen)}</span></div>
+      <button type="button" onclick="quitarDescuentoPendiente()" style="background:#fff;border:1px solid #86efac;color:#991b1b;border-radius:5px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;">Quitar</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+      <label style="font-size:11px;font-weight:700;">Motivo:</label>
+      <select id="f-desc-tipo" onchange="_descTipoCambio(this.value)" style="border:1px solid #86efac;border-radius:5px;padding:3px 6px;font-size:12px;font-family:'Barlow',sans-serif;">
+        <option value="recomendacion"${d.tipo === 'recomendacion' ? ' selected' : ''}>${DESCUENTO_TIPOS.recomendacion}</option>
+        <option value="cliente_regresa"${d.tipo === 'cliente_regresa' ? ' selected' : ''}>${DESCUENTO_TIPOS.cliente_regresa}</option>
+      </select>
+      <span id="f-desc-precio" style="font-weight:800;"></span>
+    </div>
+    <div style="font-size:10.5px;opacity:.85;margin-top:3px;">Escribí el precio NORMAL en “Costo del servicio”: al guardar se restan los $${DESCUENTO_MONTO.toFixed(2)} una sola vez y el código queda usado.</div>
+  </div>`;
+  _descPreviewPrecio();
+}
+// Vista previa del precio final (solo pinta un <span>: no re-renderiza el formulario — REGLA 8.2).
+function _descPreviewPrecio() {
+  const sp = document.getElementById('f-desc-precio');
+  if (!sp || !_descuentoPendiente) return;
+  const base = parseFloat((document.getElementById('f-costo') || {}).value);
+  if (isNaN(base)) { sp.textContent = ''; return; }
+  sp.textContent = base < DESCUENTO_MONTO ? `⚠ el precio debe ser de al menos $${DESCUENTO_MONTO.toFixed(2)}` : `Precio final: $${(base - DESCUENTO_MONTO).toFixed(2)}`;
+}
+async function validarDescuentoForm() {
+  if (_descValidando) return;
+  const inp = document.getElementById('f-desc-cod'), msg = document.getElementById('f-desc-msg'), btn = document.getElementById('btn-f-desc');
+  if (!inp) return;
+  const n = _normCodigoDescuento(inp.value);
+  if (n.ok) inp.value = n.codigo;
+  _descValidando = true; if (btn) btn.disabled = true;
+  if (msg) msg.innerHTML = _descEstadoHTML({ estado: 'buscando' }, true);
+  try {
+    const st = await validarCodigoDescuento(inp.value);
+    if (st.estado === 'valido' && (!st.online || st.tablaOK === false)) {
+      if (msg) msg.innerHTML = _descEstadoHTML({ estado: 'error', msg: !st.online ? 'Sin conexión: el descuento solo se aplica con internet.' : 'El sistema de descuentos aún no está activado en la nube.' }, true);
+    } else if (st.estado === 'valido') {
+      _descUltimo = st;
+      _ponerDescuentoPendiente(st);
+    } else if (msg) msg.innerHTML = _descEstadoHTML(st, true);
+  } catch(e) {
+    if (msg) msg.innerHTML = _descEstadoHTML({ estado: 'error', msg: 'No se pudo verificar. Probá de nuevo.' }, true);
+  } finally { _descValidando = false; if (btn) btn.disabled = false; }
+}
+// Traduce el error de la función SQL a una clave estable.
+function _codigoErrorDescuento(err) {
+  const m = String(((err && err.message) || '') + ' ' + ((err && err.details) || ''));
+  const k = (m.match(/DESC_[A-Z_]+/) || [])[0];
+  if (k) return k;
+  if (err && (err.code === 'PGRST202' || err.code === '42883' || err.code === '42P01' || /mt_aplicar_descuento|schema cache|could not find the function|descuentos_codigo/i.test(m))) return 'SIN_TABLA';
+  return 'RED';
+}
+// Guarda la reservación nueva + consume el código, TODO O NADA (función SQL atómica).
+async function _aplicarDescuentoEnNube(r, d) {
+  if (!sb || !supabaseOK) return { ok: false, codigo: 'RED' };
+  try {
+    const { data, error } = await sb.rpc('mt_aplicar_descuento', {
+      p_reserva: _filaReservaSupabase(r), p_origen: d.origen, p_tipo: d.tipo,
+      p_precio_base: parseFloat(d.base), p_por: _quienSoy()
+    });
+    if (error) {
+      const codigo = _codigoErrorDescuento(error);
+      return (codigo === 'RED' && await _descYaQuedoGuardado(r.codigo, d.origen)) || { ok: false, codigo, error };
+    }
+    return { ok: true, reserva_id: data && data.reserva_id, created_at: data && data.created_at, descuento: data && data.descuento };
+  } catch(e) {
+    return (await _descYaQuedoGuardado(r.codigo, d.origen)) || { ok: false, codigo: 'RED', error: e };
+  }
+}
+// Si se cortó la conexión DESPUÉS de que la nube guardó (la respuesta nunca llegó), preguntar
+// si el uso de ESTE código para ESTA reservación ya existe: en ese caso sí se guardó todo.
+async function _descYaQuedoGuardado(destino, origen) {
+  try {
+    const { data, error } = await sb.from('descuentos_codigo').select('*').eq('codigo_destino', destino).eq('estado', 'aplicado').limit(1);
+    const d = !error && data && data[0];
+    return (d && d.codigo_origen === origen) ? { ok: true, descuento: d, recuperado: true } : null;
+  } catch(e) { return null; }
+}
+function _mensajeErrorDescuento(res) {
+  const nada = '\n\nNo se guardó la reservación y el código NO se consumió. El formulario sigue abierto.';
+  switch (res.codigo) {
+    case 'DESC_YA_USADO': {
+      const det = String((res.error && res.error.details) || '').split('|');
+      return '🔴 Este código de descuento ya fue utilizado' + (det[0] ? ` (en ${det[0]}${det[1] ? ', ' + _fmtAuditFechaHora(det[1]) : ''})` : '') + '.\n\nSe quitó el descuento del formulario: si guardás de nuevo, la reservación queda con el precio normal.\n\nNo se guardó la reservación. El formulario sigue abierto.';
+    }
+    case 'DESC_NO_EXISTE': return '🔴 Código de reservación no encontrado.' + nada;
+    case 'DESC_NO_ELEGIBLE': return '🔴 Esta reservación no es válida para descuento.' + nada;
+    case 'DESC_PRECIO': return `🔴 El precio no es válido para aplicar el descuento (debe ser de al menos $${DESCUENTO_MONTO.toFixed(2)}).` + nada;
+    case 'DESC_DESTINO_EXISTE': return '⚠️ Chocó el código de la reservación nueva con otro existente. Apretá Guardar otra vez.' + nada;
+    case 'DESC_MISMO_CODIGO': case 'DESC_FORMATO': return '🔴 Código de descuento inválido.' + nada;
+    case 'SIN_TABLA': return '⚠️ El sistema de descuentos todavía no está activado en la nube (falta correr DESCUENTOS-SUPABASE.sql). Avisale a Pedro.' + nada;
+    default: return '⚠️ No se pudo guardar: sin conexión o error de la nube. Probá de nuevo.' + nada;
+  }
+}
+// Aviso del modal Ver: la reservación RECIBIÓ un descuento y/o su código YA SE USÓ en otra.
+function _descAvisoVerHTML(r) {
+  if (!r) return '';
+  const partes = [];
+  const d = _descuentoDeReserva(r.codigo);
+  if (d) {
+    const base = parseFloat(d.precio_base);
+    partes.push(`<strong>🎟️ DESCUENTO APLICADO: −$${_fmtMontoDesc(d)}</strong> con el código <a href="#" onclick="event.preventDefault();verRes('${escHtml(d.codigo_origen)}')" style="color:inherit;font-weight:800;">${escHtml(d.codigo_origen)}</a> · ${escHtml(DESCUENTO_TIPOS[d.tipo] || d.tipo || '')}`
+      + (isNaN(base) ? '' : ` · precio normal $${base.toFixed(2)}`)
+      + `<br><span style="opacity:.85;">Aplicado por ${escHtml(d.usado_por || '—')} (${escHtml(_fmtAuditFechaHora(d.usado_en))}). El costo de esta reservación YA incluye el descuento: no lo restés de nuevo al editar.</span>`);
+  }
+  const u = _descUsoDeOrigen(r.codigo);
+  if (u) {
+    partes.push(`<strong>🎟️ Su código de descuento ya fue utilizado</strong> en <a href="#" onclick="event.preventDefault();verRes('${escHtml(u.codigo_destino)}')" style="color:inherit;font-weight:800;">${escHtml(u.codigo_destino)}</a> (${escHtml(_fmtAuditFechaHora(u.usado_en))}).`);
+  }
+  return partes.join('<br>');
+}
+
 const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', reactivada:'♻️ Reactivada', cambio_fecha:'📅 Cambio de fecha', cambio_precio:'💲 Cambio de precio', completada:'🏁 Completada',
   // AUDITORIA v96 (2026-07-06): tipos nuevos — registro completo de quién cambió qué.
   cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', cobrada:'💰 Cobro registrado',
@@ -3593,7 +3965,9 @@ const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', react
   ajuste_anulado:'🚫 Ajuste invalidado', ajuste_reactivado:'↩️ Ajuste reactivado', ajuste_movido:'📅 Ajustes movidos con el servicio',
   // v120 (2026-08-22): edicion A MANO de un ajuste desde OTROS INGRESOS (importe o metodo).
   // Cambiar el metodo MUEVE el dinero de bolsa (EFECTIVO <-> BANCO) y hasta v119 no dejaba NINGUN rastro.
-  ajuste_editado:'✏️ Ajuste editado a mano' };
+  ajuste_editado:'✏️ Ajuste editado a mano',
+  // v127 (2026-09-22): códigos de descuento. Se registra en las DOS reservaciones (origen y beneficiada).
+  descuento_aplicado:'🎟️ APLICACIÓN DE CÓDIGO DE DESCUENTO', descuento_codigo_usado:'🎟️ Su código se usó como descuento' };
 // Recorta valores largos (direcciones/obs) para que la bitácora no crezca sin control.
 function _auditTrunc(s) { s = String(s == null ? '' : s).trim(); return s ? (s.length > 45 ? s.slice(0, 45) + '…' : s) : '—'; }
 function _fmtAuditFechaHora(iso) {
@@ -4209,7 +4583,8 @@ function descargarBackupCompleto() {
     reservas: reservas || [],
     agGrid: agGrid || {},
     pdData: pdData || {},
-    comentarios: (typeof comentarios !== 'undefined' ? comentarios : {})
+    comentarios: (typeof comentarios !== 'undefined' ? comentarios : {}),
+    descuentos: (typeof descuentosData !== 'undefined' ? descuentosData : [])   // v127: usos de códigos
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -4279,10 +4654,16 @@ async function limpiarDuplicados() {
   const reapuntar = {};
   const codigosABorrar = [];
   const borradasParaBackup = [];
+  // v127 (REGLA 8): una reservación que participa en un código de descuento (como origen o
+  // como beneficiada) NO se borra: su código está registrado en la tabla descuentos_codigo y
+  // borrarla dejaría el uso apuntando a una reservación inexistente.
+  const _enDescuento = c => (descuentosData || []).some(d => d && (d.codigo_origen === c || d.codigo_destino === c));
+  let _protegidasDesc = 0;
   duplicados.forEach(g => {
     let sobreviviente = g.find(r => /^MUD/i.test(r.codigo||''));
     if (!sobreviviente) sobreviviente = g[0];
     g.forEach(r => {
+      if (r.codigo !== sobreviviente.codigo && _enDescuento(r.codigo)) { _protegidasDesc++; return; }
       if (r.codigo !== sobreviviente.codigo) {
         reapuntar[r.codigo] = sobreviviente.codigo;
         codigosABorrar.push(r.codigo);
@@ -4380,7 +4761,7 @@ async function limpiarDuplicados() {
     }
   }
   _limpiezaEnCurso = false;
-  alert(`✅ Limpieza completada.\n\n• ${codigosABorrar.length} duplicados borrados localmente\n• ${ok} borrados de la nube${err>0?'\n• '+err+' fallaron — tocá de nuevo para reintentar':''}\n\nReservaciones restantes: ${reservas.length}`);
+  alert(`✅ Limpieza completada.\n\n• ${codigosABorrar.length} duplicados borrados localmente\n• ${ok} borrados de la nube${err>0?'\n• '+err+' fallaron — tocá de nuevo para reintentar':''}${_protegidasDesc>0?'\n• '+_protegidasDesc+' NO se borraron porque tienen un código de descuento registrado':''}\n\nReservaciones restantes: ${reservas.length}`);
   renderAll();
   try { renderAgenda(); } catch(e) {}
   try { renderPD(); } catch(e) {}
@@ -5043,36 +5424,9 @@ function filtrarRes() {
   renderTable('tb-res', f, true);
 }
 
-// Buscador rápido por código (sistema de descuentos). Tipea los 6 dígitos en el sidebar:
-//   - encuentra la reservación,
-//   - va a Reservaciones,
-//   - filtra por el teléfono del cliente para listar TODAS sus mudanzas,
-//   - abre el modal de la reservación encontrada.
-function buscarPorCodigoDescuento() {
-  const inp = document.getElementById('codigo-descuento');
-  if (!inp) return;
-  const raw = inp.value.trim();
-  const digitos = raw.replace(/\D/g,'');
-  if (digitos.length < 6) { alert('Ingresá los 6 dígitos del código (formato 000-000).'); return; }
-  // Buscar reservación por código (con o sin guión, o que contenga esos dígitos)
-  const r = reservas.find(rv => {
-    const cod = String(rv.codigo||'');
-    if (cod === raw) return true;
-    if (cod.replace(/\D/g,'').includes(digitos)) return true;
-    return false;
-  });
-  if (!r) { alert(`No encontré ninguna reservación con código "${raw}".`); return; }
-  // Ir a Reservaciones y filtrar por teléfono del cliente
-  nav('reservaciones');
-  setTimeout(() => {
-    const qRes = document.getElementById('q-res');
-    if (qRes) { qRes.value = r.tel || ''; filtrarRes(); }
-    // Abrir el modal de la reservación encontrada
-    const idx = reservas.indexOf(r);
-    if (idx >= 0) verRes(idx);
-    inp.value = '';
-  }, 100);
-}
+// v127: el cuadro "🎟️ Código de descuento" del menú ya no solo busca: VALIDA el código
+// (buscarPorCodigoDescuento, en el bloque CÓDIGOS DE DESCUENTO junto a la bitácora). Abrir la
+// reservación encontrada sigue disponible con el botón "ver" (verReservaDescuento).
 
 // ==================== NUEVA RESERVACIÓN ====================
 function openNueva() {
@@ -5132,12 +5486,17 @@ function openNueva() {
   const match = document.getElementById('cliente-match'); if(match) match.style.display = 'none';
   // v110: cada formulario nuevo vuelve a avisar (una vez) si el cliente cancela seguido.
   try { _avisoCanceladorVisto.clear(); } catch(e) {}
+  // v127: cada formulario nuevo arranca SIN descuento (nunca se hereda de un formulario anterior).
+  _descuentoPendiente = null;
+  _pintarDescuentoForm();
 
   updateHoraLabels();
   updateSrvTabs();
 }
 function closeNueva() {
   document.getElementById('mo-nueva').classList.remove('open');
+  // v127: cerrar sin guardar descarta el descuento puesto (el código nunca se consumió).
+  if (_descuentoPendiente) { _descuentoPendiente = null; _pintarEstadoDescuento(_descUltimo); }
   resetTipoCliente();
   _horaExtraCount = 0;
   const ce = document.getElementById('f-camion-especifico');
@@ -5420,6 +5779,9 @@ function fmtCosto(input) {
 }
 
 async function guardar() {
+  // v127: con descuento, el guardado viaja a la nube (con espera); un segundo clic mientras
+  // tanto NO debe intentar consumir el código otra vez.
+  if (_descGuardando) return;
   const nombre = document.getElementById('f-nombre').value.trim();
   const tel = _recolectarTelefonos('f-tel','f-tels-extra');
   const fecha = document.getElementById('f-fecha').value;
@@ -5457,11 +5819,31 @@ async function guardar() {
     costo = parseFloat(costo).toFixed(2);
   }
 
+  // v127: CÓDIGO DE DESCUENTO. El vendedor escribe el precio NORMAL; aquí se resta UNA vez.
+  let _desc = null;
+  if (_descuentoPendiente) {
+    const base = parseFloat(costo);
+    if (isNaN(base) || base < DESCUENTO_MONTO) {
+      alert(`⚠️ Para aplicar el descuento de $${DESCUENTO_MONTO.toFixed(2)} escribí el precio normal del servicio (al menos $${DESCUENTO_MONTO.toFixed(2)}).`);
+      return;
+    }
+    if (!sb || !supabaseOK) {
+      alert('⚠️ Sin conexión a la nube.\n\nEl descuento solo se puede aplicar con internet (así el código no se usa dos veces).\n\nEsperá a tener conexión, o tocá "Quitar" en el descuento para guardar sin él.');
+      return;
+    }
+    _desc = { origen: _descuentoPendiente.origen, tipo: _descuentoPendiente.tipo, base: base.toFixed(2) };
+    costo = (base - DESCUENTO_MONTO).toFixed(2);
+    _descGuardando = true;   // bloquea clics repetidos desde YA (antes del await del código)
+  }
+
   const horaPrincipal = horasSeleccionadas[0];
   const horasExtra = horasSeleccionadas.slice(1);
 
+  let _codNuevo;
+  try { _codNuevo = await _genCodUnicoNube(); }
+  catch(e) { _descGuardando = false; throw e; }
   const r = {
-    codigo: await _genCodUnicoNube(),
+    codigo: _codNuevo,
     nombre, apellido: document.getElementById('f-apellido').value.trim(),
     tel, email: document.getElementById('f-email').value.trim(),
     fecha, hora: horaPrincipal,
@@ -5496,9 +5878,51 @@ async function guardar() {
     // reservación". En el próximo full sync lo reemplaza el created_at oficial de Supabase.
     _creadoEn: new Date().toISOString()
   };
-  reservas.unshift(r);
-  saveSingle(r);
+  if (_desc) {
+    // v127: TODO O NADA en la nube (mt_aplicar_descuento): la reservación nueva y el uso del
+    // código se guardan juntos o no se guarda ninguno. Si falla, el formulario queda abierto y
+    // el código sigue disponible. Solo después del OK se agrega a la lista local.
+    let res;
+    const _btnG = document.getElementById('btn-guardar-nueva');
+    if (_btnG) { _btnG.disabled = true; _btnG.textContent = '⏳ Guardando…'; }
+    try { res = await _aplicarDescuentoEnNube(r, _desc); }
+    finally {
+      _descGuardando = false;
+      if (_btnG) { _btnG.disabled = false; _btnG.textContent = '💾 Guardar reservación'; }
+    }
+    if (!res || !res.ok) {
+      alert(_mensajeErrorDescuento(res || {}));
+      if (res && res.codigo === 'DESC_YA_USADO') {
+        // Otro usuario lo usó primero: quitar el descuento del formulario y refrescar el caché.
+        _descuentoPendiente = null; _pintarDescuentoForm();
+        _descUltimo = { estado: 'usado', codigo: _desc.origen, uso: null };
+        _pintarEstadoDescuento(_descUltimo);
+        loadDescuentosFromSupabase().then(d => { if (d) { descuentosData = d; _descGuardarCache(); } });
+      }
+      return;
+    }
+    if (res.reserva_id) r._supabase_id = res.reserva_id;
+    if (res.created_at) r._creadoEn = res.created_at;
+    // El Realtime de reservaciones pudo traerla ya de la nube durante la espera: no duplicar.
+    const _yaIdx = reservas.findIndex(x => x && x.codigo === r.codigo);
+    if (_yaIdx >= 0) reservas[_yaIdx] = r; else reservas.unshift(r);
+    safeSetLS('mt2_reservas', JSON.stringify(reservas));
+    _descAgregarCache(res.descuento || { codigo_origen: _desc.origen, codigo_destino: r.codigo, monto: DESCUENTO_MONTO, tipo: _desc.tipo, precio_base: _desc.base, estado: 'aplicado', usado_por: _quienSoy(), usado_en: new Date().toISOString() });
+  } else {
+    reservas.unshift(r);
+    saveSingle(r);
+  }
   _logAudit(r.codigo, 'creada', `${fmtFecha(r.fecha)} ${r.hora} · $${r.costo || '0.00'}`);
+  if (_desc) {
+    const _tipoTxt = DESCUENTO_TIPOS[_desc.tipo] || _desc.tipo;
+    _logAudit(r.codigo, 'descuento_aplicado', `Código ${_desc.origen} → ${r.codigo} · −$${DESCUENTO_MONTO.toFixed(2)} · ${_tipoTxt} · precio $${_desc.base} → $${r.costo}`);
+    _logAudit(_desc.origen, 'descuento_codigo_usado', `Usado en ${r.codigo} · −$${DESCUENTO_MONTO.toFixed(2)} · ${_tipoTxt}`);
+    try { flushSyncToSupabase('mt_audit', auditData); } catch(e) {}
+    _descuentoPendiente = null;
+    _descUltimo = { estado: 'aplicado', destino: r.codigo };
+    _pintarEstadoDescuento(_descUltimo);
+    const _inpD = document.getElementById('codigo-descuento'); if (_inpD) _inpD.value = '';
+  }
   registrarClienteEnSupabase(r).catch(e => console.warn('Error registrando cliente:', e));
   closeNueva();
   renderAll();
@@ -5580,7 +6004,7 @@ function verRes(idxOCodigo) {
   const unidadWA = r.unidad === 'grande' ? `Camión Grande (furgón de 7 metros / 10 toneladas${r.rampa==='con rampa hidráulica'?', con rampa hidráulica':''})` :
                    r.unidad === 'mediano' ? 'Camión Mediano (furgón de 5 metros / 5 toneladas)' : 'Camión Pequeño (furgón de 3 metros / 2 toneladas)';
   // v104: al cliente se le manda el PRECIO VIGENTE (pactado ± ajustes de cobro), nunca el viejo.
-  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal} hombres totalmente capacitados* a su servicio por un costo de *$${_costoActual(r).toFixed(2)}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.\n\n`;
+  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal} hombres totalmente capacitados* a su servicio por un costo de *$${_costoActual(r).toFixed(2)}* IVA incluido${_notaDescuento(r.codigo) ? ' (' + _notaDescuento(r.codigo) + ')' : ''}, costo por viaje por todo lo que quepa en la unidad.\n\n`;
   msg += `📦 *Carga:* ${r.carga}\n🏠 *Descarga:* ${r.descarga}\n`;
   if (r.servicios.includes('embalaje')) msg += `\n📦 *Servicio de embalaje de muebles incluido.*`;
   if (r.servicios.includes('empaque')) {
@@ -5609,6 +6033,9 @@ function _pintarAvisosVer(r) {
   const canc = _esCancelada(r);
   const banner = document.getElementById('ver-aviso-cancelada');
   if (banner) banner.style.display = canc ? 'block' : 'none';
+  // v127: aviso del código de descuento (solo lectura).
+  const bDesc = document.getElementById('ver-aviso-descuento');
+  if (bDesc) { const h = _descAvisoVerHTML(r); bDesc.innerHTML = h; bDesc.style.display = h ? 'block' : 'none'; }
   // "Ajustar cobro" no aplica a una cancelada: se esconde (el guard igual la bloquea).
   const btnAj = document.getElementById('tb-ajuste');
   if (btnAj) btnAj.style.display = canc ? 'none' : '';
@@ -6118,7 +6545,7 @@ function generarMensajeWhatsApp(r) {
                    r.unidad === 'mediano' ? 'Camión Mediano (furgón de 5 metros / 5 toneladas)' : 'Camión Pequeño (furgón de 3 metros / 2 toneladas)';
   // v104: PRECIO VIGENTE (pactado ± ajustes de cobro).
   const costoFmt = _costoActual(r).toFixed(2);
-  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal||5} hombres totalmente capacitados* a su servicio por un costo de *$${costoFmt}* IVA incluido, costo por viaje por todo lo que quepa en la unidad.\n\n`;
+  let msg = `Buen día, su mudanza queda totalmente programada para el día *${fmtFecha(r.fecha)}* en el horario *${r.hora}*, en nuestra unidad *${unidadWA}*, con *${r.personal||5} hombres totalmente capacitados* a su servicio por un costo de *$${costoFmt}* IVA incluido${_notaDescuento(r.codigo) ? ' (' + _notaDescuento(r.codigo) + ')' : ''}, costo por viaje por todo lo que quepa en la unidad.\n\n`;
   msg += `📦 *Carga:* ${r.carga}\n🏠 *Descarga:* ${r.descarga}\n`;
   if (r.servicios && r.servicios.includes('embalaje')) msg += `\n📦 *Servicio de embalaje de muebles incluido.*`;
   if (r.servicios && r.servicios.includes('empaque')) {
@@ -6200,6 +6627,8 @@ function copiarWA() {
 // siguiente vía recalcCerramos, y los cobros pendientes seguían apareciendo en notificaciones.
 function _limpiarPDDataYCobrosPorCancelacion(r) {
   if (!r) return;
+  // v127: política del código de descuento al cancelar (hoy: el código usado SIGUE usado).
+  _politicaDescuentoAlCancelar(r);
   // 1) Desasignar slots del día de la reserva
   const pdDay = pdData[r.fecha];
   if (pdDay?.columnas) {
@@ -6438,7 +6867,9 @@ function duplicarReserva() {
       set('f-nombre', orig.nombre);
       set('f-apellido', orig.apellido);
       set('f-email', orig.email);
-      set('f-costo', orig.costo);
+      // v127: si el original tuvo descuento, la copia arranca con el precio NORMAL (el descuento
+      // era de ESA reservación; la copia no lo hereda — si corresponde, se aplica otro código).
+      set('f-costo', _precioSinDescuento(orig));
       set('f-personal', orig.personal || '5');
       set('f-carga', orig.carga);
       set('f-descarga', orig.descarga);
@@ -6503,9 +6934,10 @@ function duplicarReserva() {
         set('m-percheros', orig.empaque.percheros); set('m-obs-emp', orig.empaque.obs);
       }
       // Mensaje guía (v110: si el original está cancelado, este ES el flujo de reagendar)
-      alert(_esCancelada(orig)
+      alert((_esCancelada(orig)
         ? '📋 Reagendando un servicio CANCELADO.\n\nEl formulario quedó precargado con los datos del cliente. Cambiá la fecha (y lo que necesites) y guardá: se crea una reservación NUEVA con código propio.\n\nLa cancelada original queda intacta en el historial.'
-        : '📋 Formulario precargado con los datos del servicio. Modificá lo que necesites (ej. la fecha) y guardá — se creará una reservación NUEVA sin tocar la original.');
+        : '📋 Formulario precargado con los datos del servicio. Modificá lo que necesites (ej. la fecha) y guardá — se creará una reservación NUEVA sin tocar la original.')
+        + (_descuentoDeReserva(orig.codigo) ? `\n\n🎟️ El original tenía un descuento de $${_fmtMontoDesc(_descuentoDeReserva(orig.codigo))}: la copia NO lo hereda y quedó con el precio normal ($${_precioSinDescuento(orig)}).` : ''));
       // v110: aviso si el cliente acumula más de 2 canceladas en un mismo mes.
       _avisarCanceladorFrecuente(orig.tel);
     } catch(e) { console.warn('duplicarReserva error:', e); }
