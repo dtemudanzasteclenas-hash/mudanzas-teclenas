@@ -199,6 +199,13 @@ tr:hover td{background:#f8fafd;}
 .user-name{font-size:12px;color:rgba(255,255,255,.85);font-weight:600;}
 .logout-btn{background:none;border:1px solid rgba(255,255,255,.3);color:rgba(255,255,255,.7);font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:'Barlow',sans-serif;transition:all .15s;}
 .logout-btn:hover{background:rgba(255,255,255,.15);color:#fff;}
+/* v130: Salir / 🔑 PIN / 🔑 PIN de otro en UNA fila compacta (antes se apilaban y se salían de la barra) */
+.ub-btns{display:flex;flex-wrap:nowrap;gap:4px;margin-top:2px;}
+.ub-btns .logout-btn{white-space:nowrap;padding:2px 6px;line-height:1.3;}
+@media (max-width: 420px) {
+  #user-badge{padding:4px 0!important;gap:4px!important;}
+  .ub-btns .logout-btn{padding:2px 3px!important;}
+}
 
 /* VENDEDOR TAG */
 .vendedor-tag{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;color:var(--azul2);background:#e8eef9;padding:1px 7px;border-radius:10px;}
@@ -401,6 +408,9 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   .user-badge{margin-left:auto!important;padding:4px 8px!important;gap:5px!important;}
   .user-avatar{width:28px!important;height:28px!important;font-size:12px!important;}
   .user-name{display:none;} /* ocultar nombre en móvil, solo avatar */
+  .ub-btns{margin-top:0;gap:3px;}
+  .ub-btns .logout-btn{padding:2px 4px;font-size:9px;}
+  .ub-largo{display:none;} /* "🔑 PIN de otro" → "🔑 otro" (mismo botón, mismo título) */
   #sync-status{font-size:9px!important;max-width:95px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   #conn-dot{display:none!important;}
   #notif-btn{width:38px;height:38px;font-size:20px;}
@@ -586,9 +596,11 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <div class="user-avatar" id="user-avatar"></div>
     <div style="display:flex;flex-direction:column;">
       <span class="user-name" id="user-name-display"></span>
+      <div class="ub-btns">
       <button class="logout-btn" onclick="cerrarSesion()">Salir</button>
       <button class="logout-btn" onclick="cambiarMiPin()" title="Cambiar mi PIN">🔑 PIN</button>
-      <button class="logout-btn" id="btn-restablecer-pin" onclick="restablecerPinDe()" title="Restablecer el PIN de alguien que lo olvidó" style="display:none;">🔑 PIN de otro</button>
+      <button class="logout-btn" id="btn-restablecer-pin" onclick="restablecerPinDe()" title="Restablecer el PIN de alguien que lo olvidó" style="display:none;">🔑 <span class="ub-largo">PIN de </span>otro</button>
+      </div>
     </div>
   </div>
 </header>
@@ -2465,15 +2477,37 @@ async function checkSupabase() {
   }
 }
 
+// ==================== SUPABASE: LECTURA POR PÁGINAS (v130) ====================
+// Supabase devuelve como MÁXIMO 1,000 filas por consulta aunque se pida .limit(5000): con 1,543
+// reservaciones la app veía solo 1,000 y la agenda borraba como "huérfanas" las celdas de las
+// que faltaban. mkQuery() debe devolver una consulta NUEVA ya ordenada (orden estable: se
+// desempata por id). Se piden páginas hasta recibir una incompleta. Si una fila se inserta
+// mientras se pagina puede repetirse en el borde de dos páginas → se quita el repetido por id.
+const _SB_PAGINA = 1000;
+async function _sbTodasLasFilas(mkQuery) {
+  const todas = [], vistos = new Set();
+  for (let desde = 0; desde < 500000; desde += _SB_PAGINA) {
+    const { data, error } = await mkQuery().range(desde, desde + _SB_PAGINA - 1);
+    if (error) return { data: null, error };
+    const filas = data || [];
+    filas.forEach(f => {
+      if (f && f.id != null) { if (vistos.has(f.id)) return; vistos.add(f.id); }
+      todas.push(f);
+    });
+    if (filas.length < _SB_PAGINA) break;
+  }
+  return { data: todas, error: null };
+}
+
 // ==================== SUPABASE: RESERVACIONES ====================
 async function loadReservasFromSupabase() {
   if (!sb || !supabaseOK) { console.warn('⚠️ loadReservasFromSupabase: sb no inicializado o offline'); return null; }
   try {
-    const { data, error } = await sb
+    const { data, error } = await _sbTodasLasFilas(() => sb
       .from('reservaciones')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(5000);
+      .order('id', { ascending: false }));
     if (error) throw error;
     console.log('📡 loadReservasFromSupabase: ' + (data?.length || 0) + ' filas desde Supabase');
     if (typeof _lastSupabasePing !== 'undefined') _lastSupabasePing = Date.now();
@@ -2592,10 +2626,11 @@ async function saveAllReservasToSupabase() {
 async function loadComentariosFromSupabase() {
   if (!sb || !supabaseOK) return null;
   try {
-    const { data, error } = await sb
+    const { data, error } = await _sbTodasLasFilas(() => sb
       .from('comentarios')
       .select('*')
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }));
     if (error) throw error;
     const result = {};
     (data || []).forEach(c => {
@@ -2958,7 +2993,7 @@ async function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-25-v129';
+const APP_VERSION = '2026-09-25-v130';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
