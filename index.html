@@ -530,6 +530,19 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
 <button id="modo-tv-exit" onclick="toggleTVMode()">✕ Salir Modo TV</button>
 <div id="tv-clock"></div>
 
+<!-- v129: ACCESO DE LA COMPUTADORA (cuenta única del sistema). Se usa UNA vez por computadora;
+     después la sesión queda guardada y el equipo solo ve la pantalla de PIN de siempre. -->
+<div id="acceso-correo" style="display:none;position:fixed;inset:0;background:linear-gradient(135deg,#1a3a6b 0%,#1e4fa0 50%,#2563eb 100%);z-index:10000;align-items:center;justify-content:center;">
+  <div class="login-box">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:28px;color:var(--azul);text-transform:uppercase;letter-spacing:.06em;line-height:1.1;">MUDANZAS<br>TECLEÑAS</div>
+    <p style="margin-bottom:14px;">Activar esta computadora<br><span style="font-size:11px;">(solo la primera vez · lo hace Pedro)</span></p>
+    <input type="email" id="acceso-email" placeholder="Correo del sistema" autocomplete="username" style="width:100%;padding:11px;border:1.5px solid var(--gris1);border-radius:9px;margin-bottom:8px;font-size:14px;box-sizing:border-box;">
+    <input type="password" id="acceso-pass" placeholder="Contraseña" autocomplete="current-password" onkeydown="if(event.key==='Enter')entrarConCorreo()" style="width:100%;padding:11px;border:1.5px solid var(--gris1);border-radius:9px;margin-bottom:8px;font-size:14px;box-sizing:border-box;">
+    <div class="login-error" id="acceso-error"></div>
+    <button class="login-btn" onclick="entrarConCorreo()">Activar</button>
+  </div>
+</div>
+
 <!-- LOGIN SCREEN -->
 <div id="login-screen">
   <div class="login-box">
@@ -574,6 +587,8 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
     <div style="display:flex;flex-direction:column;">
       <span class="user-name" id="user-name-display"></span>
       <button class="logout-btn" onclick="cerrarSesion()">Salir</button>
+      <button class="logout-btn" onclick="cambiarMiPin()" title="Cambiar mi PIN">🔑 PIN</button>
+      <button class="logout-btn" id="btn-restablecer-pin" onclick="restablecerPinDe()" title="Restablecer el PIN de alguien que lo olvidó" style="display:none;">🔑 PIN de otro</button>
     </div>
   </div>
 </header>
@@ -1639,7 +1654,7 @@ function _flushAppDataOnExit() {
         keepalive: true,
         headers: {
           'apikey': SUPABASE_KEY,
-          'Authorization': 'Bearer ' + SUPABASE_KEY,
+          'Authorization': 'Bearer ' + (_tokenCache || SUPABASE_KEY),   // v129: con la sesión del correo
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
         },
@@ -1676,7 +1691,7 @@ async function flushSyncToSupabase(key, data) {
 }
 
 async function loadFromSupabase(key) {
-  if (!sb) return null;
+  if (!sb || !_operadorListo) return null;   // v129
   try {
     // maybeSingle() retorna null sin error HTTP 406 cuando no hay filas (single() lanza 406)
     const { data, error } = await sb.from('app_data').select('data,updated_at').eq('id', key).maybeSingle();
@@ -2211,8 +2226,13 @@ function _fmtHaceSec(s) {
 // Esto permite distinguir "sin actividad del usuario" (verde, OK) de "sin conexión" (rojo, problema real).
 async function _supabaseHeartbeat() {
   if (!sb) return;
+  // v129: sin PIN aceptado no hay nube. Y si el servidor dejó de reconocer al operador (nuevo día,
+  // baja, salió en otra pestaña) se vuelve a pedir el PIN.
+  if (!_operadorListo) { supabaseOK = false; updateSyncIndicator(); return; }
   try {
-    const { error } = await sb.from('reservaciones').select('codigo', { count: 'exact', head: true });
+    const _op = await _operadorDelServidor();
+    if (_op !== 'RED' && !_op) { _bloquearPorPin(); return; }
+    const error = (_op === 'RED') ? new Error('sin respuesta') : null;
     if (!error) {
       _lastSupabasePing = Date.now();
       // v128 (S2): si la conexión VOLVIÓ (estaba caída), subir YA la cola de reservaciones pendientes.
@@ -2427,9 +2447,14 @@ async function hardReloadDatos() {
 // Estado de conexión
 async function checkSupabase() {
   if (!sb) return false;
+  // v129: la nube solo entrega datos con la cuenta del sistema + un PIN aceptado por el servidor.
+  // Antes de eso se trabaja "sin conexión" (copia local): así ninguna rutina de arranque confunde
+  // "no me dejan ver" con "la nube está vacía".
+  if (!_operadorListo) { supabaseOK = false; return false; }
   try {
-    const { data, error } = await sb.from('usuarios').select('nombre').limit(1);
-    if (error) throw error;
+    const op = await _operadorDelServidor();
+    if (op === 'RED') throw new Error('sin respuesta');
+    if (!op) { _bloquearPorPin(); return false; }
     supabaseOK = true;
     console.log('✅ Supabase conectado');
     return true;
@@ -2670,17 +2695,41 @@ async function registrarClienteEnSupabase(r) {
 }
 
 // ==================== USUARIOS Y LOGIN ====================
+// v129 (2026-09-25, decisión de Pedro): UN correo para entrar + PIN de 4 dígitos por persona.
+//   1) Cada computadora entra UNA vez con la cuenta única del sistema (Supabase Auth). La sesión
+//      queda guardada en esa computadora: el equipo no vuelve a ver esa pantalla.
+//   2) Cada persona pone su PIN (misma pantalla de siempre). El PIN lo VERIFICA EL SERVIDOR
+//      (mt_entrar_operador, bcrypt): ya no hay PINs en este código. Sin correo + PIN válido la base
+//      no entrega ni acepta datos (ACCESO-v129.sql). Cada mañana el servidor vuelve a pedir el PIN.
+// Aquí quedan solo los nombres y roles (listas, comisiones, vendedores): NUNCA los PIN.
 const USUARIOS = [
-  { nombre: 'Pedro', pin: '9713', rol: 'admin' },
-  { nombre: 'Fabio', pin: '0107', rol: 'vendedor' },
-  { nombre: 'Roberto', pin: '0109', rol: 'vendedor' },
-  { nombre: 'Luis', pin: '0102', rol: 'vendedor' }
+  { nombre: 'Pedro', rol: 'admin' },
+  { nombre: 'Fabio', rol: 'vendedor' },
+  { nombre: 'Roberto', rol: 'vendedor' },
+  { nombre: 'Luis', rol: 'vendedor' }
 ];
 let usuarioActual = null;
-try {
-  const _u = sessionStorage.getItem('mt_usuario');
-  if (_u) usuarioActual = JSON.parse(_u);
-} catch(e) { usuarioActual = null; }
+var _operadorListo = false;    // (var: se usa en funciones que están ARRIBA en el archivo) true solo después de que el SERVIDOR aceptó el PIN de esta sesión
+var _tokenCache = null;        // token de la sesión del correo (para el guardado al cerrar la pestaña)
+var _arranqueHecho = false;
+
+// Mensajes de la base → texto para el equipo.
+const _MSG_ACCESO = {
+  MT_PIN_INCORRECTO: '❌ PIN incorrecto',
+  MT_PIN_FORMATO: 'Ingresa los 4 dígitos',
+  MT_PIN_BLOQUEADO: '🔒 Demasiados intentos. Espera 15 minutos.',
+  MT_SIN_SESION: '⚠️ Esta computadora no tiene la cuenta del sistema. Avisale a Pedro.',
+  MT_PIN_DEBIL: 'Ese PIN es muy fácil (iguales o seguidos). Elegí otro.',
+  MT_PIN_REPETIDO: 'Ese PIN ya lo usa otra persona. Elegí otro.',
+  MT_SOLO_ADMIN: 'Solo el administrador puede hacer esto.',
+  MT_NO_EXISTE: 'Esa persona no existe.',
+  MT_SIN_OPERADOR: 'Tu sesión venció. Ingresá tu PIN otra vez.'
+};
+function _codigoAcceso(err) {
+  const m = String((err && (err.message || err)) || '');
+  const k = (m.match(/MT_[A-Z_]+/) || [])[0];
+  return k || (/fetch|network|Failed/i.test(m) ? 'RED' : 'OTRO');
+}
 
 // PIN input navigation — usando delegación de eventos (no depende de timing)
 let _pinSetup = false;
@@ -2701,103 +2750,215 @@ function setupPinInputs() {
     p.addEventListener('keydown', function(e) {
       if (e.key === 'Backspace') {
         if (this.value) {
-          // Si hay dígito, borrarlo (antes el handler no hacía nada aquí)
           this.value = '';
         } else if (i > 0) {
-          // Campo vacío: ir al anterior y borrarlo
           pins[i-1].value = '';
           pins[i-1].focus();
         }
       }
     });
-    // Seleccionar contenido al hacer focus (facilita re-escritura)
     p.addEventListener('focus', function() { this.select(); });
   });
 }
-// Intentar setup en múltiples momentos para máxima compatibilidad
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-  setupPinInputs();
-  if (usuarioActual) mostrarApp();
-}
-document.addEventListener('DOMContentLoaded', () => {
-  setupPinInputs();
-  if (usuarioActual) mostrarApp();
-});
-// Fallback final: si nada funcionó, intentar 200ms después
-setTimeout(() => {
-  setupPinInputs();
-  if (usuarioActual && !_pinSetup) mostrarApp();
-}, 200);
+document.addEventListener('DOMContentLoaded', () => { setupPinInputs(); _arranqueAcceso(); });
+if (document.readyState === 'complete' || document.readyState === 'interactive') { setupPinInputs(); setTimeout(_arranqueAcceso, 0); }
+setTimeout(() => { setupPinInputs(); _arranqueAcceso(); }, 300);
 
-let _loginAttempts = 0;
-let _loginLockedUntil = 0;
-function intentarLogin() {
-  const errEl = document.getElementById('login-error');
-  const now = Date.now();
-  if (now < _loginLockedUntil) {
-    const s = Math.ceil((_loginLockedUntil - now) / 1000);
-    errEl.textContent = `🔒 Demasiados intentos. Espera ${s}s`;
-    ['pin1','pin2','pin3','pin4'].forEach(id => { document.getElementById(id).value = ''; });
-    return;
+function _limpiarPin() {
+  ['pin1','pin2','pin3','pin4'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const p1 = document.getElementById('pin1'); if (p1) p1.focus();
+}
+function _mostrarPantallaPin(msg) {
+  const ac = document.getElementById('acceso-correo'); if (ac) ac.style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('user-badge').style.display = 'none';
+  document.getElementById('login-error').textContent = msg || '';
+  _limpiarPin();
+}
+function _mostrarAccesoCorreo(msg) {
+  document.getElementById('login-screen').style.display = 'none';
+  const ac = document.getElementById('acceso-correo'); if (ac) ac.style.display = 'flex';
+  const er = document.getElementById('acceso-error'); if (er) er.textContent = msg || '';
+  const em = document.getElementById('acceso-email'); if (em) em.focus();
+}
+
+// ¿Quién opera en esta sesión, según el SERVIDOR? {nombre, rol, debe_cambiar_pin} | null | 'RED'
+async function _operadorDelServidor() {
+  try {
+    const { data, error } = await sb.rpc('mt_operador_actual');
+    if (error) return 'RED';
+    return (Array.isArray(data) && data[0]) ? data[0] : null;
+  } catch (e) { return 'RED'; }
+}
+
+// Arranque: ¿esta computadora tiene la cuenta del sistema? ¿el servidor ya reconoce a alguien?
+async function _arranqueAcceso() {
+  if (_arranqueHecho) return;
+  if (!sb) { if (typeof initSupabaseSDK === 'function') initSupabaseSDK(); if (!sb) { setTimeout(_arranqueAcceso, 300); return; } }
+  _arranqueHecho = true;
+  try {
+    sb.auth.onAuthStateChange((_ev, s) => { _tokenCache = s ? s.access_token : null; });
+  } catch (e) {}
+  let session = null;
+  try { session = (await sb.auth.getSession()).data.session; } catch (e) {}
+  _tokenCache = session ? session.access_token : null;
+  if (!session) { _mostrarAccesoCorreo(); return; }
+  const op = await _operadorDelServidor();
+  if (op && op !== 'RED') { await _activarOperador(op); return; }
+  if (op === 'RED') {
+    // Sin internet: si en ESTA pestaña ya había alguien identificado, se trabaja con la copia local
+    // (como siempre); la nube se retoma cuando vuelva la conexión y el servidor lo confirme.
+    let u = null; try { u = JSON.parse(sessionStorage.getItem('mt_usuario') || 'null'); } catch (e) {}
+    if (u && u.nombre) { usuarioActual = u; mostrarApp(); return; }
   }
+  _mostrarPantallaPin();
+}
+
+// Pantalla del correo (una vez por computadora; la hace Pedro).
+let _accesoEnCurso = false;
+async function entrarConCorreo() {
+  if (_accesoEnCurso) return;
+  const email = (document.getElementById('acceso-email').value || '').trim();
+  const pass = document.getElementById('acceso-pass').value || '';
+  const er = document.getElementById('acceso-error');
+  if (!email || !pass) { er.textContent = 'Escribí el correo y la contraseña.'; return; }
+  _accesoEnCurso = true; er.textContent = '⏳ Entrando…';
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+    if (error || !data || !data.session) { er.textContent = '❌ Correo o contraseña incorrectos.'; return; }
+    _tokenCache = data.session.access_token;
+    document.getElementById('acceso-pass').value = '';
+    er.textContent = '';
+    _mostrarPantallaPin();
+  } catch (e) { er.textContent = '⚠️ Sin conexión. Probá de nuevo.'; }
+  finally { _accesoEnCurso = false; }
+}
+
+// Deja la app lista con el operador que el SERVIDOR confirmó.
+async function _activarOperador(op) {
+  usuarioActual = { nombre: op.nombre, rol: op.rol };
+  _operadorListo = true;
+  try { sessionStorage.setItem('mt_usuario', JSON.stringify(usuarioActual)); } catch(e) {}
+  if (op.debe_cambiar_pin || op.cambiar) await _pedirPinNuevo(true);
+  // Recién ahora hay permiso para leer/escribir la nube: arrancar (o re-arrancar) la carga de datos.
+  if (typeof _initDataRan !== 'undefined') _initDataRan = false;
+  try { if (typeof initData === 'function') initData(); } catch (e) { console.warn('initData:', e); }
+  mostrarApp();
+}
+
+let _loginEnCurso = false;
+async function intentarLogin() {
+  if (_loginEnCurso) return;   // el 4º dígito dispara dos veces (oninput + listener): una sola consulta
+  const errEl = document.getElementById('login-error');
   const pin = ['pin1','pin2','pin3','pin4'].map(id => document.getElementById(id).value).join('');
   if (pin.length < 4) { errEl.textContent = 'Ingresa los 4 dígitos'; return; }
-  const user = USUARIOS.find(u => u.pin === pin);
-  if (!user) {
-    _loginAttempts++;
-    if (_loginAttempts >= 5) {
-      _loginLockedUntil = now + 60000; // 1 min cooldown
-      _loginAttempts = 0;
-      errEl.textContent = '🔒 Bloqueado 60s por intentos fallidos';
-    } else {
-      errEl.textContent = `❌ PIN incorrecto (${_loginAttempts}/5)`;
+  if (!sb) { errEl.textContent = '⚠️ Sin conexión. Probá de nuevo.'; return; }
+  _loginEnCurso = true; errEl.textContent = '⏳';
+  try {
+    const { data, error } = await sb.rpc('mt_entrar_operador', { p_pin: pin });
+    if (error) {
+      const k = _codigoAcceso(error);
+      if (k === 'MT_SIN_SESION') { _mostrarAccesoCorreo('Esta computadora necesita entrar con la cuenta del sistema.'); return; }
+      errEl.textContent = _MSG_ACCESO[k] || (k === 'RED' ? '⚠️ Sin conexión. Probá de nuevo.' : '⚠️ No se pudo verificar. Probá de nuevo.');
+      _limpiarPin(); return;
     }
-    ['pin1','pin2','pin3','pin4'].forEach(id => { document.getElementById(id).value = ''; });
-    document.getElementById('pin1').focus();
-    return;
+    if (data && data.error) { errEl.textContent = _MSG_ACCESO[data.error] || '❌ PIN incorrecto'; _limpiarPin(); return; }
+    errEl.textContent = '';
+    await _activarOperador(data);
+  } catch (e) {
+    errEl.textContent = '⚠️ Sin conexión. Probá de nuevo.'; _limpiarPin();
+  } finally { _loginEnCurso = false; }
+}
+
+// Cambiar MI PIN. obligatorio=true la primera vez que el servidor lo pide (no se puede saltar).
+async function _pedirPinNuevo(obligatorio) {
+  for (;;) {
+    const a = prompt((obligatorio ? '🔑 Por seguridad, elegí tu PIN NUEVO de 4 dígitos (el anterior quedó a la vista y ya no sirve).\n\n' : '🔑 Tu PIN nuevo de 4 dígitos:\n\n') + 'No uses 4 números iguales ni seguidos (1111, 1234).');
+    if (a === null) { if (obligatorio) { alert('Tenés que elegir un PIN nuevo para seguir.'); continue; } return false; }
+    if (!/^\d{4}$/.test(a.trim())) { alert('Tienen que ser 4 números.'); continue; }
+    const b = prompt('Repetí el PIN nuevo:');
+    if (b === null) { if (obligatorio) continue; return false; }
+    if (a.trim() !== b.trim()) { alert('No coinciden. Probá de nuevo.'); continue; }
+    try {
+      const { error } = await sb.rpc('mt_cambiar_pin', { p_nuevo: a.trim() });
+      if (error) { alert(_MSG_ACCESO[_codigoAcceso(error)] || '⚠️ No se pudo guardar. Probá de nuevo.'); continue; }
+      alert('✅ PIN cambiado. Desde ahora entrás con el nuevo.');
+      return true;
+    } catch (e) { alert('⚠️ Sin conexión. Probá de nuevo.'); if (!obligatorio) return false; }
   }
-  _loginAttempts = 0;
-  _loginLockedUntil = 0;
-  usuarioActual = { nombre: user.nombre, rol: user.rol };
-  try { sessionStorage.setItem('mt_usuario', JSON.stringify(usuarioActual)); } catch(e) {}
-  mostrarApp();
+}
+function cambiarMiPin() { if (!_operadorListo) { alert('Necesitás conexión para cambiar el PIN.'); return; } _pedirPinNuevo(false); }
+
+// Solo admin: restablecer el PIN de otra persona (por si lo olvidó). Esa persona lo cambia al entrar.
+async function restablecerPinDe() {
+  if (!_esAdmin()) { alert(_MSG_ACCESO.MT_SOLO_ADMIN); return; }
+  const nombre = prompt('¿A quién le restablecés el PIN? (' + USUARIOS.filter(u => u.rol !== 'admin').map(u => u.nombre).join(', ') + ')');
+  if (!nombre) return;
+  const canon = (USUARIOS.find(u => u.nombre.toLowerCase() === nombre.trim().toLowerCase()) || {}).nombre;
+  if (!canon) { alert(_MSG_ACCESO.MT_NO_EXISTE); return; }
+  const pin = prompt('PIN temporal de 4 dígitos para ' + canon + ' (se le pedirá cambiarlo al entrar):');
+  if (!pin) return;
+  const { error } = await sb.rpc('mt_restablecer_pin', { p_nombre: canon, p_nuevo: pin.trim() });
+  if (error) { alert(_MSG_ACCESO[_codigoAcceso(error)] || '⚠️ No se pudo.'); return; }
+  alert('✅ PIN temporal de ' + canon + ' guardado. Dáselo en persona.');
+}
+
+// PIN de ADMINISTRADOR para acciones delicadas (desbloquear día, cambiar costo original).
+// Lo verifica el servidor; sin conexión no se puede autorizar.
+async function _pinAdminValido(pin) {
+  if (pin === null || pin === undefined) return false;
+  if (!sb || !_operadorListo) { alert('⚠️ Se necesita conexión para verificar el PIN de administrador.'); return false; }
+  try {
+    const { data, error } = await sb.rpc('mt_verificar_pin_admin', { p_pin: String(pin).trim() });
+    if (error) { alert(_MSG_ACCESO[_codigoAcceso(error)] || '⚠️ No se pudo verificar el PIN.'); return false; }
+    return data === true;
+  } catch (e) { alert('⚠️ Sin conexión.'); return false; }
+}
+
+// Si el servidor deja de reconocer al operador (venció el día, lo dieron de baja o cambió de
+// usuario en otra pestaña), la app vuelve a pedir el PIN. No se pierde nada: lo local queda.
+function _bloquearPorPin(msg) {
+  _operadorListo = false;
+  supabaseOK = false;
+  usuarioActual = null;
+  try { sessionStorage.removeItem('mt_usuario'); } catch(e) {}
+  _mostrarPantallaPin(msg || _MSG_ACCESO.MT_SIN_OPERADOR);
 }
 
 function mostrarApp() {
   if (!usuarioActual || !usuarioActual.nombre) {
-    document.getElementById('login-screen').style.display = 'flex';
+    _mostrarPantallaPin();
     return;
   }
+  const ac = document.getElementById('acceso-correo'); if (ac) ac.style.display = 'none';
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('user-badge').style.display = 'flex';
   document.getElementById('user-avatar').textContent = usuarioActual.nombre.charAt(0);
   document.getElementById('user-name-display').textContent = usuarioActual.nombre;
+  const bRes = document.getElementById('btn-restablecer-pin'); if (bRes) bRes.style.display = _esAdmin() ? '' : 'none';
   // FORZAR sync desde la nube al hacer login (por si ya corrió initData antes pero datos están viejos)
   console.log('👤 Login — forzando sync fresco desde la nube');
   setTimeout(() => {
-    if (typeof forceSync === 'function') forceSync();
+    if (_operadorListo && typeof forceSync === 'function') forceSync();
   }, 300);
 }
 
-function cerrarSesion() {
+async function cerrarSesion() {
   if (!confirm('¿Cerrar sesión?')) return;
   // Limpiar Modo TV si está activo (evita interval leak de _tvClockInterval)
   if (document.body.classList.contains('tv-mode') && typeof toggleTVMode === 'function') {
     try { toggleTVMode(); } catch(e) {}
   }
-  sessionStorage.removeItem('mt_usuario');
-  usuarioActual = null;
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('user-badge').style.display = 'none';
-  ['pin1','pin2','pin3','pin4'].forEach(id => { document.getElementById(id).value = ''; });
-  document.getElementById('login-error').textContent = '';
-  document.getElementById('pin1').focus();
+  // v129: "Salir" = cambiar de usuario. La computadora sigue con la cuenta del sistema (el equipo no
+  // necesita el correo); el servidor olvida quién operaba y la próxima persona pone su PIN.
+  try { if (sb) await sb.rpc('mt_salir_operador'); } catch(e) {}
+  _bloquearPorPin('');
 }
 
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-22-v128';
+const APP_VERSION = '2026-09-25-v129';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -2970,7 +3131,7 @@ async function initData() {
     }, 500);
     // Indicador visual de conexión
     const badge = document.getElementById('user-badge');
-    if (badge) {
+    if (badge && !document.getElementById('conn-dot')) {   // v129: initData corre de nuevo tras cada PIN
       const dot = document.createElement('span');
       dot.id = 'conn-dot';
       dot.style.cssText = 'width:8px;height:8px;background:#4ade80;border-radius:50%;position:absolute;top:2px;right:2px;';
@@ -6435,7 +6596,7 @@ function addEditHoraExtra(valor) {
   cont.appendChild(div);
 }
 
-function guardarEdicion() {
+async function guardarEdicion() {   // v129: async — el PIN de admin lo verifica el servidor
   const r = _resolveVerR();
   if (!r) { alert('⚠️ No se pudo identificar la reservación. Cerrá el modal y volvé a abrirla.'); return; }
   // GUARD v110: una cancelada es histórico inmutable — no se edita NINGÚN dato (fecha, hora,
@@ -6529,7 +6690,7 @@ function guardarEdicion() {
   const _costoOrigCambia = (isNaN(_pOrigViejo) || isNaN(_pOrigNuevo)) ? (String(oldCosto||'') !== String(costo||'')) : _pOrigViejo.toFixed(2) !== _pOrigNuevo.toFixed(2);
   if (_costoOrigCambia && !_esAdmin()) {
     const pin = prompt('🔒 Cambiar el COSTO ORIGINAL (precio pactado con el cliente) requiere PIN de ADMINISTRADOR.\n\nSi solo querés cobrar un extra (cajas, plástico, servicio adicional) o aplicar un descuento, cancelá y usá el botón "💵 Ajustar cobro" de la reservación.\n\nPIN de administrador:');
-    const pinOk = pin !== null && USUARIOS.some(u => u.rol === 'admin' && u.pin === String(pin).trim());
+    const pinOk = pin !== null && await _pinAdminValido(pin);   // v129: verificado en el servidor
     if (!pinOk) {
       if (pin !== null) alert('❌ PIN incorrecto. El costo original se mantiene sin cambios; el resto de la edición sí se guarda.');
       costo = oldCosto; // conservar el original intacto
@@ -9725,7 +9886,7 @@ function updateArqueo(f, cuenta, val) {
   renderCuentas(f);
 }
 
-function cerrarDia() {
+async function cerrarDia() {   // v129: async — el PIN de admin lo verifica el servidor
   const f = getPDFecha();
   const day = getDayData(f);
   if (day.cuentas.diaCerrado) {
@@ -9733,7 +9894,7 @@ function cerrarDia() {
     // Cualquiera puede cerrar; solo el admin puede reabrir. Queda registrado quién y cuándo.
     const pinIngresado = prompt('🔒 Este día está CERRADO.\n\nPara desbloquearlo ingresá el PIN de ADMINISTRADOR:');
     if (pinIngresado === null) return;
-    const esAdminPin = USUARIOS.some(u => u.rol === 'admin' && u.pin === String(pinIngresado).trim());
+    const esAdminPin = await _pinAdminValido(pinIngresado);   // v129: verificado en el servidor
     if (!esAdminPin) { alert('❌ PIN incorrecto. Solo el administrador puede reabrir un día cerrado.'); return; }
     if (!confirm('¿Desbloquear este día para editar? Los datos podrían alterarse.')) return;
     day.cuentas.diaCerrado = false;
