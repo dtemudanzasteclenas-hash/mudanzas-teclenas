@@ -2298,7 +2298,7 @@ function renderAllSections() {
   try { renderAgenda(); } catch(e) { /* agenda puede no estar lista */ }
   try { renderPD(); } catch(e) { /* pizarra puede no estar lista */ }
   try { renderConciliacion(); } catch(e) {}
-  try { renderCli(); } catch(e) {}
+  try { _renderCliSiVisible(); } catch(e) {}
   try { if (typeof renderComisiones === 'function') renderComisiones(); } catch(e) {}
   try { if (typeof renderNotificaciones === 'function') renderNotificaciones(); } catch(e) {}
 }
@@ -2993,7 +2993,7 @@ async function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-25-v130';
+const APP_VERSION = '2026-09-25-v131';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3447,7 +3447,13 @@ function nav(id) {
 function renderAll() { 
   renderStats(); 
   renderTable('tb-dash', reservas.slice(0,10), false); 
-  renderTable('tb-res', reservas, true);
+  // v130: la tabla completa (1,500+ filas) solo se dibuja si Reservaciones está abierta, y respetando
+  // la búsqueda escrita; al entrar a la sección nav() llama a renderAll() y se dibuja igual que siempre.
+  const _secRes = document.getElementById('sec-reservaciones');
+  if (!_secRes || _secRes.classList.contains('active')) {
+    if (document.getElementById('q-res') && document.getElementById('q-est')) filtrarRes();
+    else renderTable('tb-res', reservas, true);
+  }
   if (typeof renderNotificaciones === 'function') renderNotificaciones();
 }
 
@@ -5740,6 +5746,14 @@ function renderCli(qNombre='', qTel='') {
       </div>
     </div>`;
   }).join('');
+}
+
+// v130: la lista de Clientes dibuja el historial COMPLETO (1,500+ reservaciones, ~0.5 s) y antes se
+// redibujaba en cada sincronización aunque nadie la estuviera viendo. Solo se dibuja si la sección
+// está abierta (conservando la búsqueda escrita); al entrar a Clientes, nav() la dibuja igual que siempre.
+function _renderCliSiVisible() {
+  const sec = document.getElementById('sec-clientes');
+  if (sec && sec.classList.contains('active')) filtrarCli();
 }
 
 function filtrarCli() {
@@ -13286,7 +13300,7 @@ save();
 agHoy();
 renderAll();
 renderAgenda();
-renderCli();
+_renderCliSiVisible();
 pdHoy();
 concHoy();
 renderNotificaciones();
