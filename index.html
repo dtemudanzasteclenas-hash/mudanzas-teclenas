@@ -2993,7 +2993,7 @@ async function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-09-25-v131';
+const APP_VERSION = '2026-10-09-v131b';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6394,7 +6394,7 @@ function verRes(idxOCodigo) {
     msg += `\n📫 *Servicio de empaque de artículos en cajas incluido.*`;
     if (r.empaque && parseInt(r.empaque.percheros) > 0) msg += `\n👔 *Se envían ${r.empaque.percheros} perchero(s) metálico(s) para transportar ropa.*`;
   }  msg += `\n\nEl pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.\n\n`;
-  msg += `Le facilito nuestra información bancaria:\n*CUENTA CORRIENTE BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Número de cuenta: 346-301-000004045\n- Cuenta corriente\n- mudanzasteclenas@hotmail.com\n\n`;
+  msg += `Le facilito nuestra información bancaria:\n*BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 346-301-000004045\n- mudanzasteclenas@hotmail.com\n\n*BANCO DE AMÉRICA CENTRAL (BAC)*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 201659943\n\n`;
   // Vendedor: usar el de la reserva si existe, sino el usuario logueado
   const vendedorWA = (r.vendedor || (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '').trim();
   const firmaWA = vendedorWA
@@ -6958,7 +6958,7 @@ function generarMensajeWhatsApp(r) {
     if (r.empaque && parseInt(r.empaque.percheros) > 0) msg += `\n👔 *Se envían ${r.empaque.percheros} perchero(s) metálico(s) para transportar ropa.*`;
   }
   msg += `\n\nEl pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.\n\n`;
-  msg += `Le facilito nuestra información bancaria:\n*CUENTA CORRIENTE BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Número de cuenta: 346-301-000004045\n- Cuenta corriente\n- mudanzasteclenas@hotmail.com\n\n`;
+  msg += `Le facilito nuestra información bancaria:\n*BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 346-301-000004045\n- mudanzasteclenas@hotmail.com\n\n*BANCO DE AMÉRICA CENTRAL (BAC)*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 201659943\n\n`;
   const vendedor = (r.vendedor || (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '').trim();
   const firma = vendedor
     ? `Mi nombre es *${vendedor}*, cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`
@@ -13202,11 +13202,16 @@ function actualizarPreviewWA() {
 El pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.
 
 Le facilito nuestra información bancaria:
-*CUENTA CORRIENTE BANCO CUSCATLÁN*
+*BANCO CUSCATLÁN*
 - Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.
+- Cuenta corriente, persona jurídica
 - Número de cuenta: 346-301-000004045
-- Cuenta corriente
 - mudanzasteclenas@hotmail.com
+
+*BANCO DE AMÉRICA CENTRAL (BAC)*
+- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.
+- Cuenta corriente, persona jurídica
+- Número de cuenta: 201659943
 
 ${(typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre)
   ? `Mi nombre es *${usuarioActual.nombre}*, cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`
