@@ -795,7 +795,7 @@ body.tv-mode .tv-pz-total-val{font-size:16px;font-weight:900;color:#fff;letter-s
   </div>
 
   <!-- Resumen global -->
-  <div id="pd-stats" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;"></div>
+  <div id="pd-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:10px;margin-bottom:18px;"></div>
 
   <!-- Tabs -->
   <div style="display:flex;gap:4px;margin-bottom:0;border-bottom:2px solid var(--gris1);">
@@ -2993,7 +2993,7 @@ async function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-10-09-v131b';
+const APP_VERSION = '2026-10-10-v131c';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -7981,29 +7981,33 @@ function ensureDatalistPersonal() {
 }
 
 const HORARIOS = ['8:00 AM','11:00 AM','2:30 PM'];
-const METODOS_PAGO = ['EFECTIVO','CUSCA','LINK','PENDIENTE','CANCELADO'];
+const METODOS_PAGO = ['EFECTIVO','CUSCA','BAC','LINK','PENDIENTE','CANCELADO'];
 const LINK_NETO = 0.96228;    // FIX (2026-07-04): comision real link Cuscatlan = 3.772% medida en conciliacion de junio (antes se asumia 5%)
 const LINK_COMISION = 1 - LINK_NETO;
 // v102 (2026-07-17): CAMBIO 3 — la palabra "LINK" se MUESTRA al usuario como "TARJETA"
 // (link de pago, POS electronico o cobro con tarjeta en oficina). El VALOR interno sigue
 // siendo 'LINK' en datos/logica/Supabase para NO romper miles de registros historicos; solo
 // cambia la ETIQUETA visible. Usar metodoLabel(m) en TODO texto mostrado al usuario.
-const METODO_LABELS = { EFECTIVO:'EFECTIVO', CUSCA:'CUSCA', LINK:'TARJETA', PENDIENTE:'PENDIENTE', CANCELADO:'CANCELADO' };
+const METODO_LABELS = { EFECTIVO:'EFECTIVO', CUSCA:'CUSCA', BAC:'BAC', LINK:'TARJETA', PENDIENTE:'PENDIENTE', CANCELADO:'CANCELADO' };
 function metodoLabel(m){ return METODO_LABELS[m] || m || ''; }
 // Metodos de pago para OTROS INGRESOS (CAMBIO 2): mismo sistema que reservaciones, sin CANCELADO.
-const METODOS_OI = ['EFECTIVO','CUSCA','LINK','PENDIENTE'];
-const COLOR_METODO = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', LINK:'#7c3aed', PENDIENTE:'#d97706', CANCELADO:'#991b1b' };
+const METODOS_OI = ['EFECTIVO','CUSCA','BAC','LINK','PENDIENTE'];
+const COLOR_METODO = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', BAC:'#e11d48', LINK:'#7c3aed', PENDIENTE:'#d97706', CANCELADO:'#991b1b' };
 // Deriva un metodo de pago a partir del 'destino' (cuenta) de registros VIEJOS sin metodo.
-function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : 'EFECTIVO'; }
+function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : d==='BAC' ? 'BAC' : 'EFECTIVO'; }
+// v133 (2026-10-10): cuenta nueva de BANCO DE AMÉRICA CENTRAL. Un pago por BAC entra a la cuenta BAC
+// el MISMO día (igual que CUSCA a CUSCATLAN), nunca a CUSCATLAN. TARJETA sigue cayendo en CUSCATLAN.
+// Cuenta (bolsa) a la que entra cada método. Fuente única para el 'destino' de otros ingresos.
+function _cuentaDeMetodo(m){ return m==='EFECTIVO' ? 'CAJA CHICA' : (m==='CUSCA'||m==='LINK') ? 'CUSCATLAN' : m==='BAC' ? 'BAC' : null; }
 // De qué bolsa sale el dinero de un GASTO. v111: se agregó GUARDADO (efectivo de la caja
 // fuerte), tercera fuente real igual que las otras dos: el gasto se descuenta ÚNICAMENTE de la
 // cuenta elegida (recalcCerramos ya trabajaba con las 3 cuentas, solo faltaba poder elegirla).
 // Mantener el mismo orden y los mismos nombres exactos que CUENTAS: los saldos se cruzan por
 // nombre (gastosPorFondo[c]) y un rótulo distinto dejaría el gasto sin descontar de nada.
-const FONDOS = ['CAJA CHICA','GUARDADO','CUSCATLAN'];
+const FONDOS = ['CAJA CHICA','GUARDADO','CUSCATLAN','BAC'];
 // Color por fondo — solo ayuda visual para no equivocarse de bolsa al anotar un gasto.
-const COLOR_FONDO = { 'CAJA CHICA':'#16a34a', 'GUARDADO':'#7c3aed', 'CUSCATLAN':'#1e4fa0' };
-const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN'];
+const COLOR_FONDO = { 'CAJA CHICA':'#16a34a', 'GUARDADO':'#7c3aed', 'CUSCATLAN':'#1e4fa0', 'BAC':'#e11d48' };
+const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN','BAC'];
 
 // Data structure: { fecha: { columnas:[{nombre,camion,tipo,miembros:[{nombre,pago}], slots:{hora:{carga,descarga,costo,metodo}}}], gastos:[{monto,titulo,desc,fondo}], cuentas:{abrimos:{},cerramos:{}} } }
 let pdData; try { pdData = JSON.parse(localStorage.getItem('mt_pd3') || '{}'); } catch(e) { pdData = {}; }
@@ -8440,7 +8444,7 @@ function buildColumna2(col, idx, f) {
   // Build each horario slot
   const slotsHtml = HORARIOS.map((h, hi) => {
     const slot = col.slots[h] || {costo:'',metodo:'EFECTIVO',reservaCodigo:''};
-    const MC = {EFECTIVO:'#16a34a',CUSCA:'#1e4fa0',LINK:'#7c3aed',PENDIENTE:'#d97706',CANCELADO:'#991b1b'};
+    const MC = {EFECTIVO:'#16a34a',CUSCA:'#1e4fa0',BAC:'#e11d48',LINK:'#7c3aed',PENDIENTE:'#d97706',CANCELADO:'#991b1b'};
     const mc = MC[slot.metodo] || '#16a34a';
     const sid = `sl${idx}h${hi}`;
 
@@ -8657,8 +8661,8 @@ function buildColumna2(col, idx, f) {
   [...HORARIOS, 'otra'].forEach(h => { const c = col.slots?.[h]?.reservaCodigo; if (c) _codsSlotsPropios.add(c); });
   const resDiaParaExtra = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado'
     && !codsExtra.has(r.codigo) && !asignadas.has(r.codigo) && !_codsSlotsPropios.has(r.codigo));
-  const _METODOS_EXTRA = ['EFECTIVO','CUSCA','LINK','PENDIENTE'];
-  const _colorMetodoExtra = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', LINK:'#7c3aed', PENDIENTE:'#d97706' };
+  const _METODOS_EXTRA = ['EFECTIVO','CUSCA','BAC','LINK','PENDIENTE'];
+  const _colorMetodoExtra = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', BAC:'#e11d48', LINK:'#7c3aed', PENDIENTE:'#d97706' };
   const serviciosExtraHtml = `
     <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d97706;">
       <div style="font-size:10px;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">⭐ Servicios extra (fuera de cuota)</div>
@@ -9121,6 +9125,7 @@ function renderStats2(f) {
       <div class="sc a"><div class="sc-lbl">Total servicios</div><div class="sc-val">$${totalServicios.toFixed(2)}</div><div class="sc-sub">${day.columnas.length} equipo(s)${hayAj?`<br><span style="color:#0891b2;font-weight:800;">✏️ pactado $${t.base.toFixed(2)} · ajustes ${t.ajustes>0?'+':'−'}$${Math.abs(t.ajustes).toFixed(2)}</span>`:''}</div></div>
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
+      <div class="sc c"><div class="sc-lbl">BAC</div><div class="sc-val" style="color:#e11d48;font-size:20px;">$${(t.metodos.BAC||0).toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
       <div class="sc a"><div class="sc-lbl">TARJETA CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
       <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
       <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>`;
@@ -9477,7 +9482,7 @@ function renderCuaderno() {
   // Ingresos por método
   const cuadIng = document.getElementById('cuad-ingresos');
   if (cuadIng) {
-    const ing = {EFECTIVO:0,CUSCA:0,LINK:0,PENDIENTE:0,CANCELADO:0};
+    const ing = {EFECTIVO:0,CUSCA:0,BAC:0,LINK:0,PENDIENTE:0,CANCELADO:0};
     // FIX F7 (2026-07-02): incluir 'otra' hora y servicios extra — el cuadre (recalcCerramos)
     // YA los cuenta desde v87/v88; el cuaderno mostraba menos que el cerramos. Dedupe global.
     const contadosIng = new Set();
@@ -9515,12 +9520,13 @@ function renderCuaderno() {
       <div style="display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;">
         <span style="font-size:13px;font-weight:600;">EFECTIVO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#16a34a;">$${ing.EFECTIVO.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">CUSCA (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#1e4fa0;">$${ing.CUSCA.toFixed(2)}</span>
+        <span style="font-size:13px;font-weight:600;">BAC (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#e11d48;">$${ing.BAC.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">TARJETA <span style="font-size:10px;font-weight:500;color:#7c3aed;">(bruto $${ing.LINK.toFixed(2)} − 3.772% = neto)</span></span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#7c3aed;">$${linkNeto.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">PENDIENTE</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#d97706;">$${ing.PENDIENTE.toFixed(2)}</span>
         ${ing.CANCELADO>0?`<span style="font-size:13px;font-weight:600;color:#991b1b;">CANCELADO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#991b1b;text-decoration:line-through;">$${ing.CANCELADO.toFixed(2)}</span>`:''}
         <div style="grid-column:1/-1;border-top:2px solid #1a2236;padding-top:6px;display:flex;justify-content:space-between;align-items:center;">
           <span style="font-weight:800;">TOTAL DEL DÍA <span style="font-size:10px;font-weight:600;color:#6b7280;">(incluye pendiente)</span>:</span>
-          <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:#16a34a;">$${(ing.EFECTIVO+ing.CUSCA+linkNeto+ing.PENDIENTE).toFixed(2)}</span>
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:#16a34a;">$${(ing.EFECTIVO+ing.CUSCA+ing.BAC+linkNeto+ing.PENDIENTE).toFixed(2)}</span>
         </div>
       </div>`;
   }
@@ -10471,7 +10477,7 @@ function updateOtroIngreso(id, campo, val) {
   if (g.ajuste) _refrescarMarcasCostoDebounced();
   // v102 (CAMBIO 2): al elegir metodo, derivar tambien 'destino' (cuenta) para lectores legacy.
   // EFECTIVO→CAJA CHICA, CUSCA/LINK→CUSCATLAN. PENDIENTE no cae en cuenta (queda en destino previo).
-  if (campo==='metodo') { g.destino = (val==='EFECTIVO') ? 'CAJA CHICA' : (val==='CUSCA'||val==='LINK') ? 'CUSCATLAN' : (g.destino||'CAJA CHICA'); }
+  if (campo==='metodo') { g.destino = _cuentaDeMetodo(val) || (g.destino||'CAJA CHICA'); }
   savePDLocal();
   _ultimaEdicionFinanzas = Date.now();
   const total=day.otrosIngresos.reduce((s,g)=>s+(parseFloat(g.monto)||0),0);
@@ -10867,7 +10873,7 @@ function _serviciosColumna(col, vistos){
 // Método CANCELADO: no produce dinero, sale del total (se guarda aparte para poder mostrarlo).
 function _totalizarServicios(lista){
   const t = { base:0, ajustes:0, vigente:0, cancelado:0,
-              metodos:{EFECTIVO:0, CUSCA:0, LINK:0, PENDIENTE:0} };
+              metodos:{EFECTIVO:0, CUSCA:0, BAC:0, LINK:0, PENDIENTE:0} };
   (lista||[]).forEach(s => {
     if (s.metodo === 'CANCELADO') { t.cancelado += s.base; return; }
     t.base += s.base;
@@ -11614,7 +11620,7 @@ function confirmarAjusteCobro(){
     titulo: `${tipo} · ${r.codigo}`,
     desc: motivo,
     metodo: metodo,
-    destino: (metodo==='EFECTIVO' ? 'CAJA CHICA' : (metodo==='CUSCA'||metodo==='LINK') ? 'CUSCATLAN' : 'CAJA CHICA'),
+    destino: (_cuentaDeMetodo(metodo) || 'CAJA CHICA'),
     // --- vínculo y trazabilidad (CAMBIO 1) ---
     ajuste: true, resCodigo: r.codigo, resCliente: cliente, resVendedor: r.vendedor||'',
     tipoMod: tipo, motivo: motivo, signo: (signo<0?'-':'+'),
@@ -11839,7 +11845,7 @@ function buildTitulosDatalist() {
 function calcIngresosServiciosPorCuenta(day) {
   // EFECTIVO → CAJA CHICA, CUSCA → CUSCATLAN
   // LINK → NO se suma hoy (cae al día siguiente en CUSCATLAN)
-  const ing = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, '_LINK_PENDIENTE':0};
+  const ing = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, '_LINK_PENDIENTE':0};
   const slotCodigos = new Set(); // todo lo ya contado en slots (para no duplicar con extras)
   day.columnas.forEach(col => {
     // FIX (2026-06-29): incluir el slot 'otra' (hora especial). Antes solo se iteraba
@@ -11871,6 +11877,7 @@ function calcIngresosServiciosPorCuenta(day) {
       if (m==='CANCELADO' || m==='PENDIENTE') return;
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
       else if (m==='CUSCA') ing['CUSCATLAN'] += c;
+      else if (m==='BAC') ing['BAC'] += c;
       else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * LINK_NETO; // no se suma hoy
     });
   });
@@ -11889,6 +11896,7 @@ function calcIngresosServiciosPorCuenta(day) {
       const c = parseFloat(r.costo)||0;
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
       else if (m==='CUSCA') ing['CUSCATLAN'] += c;
+      else if (m==='BAC') ing['BAC'] += c;
       else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * LINK_NETO;
       // PENDIENTE / CANCELADO: no suma a cuentas (queda por cobrar)
     });
@@ -11936,7 +11944,7 @@ function recalcCerramos(fArg) {
   // Otros ingresos por cuenta (v102, CAMBIO 2): según MÉTODO de pago, mismo criterio que las
   // reservaciones. EFECTIVO→CAJA CHICA, CUSCA→CUSCATLAN, LINK(TARJETA)→diferido (cae mañana en
   // CUSCATLAN, 96.228%), PENDIENTE→no suma. Registros VIEJOS sin `metodo` usan su `destino`.
-  const ingOtros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
+  const ingOtros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
   let linkOtrosHoy = 0;
   (day.otrosIngresos||[]).forEach(g => {
     const monto = parseFloat(g.monto)||0;
@@ -11944,6 +11952,7 @@ function recalcCerramos(fArg) {
     if (g.metodo) {
       if (g.metodo === 'EFECTIVO') ingOtros['CAJA CHICA'] += monto;
       else if (g.metodo === 'CUSCA') ingOtros['CUSCATLAN'] += monto;
+      else if (g.metodo === 'BAC') ingOtros['BAC'] += monto;
       else if (g.metodo === 'LINK') linkOtrosHoy += monto * LINK_NETO;
       // PENDIENTE / CANCELADO: no suma a cuentas hoy
     } else {
@@ -11953,7 +11962,7 @@ function recalcCerramos(fArg) {
   });
 
   // Gastos por fondo
-  const gastosPorFondo = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
+  const gastosPorFondo = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
   (day.gastos||[]).forEach(g => {
     const fondo = g.fondo || 'CAJA CHICA';
     gastosPorFondo[fondo] = (gastosPorFondo[fondo]||0) + (parseFloat(g.monto)||0);
@@ -11967,8 +11976,8 @@ function recalcCerramos(fArg) {
   const totalComisionEq = _totalComisionesEquipo(day);
 
   // Movimientos entre cuentas
-  const movIn = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
-  const movOut = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0};
+  const movIn = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
+  const movOut = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
   (day.movimientos||[]).forEach(m => {
     const monto = parseFloat(m.monto)||0;
     if (m.origen && movOut[m.origen] !== undefined) movOut[m.origen] += monto;
@@ -11976,11 +11985,12 @@ function recalcCerramos(fArg) {
   });
 
   // Cobros de pagos pendientes recibidos hoy
-  const ingCobros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, '_LINK_PENDIENTE':0};
+  const ingCobros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, '_LINK_PENDIENTE':0};
   (day.cobrosPendientes||[]).forEach(cb => {
     const monto = parseFloat(cb.monto)||0;
     if (cb.metodo === 'EFECTIVO') ingCobros['CAJA CHICA'] += monto;
     else if (cb.metodo === 'CUSCA') ingCobros['CUSCATLAN'] += monto;
+    else if (cb.metodo === 'BAC') ingCobros['BAC'] += monto;
     else if (cb.metodo === 'LINK') ingCobros['_LINK_PENDIENTE'] += monto * LINK_NETO;
   });
 
@@ -12245,7 +12255,7 @@ async function descargarReporteDia() {
   const day = getDayData(f);
   const fechaLegible = new Date(f + 'T12:00:00').toLocaleDateString('es-SV', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
   const esc = _pdfEsc;
-  const MC = { EFECTIVO:['#dcfce7','#15803d'], CUSCA:['#dbeafe','#1d4ed8'], LINK:['#ede9fe','#6d28d9'], PENDIENTE:['#fef9c3','#a16207'], CANCELADO:['#fee2e2','#b91c1c'] };
+  const MC = { EFECTIVO:['#dcfce7','#15803d'], CUSCA:['#dbeafe','#1d4ed8'], BAC:['#ffe4e6','#be123c'], LINK:['#ede9fe','#6d28d9'], PENDIENTE:['#fef9c3','#a16207'], CANCELADO:['#fee2e2','#b91c1c'] };
   const metBadge = (m) => { const c = MC[m]||['#e5e7eb','#111']; return `<span style="font-size:7pt;font-weight:700;padding:0.3mm 1.5mm;border-radius:3px;background:${c[0]};color:${c[1]};">${esc(metodoLabel(m||'EFECTIVO'))}</span>`; };
 
   // ===== Sección 1: SERVICIOS POR EQUIPO (quién los hizo + pago) =====
@@ -13913,6 +13923,7 @@ function alertaPendientesUrgentes() {
         <option value="AUTO">Automático (igual que la reservación)</option>
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
+        <option value="BAC">BAC → Banco de América Central</option>
         <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
       </select>
       <!-- v128: se quitó PENDIENTE. Un ajuste PENDIENTE subía el precio a cobrar pero su dinero no entraba
@@ -13944,6 +13955,7 @@ function alertaPendientesUrgentes() {
       <select id="cob-metodo">
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
+        <option value="BAC">BAC → Banco de América Central</option>
         <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
       </select>
     </div>
