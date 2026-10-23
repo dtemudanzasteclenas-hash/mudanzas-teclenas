@@ -1623,6 +1623,10 @@ function syncToSupabase(key, data, _intento) {
   if (!sb) return;
   _pendingAppData.add(key);
   _persistPendingKeys(); // FIX S4 (2026-07-02): sobrevive a cierre/recarga
+  // v132: sin operador confirmado por el servidor se trabaja "sin conexión" (regla v129). Subir ahora
+  // mandaría la copia local ENTERA sin haberla unido con la nube (pisaba la agenda de las otras
+  // compus). Queda marcada como pendiente y sube después del primer merge, al confirmar el operador.
+  if (!_operadorListo) { clearTimeout(_syncTimers[key]); return; }
   clearTimeout(_syncTimers[key]);
   // Debounce reducido de 1500ms a 400ms para propagar cambios casi inmediatamente
   // Razón: 1.5s dejaba ventana donde el usuario podía cerrar la pestaña y perder el save
@@ -1684,6 +1688,7 @@ window.addEventListener('pagehide', _flushAppDataOnExit);
 async function flushSyncToSupabase(key, data) {
   if (!sb) return;
   clearTimeout(_syncTimers[key]);
+  if (!_operadorListo) { _pendingAppData.add(key); _persistPendingKeys(); return; }   // v132: ver syncToSupabase
   const now = new Date().toISOString();
   try {
     const { error } = await sb.from('app_data').upsert({ id: key, data: data, updated_at: now });
@@ -1938,6 +1943,8 @@ async function syncAllFromSupabase(silent, hardReplace=false) {
       // cuando tiene >= que el local.
       pdData = _mergePdDataSeguro(pdData || {}, pd);
       safeSetLS('mt_pd3', JSON.stringify(pdData));
+      // v134: servicios del 24-oct en adelante con un método que nadie confirmó → PENDIENTE.
+      if (typeof _aplicarReglaPendienteYGuardar === 'function') _aplicarReglaPendienteYGuardar();
       // v128 (S4): si después de unir quedaron anotaciones de ESTE equipo que la nube no tiene
       // (gastos, ingresos, movimientos o cobros), subirlas. Antes quedaban solo en este navegador
       // hasta la próxima edición, y un borrado de caché (versión nueva, recargar datos) las perdía.
@@ -2027,6 +2034,8 @@ window.addEventListener('focus', () => {
 // Detectar reconexión de red
 window.addEventListener('online', () => {
   console.log('🌐 Conexión recuperada — reconectando Supabase');
+  // v132: si la pestaña arrancó sin red (sin operador confirmado), retomarlo ya, sin esperar el heartbeat.
+  if (!_operadorListo) { setTimeout(() => { try { _supabaseHeartbeat(); } catch(e) {} }, 1500); return; }
   if (typeof checkSupabase === 'function') {
     checkSupabase().then(ok => {
       if (ok && typeof scheduleFullSyncAndRender === 'function') {
@@ -2236,11 +2245,27 @@ function _fmtHaceSec(s) {
 
 // Heartbeat cada 60s: PING real a Supabase para verificar que la conexión sigue viva.
 // Esto permite distinguir "sin actividad del usuario" (verde, OK) de "sin conexión" (rojo, problema real).
+var _retomandoOperador = false;   // v132: evita dos reintentos a la vez (heartbeat + 'online')
 async function _supabaseHeartbeat() {
   if (!sb) return;
   // v129: sin PIN aceptado no hay nube. Y si el servidor dejó de reconocer al operador (nuevo día,
   // baja, salió en otra pestaña) se vuelve a pedir el PIN.
-  if (!_operadorListo) { supabaseOK = false; updateSyncIndicator(); return; }
+  if (!_operadorListo) {
+    supabaseOK = false; updateSyncIndicator();
+    // v132: la pestaña arrancó SIN RED con alguien ya identificado (rama 'RED' de _arranqueAcceso) y
+    // nada volvía a preguntarle al servidor: quedaba "sin conexión" todo el día aunque volviera
+    // internet (no bajaba cambios ni subía reservaciones). Ahora, cuando el servidor responde, se
+    // retoma como si hubiera puesto el PIN; si ya no reconoce a nadie, se pide el PIN.
+    if (usuarioActual && usuarioActual.nombre && !_retomandoOperador) {
+      _retomandoOperador = true;
+      try {
+        const _op0 = await _operadorDelServidor();
+        if (_op0 && _op0 !== 'RED') await _activarOperador(_op0);
+        else if (!_op0) _bloquearPorPin();
+      } catch(e) {} finally { _retomandoOperador = false; }
+    }
+    return;
+  }
   try {
     const _op = await _operadorDelServidor();
     if (_op !== 'RED' && !_op) { _bloquearPorPin(); return; }
@@ -2435,19 +2460,31 @@ async function forceSync() {
 async function hardReloadDatos() {
   if (!confirm('⚠️ Se borrará el caché local y se volverá a descargar TODO desde la nube.\n\nEsto NO borra datos — solo fuerza un refresco. ¿Continuar?')) return;
   try {
+    // v132: TODO se comprueba ANTES de borrar. Antes se vaciaba el caché y la memoria primero y
+    // recién después se miraba la conexión: sin internet (o sin PIN confirmado) la app quedaba
+    // vacía, y lo anotado y aún no subido se perdía para siempre.
+    if (!supabaseOK) {
+      const ok = await checkSupabase();
+      if (!ok) { alert('❌ No hay conexión con la nube. No se borró nada. Revisa tu internet e intenta de nuevo.'); return; }
+    }
+    if ((typeof _hayAppDataPendiente === 'function' && _hayAppDataPendiente()) || _getPendingSaves().length > 0) {
+      alert('⚠️ Esta computadora tiene cambios que TODAVÍA NO SUBIERON a la nube.\n\nNo se borró nada. Esperá a que se sincronicen (o tocá el aviso de pendientes) y volvé a intentar.');
+      return;
+    }
+    const _probePd = await loadFromSupabase('mt_pd3');
+    const sbRes = await loadReservasFromSupabase();
+    if (!_probePd || sbRes === null) { alert('❌ La nube no respondió bien. No se borró nada. Intentá de nuevo en un momento.'); return; }
     ['mt2_reservas', 'mt_aggrid', 'mt_pd3', 'mt_conc', 'mt_audit'].forEach(k => localStorage.removeItem(k));
     reservas = [];
     agGrid = {};
     pdData = {};
     concData = {};
     auditData = {};
-    if (!supabaseOK) {
-      const ok = await checkSupabase();
-      if (!ok) { alert('❌ No hay conexión con la nube. Revisa tu internet e intenta de nuevo.'); return; }
-    }
-    const sbRes = await loadReservasFromSupabase();
     if (sbRes !== null) { reservas = _conPendientesLocales(sbRes); safeSetLS('mt2_reservas', JSON.stringify(reservas)); }
     await syncAllFromSupabase(false);
+    // v132: si el sync falló justo después de vaciar, no dejar la pizarra/cuaderno en blanco (cualquier
+    // edición subiría un mt_pd3 casi vacío): usar la copia que ya se bajó para comprobar la nube.
+    if (!Object.keys(pdData || {}).length) { pdData = _probePd; safeSetLS('mt_pd3', JSON.stringify(pdData)); }
     renderAllSections();
     alert(`✅ Datos recargados: ${reservas.length} reservaciones, ${Object.keys(agGrid).length} fechas en agenda.`);
   } catch(e) {
@@ -2642,6 +2679,40 @@ async function loadComentariosFromSupabase() {
     console.error('Error cargando comentarios:', e);
     return null;
   }
+}
+
+// v132: la nube guarda los comentarios POR CÓDIGO de reservación y con la etiqueta pegada al texto
+// ("⚠️ Precaución — …"), pero la pantalla los busca POR TELÉFONO del cliente (comentarios[r.tel]) con
+// la etiqueta aparte. Al abrir la app se reemplazaba el objeto local por el de la nube tal cual →
+// ninguna ficha encontraba sus comentarios y las alertas "🚫 No volver" / "⚠️ Precaución" dejaban de
+// verse. Solo LECTURA: convierte a la forma que usa la pantalla y conserva los comentarios locales que
+// la nube todavía no tiene. No escribe nada en la nube.
+const _COMENT_TAGS = ['⚠️ Precaución', '⭐ Excelente', '📝 Nota', '🚫 No volver'];
+function _comentariosPorTel(nubePorCodigo, local) {
+  const out = {};
+  const vistos = new Set();
+  const telDeCodigo = {};
+  (reservas || []).forEach(r => { if (r && r.codigo) telDeCodigo[r.codigo] = r.tel; });
+  Object.entries(local || {}).forEach(([tel, arr]) => (arr || []).forEach(c => { if (c && c.reservacion && !telDeCodigo[c.reservacion]) telDeCodigo[c.reservacion] = tel; }));
+  const fmt = iso => { const d = new Date(iso); return isNaN(d) ? String(iso || '') : d.toLocaleDateString('es-SV', { day:'2-digit', month:'short', year:'numeric' }); };
+  Object.entries(nubePorCodigo || {}).forEach(([codigo, arr]) => {
+    const tel = telDeCodigo[codigo] || codigo;
+    (arr || []).forEach(c => {
+      let texto = String((c && c.texto) || ''), tag = '';
+      const t = _COMENT_TAGS.find(x => texto.startsWith(x + ' — '));
+      if (t) { tag = t; texto = texto.slice(t.length + 3); }
+      vistos.add(codigo + '|' + tag + '|' + texto);
+      (out[tel] = out[tel] || []).unshift({ texto, tag, fecha: fmt(c && c.fecha), reservacion: codigo, autor: (c && c.autor) || '' });
+    });
+  });
+  // Comentarios de ESTA computadora que la nube aún no tiene (se guardaron sin conexión): no perderlos.
+  const codigos = new Set((reservas || []).map(r => r && r.codigo).filter(Boolean));
+  Object.entries(local || {}).forEach(([tel, arr]) => {
+    if (codigos.has(tel)) return;   // copia vieja con la forma de la nube (clave = código): ya viene arriba
+    const propios = (arr || []).filter(c => c && !vistos.has((c.reservacion || '') + '|' + (c.tag || '') + '|' + (c.texto || '')));
+    if (propios.length) out[tel] = [...propios, ...(out[tel] || [])];
+  });
+  return out;
 }
 
 async function saveComentarioToSupabase(codigo, texto, autor) {
@@ -2993,7 +3064,7 @@ async function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-10-10-v131c';
+const APP_VERSION = '2026-10-23-v134';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -3148,6 +3219,9 @@ async function initData() {
         await saveAllReservasToSupabase();
       }
     }
+    // v132: en cada arranque con operador confirmado (también tras cada PIN), lo que quedó sin subir se
+    // re-sube después del merge. Antes era una sola vez por pestaña: tras el re-PIN de la mañana no se volvía a hacer.
+    window._pendReuploadHecho = false;
     // HARD REPLACE: reemplazar agGrid/pdData/concData completos con Supabase (true = hardReplace)
     try { await syncAllFromSupabase(false, true); console.log('☁️ app_data hard-replace desde Supabase'); } catch(e) { console.warn('Error sync admin:', e); }
     // Re-render TODAS las vistas con los datos frescos
@@ -3159,13 +3233,19 @@ async function initData() {
       try {
         const sbComentarios = await loadComentariosFromSupabase();
         if (sbComentarios !== null && Object.keys(sbComentarios).length > 0) {
-          comentarios = sbComentarios;
+          comentarios = _comentariosPorTel(sbComentarios, comentarios);   // v132: por teléfono, como los busca la pantalla
           safeSetLS('mt_comentarios', JSON.stringify(comentarios));
         }
       } catch(e) { console.warn('Error cargando comentarios:', e); }
     }, 500);
+    // v132: reservaciones que quedaron en la cola sin subir (p. ej. se guardaron después de medianoche,
+    // cuando el PIN ya había vencido). Antes nada las reintentaba después del PIN: el reintento del
+    // arranque corre antes del PIN (sin conexión) y el heartbeat solo reintenta si la conexión "volvió".
+    setTimeout(() => { try { if (_getPendingSaves().length > 0) reintentarSavesPendientes(true); } catch(e) {} }, 2500);
     // Indicador visual de conexión
     const badge = document.getElementById('user-badge');
+    // v132: si quedó el punto naranja "Modo offline" del arranque previo al PIN, pasarlo a verde.
+    { const _dot0 = document.getElementById('conn-dot'); if (_dot0) { _dot0.style.background = '#4ade80'; _dot0.title = 'Conectado a Supabase ☁️'; } }
     if (badge && !document.getElementById('conn-dot')) {   // v129: initData corre de nuevo tras cada PIN
       const dot = document.createElement('span');
       dot.id = 'conn-dot';
@@ -3184,7 +3264,9 @@ async function initData() {
     // Modo offline — indicador naranja
     setTimeout(() => {
       const badge = document.getElementById('user-badge');
-      if (badge) {
+      const _dotYa = document.getElementById('conn-dot');   // v132: no repetir el id; actualizar el que haya
+      if (_dotYa) { _dotYa.style.background = '#f59e0b'; _dotYa.title = 'Modo offline — datos locales'; }
+      else if (badge) {
         const dot = document.createElement('span');
         dot.id = 'conn-dot';
         dot.style.cssText = 'width:8px;height:8px;background:#f59e0b;border-radius:50%;position:absolute;top:2px;right:2px;';
@@ -4247,7 +4329,7 @@ function _descAvisoVerHTML(r) {
 
 const _AUDIT_LABELS = { creada:'🆕 Agendada', cancelada:'❌ Cancelada', reactivada:'♻️ Reactivada', cambio_fecha:'📅 Cambio de fecha', cambio_precio:'💲 Cambio de precio', completada:'🏁 Completada',
   // AUDITORIA v96 (2026-07-06): tipos nuevos — registro completo de quién cambió qué.
-  cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', cobrada:'💰 Cobro registrado',
+  cambio_hora:'⏰ Cambio de horario', cambio_tel:'📱 Cambio de teléfono', cambio_carga:'📦 Cambio dirección de carga', cambio_descarga:'🏠 Cambio dirección de descarga', cambio_obs:'📝 Cambio de observaciones', cambio_metodo:'💳 Cambio de método de pago', metodo_a_pendiente:'⏳ Método pasó a PENDIENTE (regla 24-oct)', cobrada:'💰 Cobro registrado',
   // AUDITORIA v99 (2026-07-08): tipos nuevos — nombre/camión/personal/tipo de cliente,
   // confirmación, cambio de estado genérico y reasignación de vendedor (solo admin).
   cambio_nombre:'👤 Cambio de nombre del cliente', cambio_camion:'🚚 Cambio de camión', cambio_personal:'👷 Cambio de personal', cambio_tipocliente:'🧾 Cambio tipo de cliente', confirmada:'✅ Confirmada', cambio_estado:'🔄 Cambio de estado', cambio_vendedor:'🤝 Vendedor reasignado (admin)',
@@ -4950,6 +5032,7 @@ function diagnosticarDuplicados() {
 // estado, y la base bloquea el borrado desde la app). Se CANCELAN con la marca "DUPLICADO de X"
 // y se ocultan de la agenda. agGrid y pdData se reapuntan al sobreviviente igual que antes.
 async function limpiarDuplicados() {
+  if (!_esAdmin()) { alert('🔒 Solo el administrador puede limpiar duplicados.'); return; }   // v132: cambio masivo (regla 10)
   const duplicados = _agruparDuplicados();
   if (duplicados.length === 0) { alert('No hay duplicados que limpiar.'); return; }
   const totalSobrantes = duplicados.reduce((s,g) => s + (g.length - 1), 0);
@@ -4966,9 +5049,17 @@ async function limpiarDuplicados() {
   const _enDescuento = c => (descuentosData || []).some(d => d && (d.codigo_origen === c || d.codigo_destino === c));
   let _protegidasDesc = 0;
   duplicados.forEach(g => {
-    let sobreviviente = g.find(r => /^MUD/i.test(r.codigo||''));
-    if (!sobreviviente) sobreviviente = g[0];
+    // v132: la clave de duplicado no mira el estado. Si el grupo mezcla una copia CANCELADA con una
+    // viva, la sobreviviente tiene que ser la VIVA: antes podía quedar la cancelada y se cancelaba el
+    // servicio real (su dinero salía del cuadre y desaparecía de agenda y pizarra).
+    const _vivas = g.filter(r => r.estado !== 'cancelado');
+    const _pool = _vivas.length ? _vivas : g;
+    let sobreviviente = _pool.find(r => /^MUD/i.test(r.codigo||''));
+    if (!sobreviviente) sobreviviente = _pool[0];
     g.forEach(r => {
+      // v132: una copia que YA estaba cancelada es historial inmutable (v110): no se re-marca ni se le
+      // reapuntan sus cobros/ajustes. Solo se cancelan las copias vivas sobrantes.
+      if (r.codigo !== sobreviviente.codigo && r.estado === 'cancelado') return;
       if (r.codigo !== sobreviviente.codigo && _enDescuento(r.codigo)) { _protegidasDesc++; return; }
       if (r.codigo !== sobreviviente.codigo) {
         reapuntar[r.codigo] = sobreviviente.codigo;
@@ -5101,6 +5192,7 @@ async function limpiarDuplicados() {
 // porque cambia el código en la celda, no la celda misma.
 // NO modifica costos, estados, ni datos del cliente.
 async function migrarTodosLosCodigosA6Digitos() {
+  if (!_esAdmin()) { alert('🔒 Solo el administrador puede renumerar códigos.'); return; }   // v132: cambio masivo (regla 10)
   const esNuevo = c => /^\d{3}-\d{3}$/.test(c||'');
   const viejos = reservas.filter(r => !esNuevo(r.codigo));
   if (viejos.length === 0) {
@@ -5342,6 +5434,9 @@ function exportarReservas() {
 
 async function importarReservas(file) {
   if (!file) return;
+  // v132: reemplaza datos de reservaciones existentes en la nube (precio, fecha, estado) sin pasar por
+  // las reglas de edición → solo el administrador.
+  if (!_esAdmin()) { alert('🔒 Solo el administrador puede importar reservaciones.'); const _inp = document.getElementById('import-reservas-input'); if (_inp) _inp.value = ''; return; }
   // Validar tamaño: máx 10 MB (evita colgar el navegador con archivos inválidos)
   if (file.size > 10 * 1024 * 1024) {
     alert('❌ Archivo muy grande (máx 10 MB). Dividilo en partes o contactá a soporte.');
@@ -5353,14 +5448,24 @@ async function importarReservas(file) {
     if (!Array.isArray(data)) { alert('❌ El archivo no tiene el formato correcto (debe ser un array de reservaciones).'); return; }
     const existentes = new Set(reservas.map(r => r.codigo));
     const nuevas = data.filter(r => r && r.codigo && !existentes.has(r.codigo));
-    const actualizadas = data.filter(r => r && r.codigo && existentes.has(r.codigo));
-    if (!confirm(`Se detectaron ${data.length} reservaciones en el archivo.\n\n• ${nuevas.length} nuevas se agregarán\n• ${actualizadas.length} existentes se actualizarán\n\n¿Continuar?`)) return;
+    // v132: una reservación CANCELADA es historial inmutable (v110): el archivo no la puede reactivar
+    // ni cambiarle datos.
+    const _canceladasLocal = new Set(reservas.filter(r => r.estado === 'cancelado').map(r => r.codigo));
+    const actualizadas = data.filter(r => r && r.codigo && existentes.has(r.codigo) && !_canceladasLocal.has(r.codigo));
+    const _omitidas = data.filter(r => r && r.codigo && _canceladasLocal.has(r.codigo)).length;
+    if (!confirm(`Se detectaron ${data.length} reservaciones en el archivo.\n\n• ${nuevas.length} nuevas se agregarán\n• ${actualizadas.length} existentes se actualizarán` + (_omitidas ? `\n• ${_omitidas} canceladas NO se tocan` : '') + `\n\n¿Continuar?`)) return;
     // Agregar nuevas
-    nuevas.forEach(r => reservas.unshift(r));
-    // Actualizar existentes (merge)
-    actualizadas.forEach(nr => {
+    nuevas.forEach(r => { reservas.unshift(r); _logAudit(r.codigo, 'importada', 'agregada desde un archivo JSON'); });
+    // Actualizar existentes (merge). v132: el propietario (vendedor) no cambia por importar (regla 11)
+    // y se sube la versión UNIDA (antes se subía el objeto crudo del archivo y la nube quedaba distinta
+    // de la pantalla).
+    actualizadas.forEach((nr, k) => {
       const i = reservas.findIndex(r => r.codigo === nr.codigo);
-      if (i >= 0) reservas[i] = { ...reservas[i], ...nr };
+      if (i >= 0) {
+        reservas[i] = { ...reservas[i], ...nr, vendedor: reservas[i].vendedor };
+        actualizadas[k] = reservas[i];
+        _logAudit(nr.codigo, 'importada', 'datos reemplazados desde un archivo JSON');
+      }
     });
     safeSetLS('mt2_reservas', JSON.stringify(reservas));
     // Subir a Supabase
@@ -5623,7 +5728,7 @@ function confirmarHoraCambio() {
       let cambioPD = false;
       (pdDay && pdDay.columnas || []).forEach((col, ci) => {
         [...HORARIOS, 'otra'].forEach(h => {
-          if (col.slots?.[h]?.reservaCodigo === r.codigo) { col.slots[h].reservaCodigo = ''; col.slots[h].costo = ''; cambioPD = true; _sellarColumna(f, ci); }
+          if (col.slots?.[h]?.reservaCodigo === r.codigo) { _vaciarSlot(col.slots[h]); cambioPD = true; _sellarColumna(f, ci); }   // v132: celda limpia
         });
       });
       if (cambioPD) { savePD(); try { _recalcDesde(f); } catch(e) {} }
@@ -6168,6 +6273,7 @@ async function _guardarNuevaReserva() {
   // Strict validation
   const errores = [];
   if (!nombre) errores.push('• Nombre del cliente');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || '')) errores.push('• Fecha del servicio');   // v132: sin fecha no subía a la nube y no aparecía en agenda ni pizarra
   if (!tel) errores.push('• Teléfono del cliente');
   if (!carga) errores.push('• Dirección de carga');
   if (!descarga) errores.push('• Dirección de descarga');
@@ -6664,6 +6770,12 @@ async function guardarEdicion() {   // v129: async — el PIN de admin lo verifi
     alert('⚠️ Selecciona al menos un horario.');
     return;
   }
+  // v132: sin fecha, la edición sacaba el servicio de su día (agenda/pizarra) y mudaba sus ajustes de
+  // cobro a un día vacío (pdData['']), fuera de todo cuadre.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(document.getElementById('e-fecha').value || '')) {
+    alert('⚠️ La fecha del servicio es obligatoria.');
+    return;
+  }
   // Capturar valores OLD antes de mutar — necesario para saber si hay que limpiar agGrid
   // y para registrar en la bitacora quien cambio la fecha o el precio.
   const oldFecha = r.fecha;
@@ -6783,12 +6895,10 @@ async function guardarEdicion() {   // v129: async — el PIN de admin lo verifi
         let cambioCol = false;
         [...HORARIOS, 'otra'].forEach(h => {
           if (col.slots?.[h]?.reservaCodigo === r.codigo) {
-            col.slots[h].reservaCodigo = '';
-            col.slots[h].costo = '';
-            // FIX M3 (2026-05-30): limpiar también marcas de cobro, no solo el código/costo.
-            delete col.slots[h].cobrado;
-            delete col.slots[h].fechaCobro;
-            delete col.slots[h].metodoCobro;
+            // FIX M3 (2026-05-30) + v132: dejar la celda LIMPIA (_vaciarSlot, igual que deassignSlot):
+            // si quedaba el método viejo (CUSCA/TARJETA/PENDIENTE), el próximo servicio que se ponga
+            // ahí lo heredaba y su dinero caía en la cuenta equivocada.
+            _vaciarSlot(col.slots[h]);
             cambioPD = true; cambioCol = true;
           }
         });
@@ -6856,8 +6966,7 @@ async function guardarEdicion() {   // v129: async — el PIN de admin lo verifi
       pdDay.columnas.forEach((col, ci) => {
         [...HORARIOS, 'otra'].forEach(h => {
           if (col.slots?.[h]?.reservaCodigo === r.codigo) {
-            col.slots[h].reservaCodigo = '';
-            col.slots[h].costo = '';
+            _vaciarSlot(col.slots[h]);   // v132: también método y marcas de cobro (ver arriba)
             cambioPD = true;
             _sellarColumna(r.fecha, ci);   // v128
           }
@@ -7999,6 +8108,66 @@ function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : d==='BAC' ? 
 // el MISMO día (igual que CUSCA a CUSCATLAN), nunca a CUSCATLAN. TARJETA sigue cayendo en CUSCATLAN.
 // Cuenta (bolsa) a la que entra cada método. Fuente única para el 'destino' de otros ingresos.
 function _cuentaDeMetodo(m){ return m==='EFECTIVO' ? 'CAJA CHICA' : (m==='CUSCA'||m==='LINK') ? 'CUSCATLAN' : m==='BAC' ? 'BAC' : null; }
+// v134 (2026-10-23): REGLA DE PEDRO — desde el 24-oct-2026 todo servicio de la pizarra entra como
+// PENDIENTE de confirmar su ingreso. El programa ya NO pone EFECTIVO solo: el método cambia únicamente
+// cuando una persona elige cómo entró el dinero (queda sellado en `metodoConf` + bitácora). PENDIENTE
+// aquí = "falta confirmar el ingreso", no necesariamente "el cliente debe". Como PENDIENTE ya no suma a
+// ninguna cuenta (cuadre, conciliación, reportes), no hizo falta tocar ninguna fórmula.
+// Los días ANTERIORES al corte no se tocan (historial). Para apagar la regla: poner la constante en '9999-12-31'.
+const _FECHA_REGLA_PENDIENTE = '2026-10-24';
+function _rigeReglaPendiente(f){ return typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) && f >= _FECHA_REGLA_PENDIENTE; }
+function _metodoInicialServicio(f){ return _rigeReglaPendiente(f) ? 'PENDIENTE' : 'EFECTIVO'; }
+// Sella (o quita) la confirmación del método de un horario o servicio extra.
+function _sellarConfirmacionMetodo(it, metodo){
+  if (!it) return;
+  if (metodo === 'PENDIENTE') delete it.metodoConf;
+  else it.metodoConf = { por: _quienSoy(), en: new Date().toISOString() };
+}
+// Servicios ya programados del corte en adelante que tienen un método que NADIE confirmó (el EFECTIVO
+// automático de antes) → PENDIENTE. Se respeta: días cerrados, lo ya confirmado (metodoConf), lo cobrado,
+// CANCELADO y las canceladas. Guarda el método anterior en `metodoAntes` y deja UN evento por servicio en
+// la bitácora. Idempotente: corre tras cada sincronización y solo cambia lo que falta. Devuelve cuántos cambió.
+function _aplicarReglaPendiente(){
+  let cambios = 0;
+  const logueados = new Set();
+  Object.keys(pdData || {}).forEach(f => {
+    if (!_rigeReglaPendiente(f)) return;
+    const day = pdData[f];
+    if (!day || !Array.isArray(day.columnas) || (day.cuentas && day.cuentas.diaCerrado)) return;
+    day.columnas.forEach((col, ci) => {
+      if (!col) return;
+      let tocada = false;
+      const pasar = (it, codigo, donde) => {
+        if (!it || !codigo || it.cobrado || it.metodoConf) return;
+        const m = it.metodo || 'EFECTIVO';
+        if (m === 'PENDIENTE' || m === 'CANCELADO') return;
+        const r = (typeof reservas !== 'undefined' && Array.isArray(reservas)) ? reservas.find(rv => rv.codigo === codigo) : null;
+        if (r && r.estado === 'cancelado') return;
+        it.metodoAntes = m; it.metodo = 'PENDIENTE'; tocada = true; cambios++;
+        if (!logueados.has(codigo)) {
+          logueados.add(codigo);
+          try { _logAudit(codigo, 'metodo_a_pendiente', `${fmtFecha(f)} ${donde}: ${m} → PENDIENTE (falta confirmar cómo ingresó el dinero)`); } catch(e) {}
+        }
+      };
+      Object.keys(col.slots || {}).forEach(h => { const sl = col.slots[h]; if (sl) pasar(sl, sl.reservaCodigo, h); });
+      (col.serviciosExtra || []).forEach(it => { if (it && typeof it === 'object') pasar(it, it.codigo, 'servicio extra'); });
+      if (tocada) _sellarColumna(f, ci);
+    });
+  });
+  return cambios;
+}
+function _aplicarReglaPendienteYGuardar(){
+  try {
+    if (typeof _limpiezaEnCurso !== 'undefined' && _limpiezaEnCurso) return 0;
+    const n = _aplicarReglaPendiente();
+    if (n > 0) {
+      console.log(`⏳ Regla 24-oct: ${n} servicio(s) pasaron a PENDIENTE de confirmar ingreso.`);
+      safeSetLS('mt_pd3', JSON.stringify(pdData));
+      if (typeof syncToSupabase === 'function') syncToSupabase('mt_pd3', pdData);
+    }
+    return n;
+  } catch(e) { console.warn('regla pendiente:', e); return 0; }
+}
 // De qué bolsa sale el dinero de un GASTO. v111: se agregó GUARDADO (efectivo de la caja
 // fuerte), tercera fuente real igual que las otras dos: el gasto se descuenta ÚNICAMENTE de la
 // cuenta elegida (recalcCerramos ya trabajaba con las 3 cuentas, solo faltaba poder elegirla).
@@ -8417,7 +8586,7 @@ function buildColumna2(col, idx, f) {
     const realIdx = col.miembros.indexOf(m);
     const esM = MOTORISTAS.has(m.nombre);
     const esEventual = m.eventual === true;
-    const nick = _nombreCorto(m.nombre);   // v114: alias de pantalla (el dato guardado no cambia)
+    const nick = escHtml(_nombreCorto(m.nombre));   // v114: alias de pantalla (el dato guardado no cambia) · v132: escapado (nombre escrito a mano)
     const display = esM ? `<span style="color:#d42b2b;font-weight:900;font-size:11px;">(M)</span> ${nick}`
       : esEventual ? `<span style="color:#d97706;font-weight:900;font-size:11px;">(E)</span> ${nick}`
       : nick;
@@ -8550,7 +8719,7 @@ function buildColumna2(col, idx, f) {
           <select ${isDiaCerrado(f)?'disabled title="Día cerrado"':''} onchange="updateSlot2('${f}',${idx},'${h}','metodo',this.value)"
             style="border:1px solid #d4d4d4;border-radius:5px;background:#fff;font-size:11px;font-weight:800;color:${mc};font-family:'Barlow',sans-serif;outline:none;cursor:pointer;padding:3px 6px;">
             ${METODOS_PAGO.map(mp=>`<option value="${mp}" ${slot.metodo===mp?'selected':''}>${metodoLabel(mp)}</option>`).join('')}
-          </select>` : ''}
+          </select>${(slot.metodo==='PENDIENTE' && !slot.cobrado && _rigeReglaPendiente(f)) ? `<span style="font-size:10px;font-weight:700;color:#d97706;" title="Elegí cómo entró el dinero cuando se confirme">⏳ confirmar ingreso</span>` : ''}` : ''}
           ${resIdx >= 0 ? `<button onclick="verRes('${asignadaR.codigo}')" style="background:var(--gris0);border:1px solid var(--gris1);border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;color:var(--azul2);cursor:pointer;">✏️ Editar</button>` : ''}
         </div>
       </div>` : '';
@@ -8801,7 +8970,13 @@ function addServicioExtra(f, colIdx, codigo) {
     return;
   }
   const ya = col.serviciosExtra.some(it => (typeof it === 'string' ? it : it.codigo) === codigo);
-  if (!ya) col.serviciosExtra.push({ codigo: codigo, metodo: 'EFECTIVO' });
+  // v132: igual que assignSlot (v128). Si este servicio YA tiene su cobro registrado (era PENDIENTE y se
+  // cobró), entra como PENDIENTE cobrado: en EFECTIVO por defecto el cuadre lo sumaba otra vez en este
+  // día además del cobro ya registrado (el mismo dinero dos veces → faltante fantasma en caja).
+  const _cobX = _cobroRegistradoDe(codigo);
+  if (!ya) col.serviciosExtra.push(_cobX
+    ? { codigo: codigo, metodo: 'PENDIENTE', cobrado: true, fechaCobro: _cobX.fecha, metodoCobro: _cobX.metodo }
+    : { codigo: codigo, metodo: _metodoInicialServicio(f) });   // v134: PENDIENTE desde el 24-oct
   _sellarColumna(f, colIdx);   // v128: sin sello, el merge podía quedarse con la columna vieja y perder el extra
   _ultimaEdicionFinanzas = Date.now();
   safeSetLS('mt_pd3', JSON.stringify(pdData));
@@ -8829,9 +9004,16 @@ function updateServicioExtraMetodo(f, colIdx, codigo, metodo) {
     alert('🔒 Este servicio extra ya se COBRÓ (está registrado en el cuaderno del día del cobro).\n\nSi cambiás el método acá, se contaría dos veces. Si el cobro se registró mal, eliminalo en el cuaderno de ese día.');
     renderPD(); return;
   }
+  // v134: rastro del cambio (antes un servicio extra cambiaba de método sin dejar constancia).
+  if (_metAct !== metodo) _logAudit(codigo, 'cambio_metodo', `servicio extra: ${_metAct} → ${metodo}`);
   col.serviciosExtra = col.serviciosExtra.map(it => {
     const c = (typeof it === 'string') ? it : it.codigo;
-    if (c === codigo) return { codigo: c, metodo: metodo };
+    if (c === codigo) {
+      const nuevo = { codigo: c, metodo: metodo };
+      if (_metAct === metodo && it && it.metodoConf) nuevo.metodoConf = it.metodoConf;
+      else _sellarConfirmacionMetodo(nuevo, metodo);   // v134: confirmación explícita del ingreso
+      return nuevo;
+    }
     return (typeof it === 'string') ? { codigo: c, metodo: 'EFECTIVO' } : it;
   });
   _sellarColumna(f, colIdx);   // v128
@@ -8904,6 +9086,12 @@ function assignSlot(f, colIdx, hora, codigo) {
     Object.values(day.columnas[colIdx].slots || {}).forEach(_sl => {
       if (_sl && _sl.reservaCodigo === codigo) { _sl.metodo = 'PENDIENTE'; _sl.cobrado = true; _sl.fechaCobro = _cob.fecha; _sl.metodoCobro = _cob.metodo; }
     });
+  } else if (_rigeReglaPendiente(f)) {
+    // v134: desde el 24-oct el servicio entra PENDIENTE de confirmar su ingreso (nunca EFECTIVO solo).
+    // Solo las celdas sin confirmación propia: un horario ya confirmado de este mismo servicio se respeta.
+    Object.values(day.columnas[colIdx].slots || {}).forEach(_sl => {
+      if (_sl && _sl.reservaCodigo === codigo && !_sl.metodoConf && !_sl.cobrado) { _sl.metodo = 'PENDIENTE'; delete _sl.metodoAntes; }
+    });
   }
   // CRÍTICO: activar ventana de gracia (bloquea polling/Realtime hardReplace) + guardar local
   // + flush inmediato. Sin esto, un sync traía la versión vieja de pdData (sin la asignación)
@@ -8927,6 +9115,7 @@ function _vaciarSlot(sl) {
   sl.costo = '';
   sl.metodo = 'EFECTIVO';
   delete sl.cobrado; delete sl.fechaCobro; delete sl.metodoCobro;
+  delete sl.metodoConf; delete sl.metodoAntes;   // v134: la confirmación era del servicio anterior, no se hereda
 }
 function deassignSlot(f, colIdx, hora) {
   if (typeof isDiaCerrado === 'function' && isDiaCerrado(f)) { // FIX F14 (2026-07-02): guard por fecha real, no por fecha visible
@@ -9015,7 +9204,9 @@ function updateSlot2(f, idx, hora, campo, valor) {
   // v128: un PENDIENTE que YA se cobró (slot.cobrado) tiene su dinero en el cobro registrado
   // (cobrosPendientes del día de cobro). Si además se le cambia el método a EFECTIVO/CUSCA/TARJETA,
   // el cuadre lo cuenta OTRA VEZ en este día (caso real: 327-157 del 10-jul-2026, $840 dos veces).
-  if (campo === 'metodo' && _slotAud.cobrado && valor !== (_slotAud.metodo || 'EFECTIVO')) {
+  // v132: además de la marca de la celda, se mira si el cobro existe en el cuaderno (como ya hace
+  // updateServicioExtraMetodo): la marca puede perderse en un merge entre dos computadoras.
+  if (campo === 'metodo' && (_slotAud.cobrado || ((_slotAud.metodo || 'EFECTIVO') === 'PENDIENTE' && _codAud && _yaCobrado(_codAud))) && valor !== (_slotAud.metodo || 'EFECTIVO')) {
     alert(`🔒 Este servicio ya se COBRÓ el ${fmtFecha(_slotAud.fechaCobro || '')} (${metodoLabel(_slotAud.metodoCobro || '')}).\n\nEl dinero ya está registrado en el cuaderno de ese día. Si cambiás el método acá, se contaría dos veces.\n\nSi el cobro se registró mal, eliminá ese cobro en el cuaderno del día del cobro y el servicio vuelve a quedar pendiente.`);
     if (typeof renderPD === 'function') renderPD();
     return;
@@ -9023,10 +9214,22 @@ function updateSlot2(f, idx, hora, campo, valor) {
   if (_codAud && campo === 'metodo' && (_slotAud.metodo || 'EFECTIVO') !== valor) {
     _logAudit(_codAud, 'cambio_metodo', `${hora}: ${_slotAud.metodo || 'EFECTIVO'} → ${valor}`);
   }
+  // v134: elegir el método a mano ES la confirmación de cómo ingresó el dinero (o volver a PENDIENTE la quita).
+  if (_codAud && campo === 'metodo' && (_slotAud.metodo || 'EFECTIVO') !== valor) _sellarConfirmacionMetodo(_slotAud, valor);
   if (_codAud && campo === 'costo' && String(_slotAud.costo || '') !== String(valor || '')) {
     _logAudit(_codAud, 'cambio_precio', `pizarra ${hora}: $${_slotAud.costo || '0'} → $${valor || '0'}`);
   }
   day.columnas[idx].slots[hora][campo] = valor;
+  // v134: el método es del SERVICIO. Una mudanza de varios horarios solo muestra el selector en el primero:
+  // sin esto, los otros quedaban PENDIENTE y el servicio seguía apareciendo "por confirmar" ya confirmado.
+  if (campo === 'metodo' && _codAud && _rigeReglaPendiente(f)) {
+    Object.keys(day.columnas[idx].slots).forEach(h2 => {
+      const s2 = day.columnas[idx].slots[h2];
+      if (h2 === hora || !s2 || s2.reservaCodigo !== _codAud || s2.cobrado) return;
+      s2.metodo = valor;
+      if (_slotAud.metodoConf) s2.metodoConf = _slotAud.metodoConf; else delete s2.metodoConf;
+    });
+  }
   _sellarColumna(f, idx);   // v117
   savePD();
   // v111: MISMO criterio que renderPD (helper único). Antes acá se recalculaba el total del día
@@ -9205,7 +9408,7 @@ function addExtraInput(valor) {
   const div = document.createElement('div');
   div.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px;';
   div.innerHTML = `
-    <input type="text" class="extra-nombre" value="${valor}" placeholder="Nombre del ayudante eventual..."
+    <input type="text" class="extra-nombre" value="${escHtml(valor)}" placeholder="Nombre del ayudante eventual..."
       list="dl-personal" autocomplete="off"
       style="flex:1;border:1.5px solid #d97706;border-radius:6px;padding:7px 10px;font-size:12px;font-family:'Barlow',sans-serif;outline:none;background:#fef9f0;">
     <button onclick="this.parentElement.remove();_extraCount--;" style="background:#fee2e2;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;color:#d42b2b;">✕</button>`;
@@ -9344,6 +9547,10 @@ function guardarColumna() {
     // se guarda con su NOMBRE CANÓNICO y su id, para que su historial no se parta en dos personas.
     const _canon = _EMP_CANON[_idEx] || ex.nombre;
     const _esDePlanta = !!_EMP_CANON[_idEx];
+    // v132: un ayudante escrito a mano que es del roster (p. ej. "mazariego") ya quedó guardado con su
+    // ficha; al reabrir el equipo su casilla aparece marcada Y además vuelve su línea escrita a mano.
+    // Era la MISMA persona dos veces y el guard bloqueaba guardar el equipo sin haber tocado nada.
+    if (_esDePlanta && miembros.some(m => _empId(m) === _idEx)) return;
     miembros.push({ nombre: _canon, empId: _idEx, pago: existingEx ? existingEx.pago : '', eventual: !_esDePlanta });
   });
 
@@ -9472,7 +9679,7 @@ function renderCuaderno() {
     } else {
       cuadPers.innerHTML = avisoDesc + pagos.map(p=>`
         <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f0f0f0;">
-          <div><span style="font-size:13px;font-weight:600;">${_nombreCorto(p.nombre)}</span><span style="font-size:11px;color:var(--gris2);margin-left:6px;">${p.equipo}</span></div>
+          <div><span style="font-size:13px;font-weight:600;">${escHtml(_nombreCorto(p.nombre))}</span><span style="font-size:11px;color:var(--gris2);margin-left:6px;">${escHtml(p.equipo)}</span></div>
           <span style="font-family:'Barlow Condensed',sans-serif;font-size:17px;font-weight:800;color:#d97706;">$${p.monto.toFixed(2)}</span>
         </div>`).join('') +
         `<div style="padding-top:8px;display:flex;justify-content:space-between;font-weight:800;"><span>TOTAL PERSONAL:</span><span style="color:#d97706;">$${totalPers.toFixed(2)}</span></div>`;
@@ -9996,7 +10203,7 @@ async function cerrarDia() {   // v129: async — el PIN de admin lo verifica el
     resumen += `✅ ${confirmados} servicio(s) completado(s)\n`;
     if (sinMarcar.length) resumen += `⚠️ ${sinMarcar.length} sin marcar como completado:\n   - ${sinMarcar.slice(0,6).join('\n   - ')}${sinMarcar.length>6?'\n   ...':''}\n`;
     if (linkHoy>0) resumen += `💳 TARJETA $${linkHoy.toFixed(2)} cae mañana en CUSCATLÁN\n`;
-    if (pendCobro>0) resumen += `🟡 ${pendCobro} cobro(s) PENDIENTE sin marcar\n`;
+    if (pendCobro>0) resumen += `🟡 ${pendCobro} servicio(s) PENDIENTE (sin cobrar o sin confirmar cómo ingresó el dinero)\n`;
     if (_sinContar.length) resumen += `🔴 CUENTAS SIN CONTAR: ${_sinContar.join(', ')}\n   El día se cerrará sin saber si esas cuentas cuadraban. Si podés, contálas antes de cerrar.\n`;
     resumen += `\n¿Cerrar el día de todos modos? No podrás editar hasta desbloquear.`;
     if (!confirm(resumen)) return;
@@ -10629,20 +10836,25 @@ function confirmarCobroModal() {
   const dayOrig = getDayData(fechaOriginal);
   let montoCobrado = 0;
   let slotMarcado = false;
-  dayOrig.columnas.forEach(col => {
+  dayOrig.columnas.forEach((col, ci) => {
     [...HORARIOS, 'otra'].forEach(h => {
       const slot = col.slots?.[h];
       if (slot && slot.reservaCodigo === codigo && slot.metodo === 'PENDIENTE' && !slot.cobrado) {
-        slot.cobrado = true;
-        slot.fechaCobro = fechaCobro;
-        slot.metodoCobro = metodoFinal;
         const res = reservas.find(r => r.codigo === codigo);
         const costoSlot = parseFloat(slot.costo) || 0;
         const costoRes = res ? parseFloat(res.costo) || 0 : 0;
         // Tomar el costo del slot si fue ingresado; si no, el de la reservación.
         // (Antes sumaba ambos, lo que duplicaba si los dos tenían el mismo valor.)
-        montoCobrado = costoSlot > 0 ? costoSlot : costoRes;
+        const _m = costoSlot > 0 ? costoSlot : costoRes;
+        // v132: sin monto no se marca nada. Antes la celda quedaba "cobrada" sin ningún cobro registrado
+        // y el pendiente desaparecía de Notificaciones.
+        if (_m <= 0) return;
+        slot.cobrado = true;
+        slot.fechaCobro = fechaCobro;
+        slot.metodoCobro = metodoFinal;
+        montoCobrado = _m;
         slotMarcado = true;
+        _sellarColumna(fechaOriginal, ci);   // v132: sin sello, el merge podía quedarse con la columna sin la marca
       }
     });
   });
@@ -10652,10 +10864,12 @@ function confirmarCobroModal() {
     dayOrig.columnas.forEach((col, ci) => {
       (col.serviciosExtra || []).forEach(it => {
         if (slotMarcado || !it || typeof it !== 'object' || it.codigo !== codigo || it.metodo !== 'PENDIENTE' || it.cobrado) return;
+        const res = reservas.find(r => r.codigo === codigo);
+        const _mx = res ? (parseFloat(res.costo) || 0) : 0;
+        if (_mx <= 0) return;   // v132: sin monto no se marca (ver arriba)
         it.cobrado = true; it.fechaCobro = fechaCobro; it.metodoCobro = metodoFinal;
         _sellarColumna(fechaOriginal, ci);
-        const res = reservas.find(r => r.codigo === codigo);
-        montoCobrado = res ? (parseFloat(res.costo) || 0) : 0;
+        montoCobrado = _mx;
         slotMarcado = true;
       });
     });
@@ -10664,7 +10878,7 @@ function confirmarCobroModal() {
     const res = reservas.find(r => r.codigo === codigo);
     // FIX F2 (2026-07-02): el fallback tampoco debe re-cobrar una reserva ya marcada.
     if (res && res._cobrado) { alert('⚠️ Este pago ya estaba registrado como cobrado.'); cerrarModalCobro(); return; }
-    if (res) {
+    if (res && (parseFloat(res.costo) || 0) > 0) {   // v132: sin monto no se marca
       res._cobrado = true;
       res._fechaCobro = fechaCobro;
       res._metodoCobro = metodoFinal;
@@ -10672,7 +10886,7 @@ function confirmarCobroModal() {
       slotMarcado = true;
     }
   }
-  if (!slotMarcado || montoCobrado <= 0) { alert('No se encontró el pago pendiente.'); return; }
+  if (!slotMarcado || montoCobrado <= 0) { alert('No se encontró el pago pendiente (o el servicio no tiene precio). No se registró nada.'); return; }
   const dayCobro = getDayData(fechaCobro);
   if (!dayCobro.cobrosPendientes) dayCobro.cobrosPendientes = [];
   dayCobro.cobrosPendientes.push({ _id:_itemId(), _ts:Date.now(), codigo, monto: montoCobrado, metodo: metodoFinal, fechaOriginal, fecha: fechaCobro });
@@ -10713,7 +10927,7 @@ function delCobroPendiente(id) {
     // que sí debe estar abierto (guard isDiaCerrado() de arriba). Queda constancia en la bitácora.
     // Revertir el slot original o la reserva
     const dayOrig = getDayData(cobro.fechaOriginal);
-    dayOrig.columnas.forEach(col => {
+    dayOrig.columnas.forEach((col, ci) => {
       [...HORARIOS, 'otra'].forEach(h => {
         const slot = col.slots?.[h];
         // FIX F13 (2026-07-02): revertir solo los slots de ESTE cobro (misma fechaCobro), no todos los del código.
@@ -10721,12 +10935,14 @@ function delCobroPendiente(id) {
           delete slot.cobrado;
           delete slot.fechaCobro;
           delete slot.metodoCobro;
+          _sellarColumna(cobro.fechaOriginal, ci);   // v132: que el merge respete la reversión
         }
       });
       // v128: lo mismo para un servicio EXTRA pendiente cobrado.
       (col.serviciosExtra || []).forEach(it => {
         if (it && typeof it === 'object' && it.codigo === cobro.codigo && it.cobrado && (!it.fechaCobro || it.fechaCobro === cobro.fecha)) {
           delete it.cobrado; delete it.fechaCobro; delete it.metodoCobro;
+          _sellarColumna(cobro.fechaOriginal, ci);   // v132
         }
       });
     });
@@ -11484,6 +11700,13 @@ function _metodoDeReserva(codigo){
       }
     }
   }
+  // v134: del 24-oct en adelante NO se supone EFECTIVO. Si el ingreso del servicio no está confirmado,
+  // el "Automático" no tiene método: se usa el del cobro ya registrado o queda PENDIENTE (el ajuste lo rechaza
+  // y pide elegir el método a mano).
+  if (r && _rigeReglaPendiente(r.fecha)) {
+    const _cb = _cobroRegistradoDe(codigo);
+    return (_cb && _real(_cb.metodo)) ? _cb.metodo : 'PENDIENTE';
+  }
   if (r && _real(r._metodoCobro)) return r._metodoCobro;
   return 'EFECTIVO';
 }
@@ -11590,7 +11813,10 @@ function confirmarAjusteCobro(){
   const fecha = (r.fecha && /^\d{4}-\d{2}-\d{2}$/.test(r.fecha)) ? r.fecha : getPDFecha();
   const montoAbs = parseFloat(document.getElementById('aj-monto').value);
   // Método AUTOMÁTICO: mismo método de pago con que se cobró la reservación (nunca PENDIENTE/CANCELADO).
-  if (metodo === 'AUTO') metodo = _metodoDeReserva(r.codigo);
+  if (metodo === 'AUTO') {
+    metodo = _metodoDeReserva(r.codigo);
+    if (metodo === 'PENDIENTE') { alert('⏳ Este servicio todavía no tiene confirmado cómo ingresó el dinero, así que el método "Automático" no sabe a qué cuenta mandar el ajuste.\n\nElegí el método a mano (EFECTIVO, CUSCA, BAC o TARJETA).'); return; }
+  }
   // v128: nunca PENDIENTE: su dinero no entraba a ninguna cuenta (el cobro del pendiente registra la BASE).
   if (metodo === 'PENDIENTE' || metodo === 'CANCELADO') { alert('⚠️ Un ajuste de cobro necesita el método con que el cliente paga (EFECTIVO, CUSCA o TARJETA).\n\nSi todavía no pagó, registrá el ajuste cuando pague.'); return; }
   if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
@@ -12288,7 +12514,8 @@ async function descargarReporteDia() {
       // el reporte FINANCIERO del día y los ajustes ya aparecen abajo como OTROS INGRESOS —
       // sumarlos también al servicio contaría el mismo dinero dos veces y rompería el cuadre.
       // El total cobrado de cada servicio se ve en su badge y en la sección MODIFICACIONES.
-      pos++; const costo = sv.base; servEq += costo;
+      // v132: una celda marcada CANCELADO no suma (igual que pizarra, cuaderno y cuadre); se lista igual.
+      pos++; const costo = sv.base; if (sv.metodo !== 'CANCELADO') servEq += costo;
       const horaLabel = sv.extra ? (r.hora||'—') : (sv.hora==='otra' ? (r.hora||'—') : sv.hora);
       return `<div style="border-bottom:0.4pt dotted #aaa;padding:1.2mm 0;">
         <div style="display:flex;align-items:center;gap:1.5mm;margin-bottom:0.5mm;"><span style="background:${sv.extra?'#a16207':'#1a3a6b'};color:#fff;font-size:7.5pt;font-weight:800;padding:0 1.5mm;border-radius:2px;">#${pos}</span><span style="font-weight:800;font-size:9pt;">${esc(horaLabel)}</span>${sv.extra?'<span style="font-size:6.5pt;font-weight:800;color:#a16207;border:0.5pt solid #a16207;border-radius:2px;padding:0 1mm;">EXTRA</span>':''}<span style="margin-left:auto;font-weight:800;font-size:9pt;">$${costo.toFixed(2)}</span></div>
@@ -13478,7 +13705,7 @@ function renderComisiones() {
   }).join('');
 
   // Total row
-  const totalServicios = resMes.length;
+  const totalServicios = resMes.filter(r => r.estado !== 'cancelado').length;   // v132: igual que las tarjetas por vendedor (v46)
   const totalMonto = resMes.reduce((s,r) => s + (r.estado === 'cancelado' ? 0 : (parseFloat(r.costo)||0)), 0);
   const sinVendedor = resMes.filter(r => !r.vendedor).length;
   cards.innerHTML += `<div style="background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--shadow);border-left:4px solid var(--rojo);">
@@ -13533,7 +13760,11 @@ function renderNotificaciones() {
   // el método de pago lo decide el usuario en la pizarra, independiente del tipo de cliente.
   const pagosPendientes = [];
   const _codigosYaAgregados = new Set();
+  // v134: del 24-oct en adelante TODO servicio nace PENDIENTE (falta confirmar el ingreso). Uno que todavía
+  // no se hizo (fecha futura) no tiene nada que confirmar: no se lista hasta su día.
+  const _hoyNotif = _hoyISO();
   Object.entries(pdData).forEach(([fecha, day]) => {
+    if (_rigeReglaPendiente(fecha) && fecha > _hoyNotif) return;
     (day.columnas || []).forEach(col => {
       [...HORARIOS, 'otra'].forEach(h => {
         const slot = col.slots?.[h];
@@ -13612,7 +13843,7 @@ function renderNotificaciones() {
   // --- PAGOS PENDIENTES (en rojo, primero) ---
   if (pagosPendientes.length > 0 || empresasPendientes.length > 0) {
     html += `<div style="background:#fee2e2;border:2px solid #d42b2b;border-radius:10px;padding:12px 14px;margin-bottom:14px;">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:#991b1b;margin-bottom:8px;">💰 PAGOS PENDIENTES POR COBRAR</div>`;
+      <div style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:800;color:#991b1b;margin-bottom:8px;">💰 PAGOS PENDIENTES — COBRAR O CONFIRMAR INGRESO</div>`;
     
     const todosPagos = [
       ...pagosPendientes.map(p => ({r: p.reserva, fecha: p.fecha, equipo: p.equipo, tipo: 'pizarra'})),
