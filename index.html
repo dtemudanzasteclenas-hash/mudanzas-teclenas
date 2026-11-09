@@ -3064,7 +3064,7 @@ async function cerrarSesion() {
 // ==================== DATA ==
 // ==================== DATA (continued) ====================
 // Version de la app — si cambia, limpia cache local de datos volatiles
-const APP_VERSION = '2026-10-23-v134';
+const APP_VERSION = '2026-11-09-v135';
 // Escape HTML global (seguridad): evita que datos de cliente (nombre, dirección, notas) con
 // caracteres < > & " ' rompan el HTML o ejecuten código al pintarse en innerHTML.
 // Usar SIEMPRE al interpolar texto libre del cliente en renders de la UI viva.
@@ -6500,7 +6500,7 @@ function verRes(idxOCodigo) {
     msg += `\n📫 *Servicio de empaque de artículos en cajas incluido.*`;
     if (r.empaque && parseInt(r.empaque.percheros) > 0) msg += `\n👔 *Se envían ${r.empaque.percheros} perchero(s) metálico(s) para transportar ropa.*`;
   }  msg += `\n\nEl pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.\n\n`;
-  msg += `Le facilito nuestra información bancaria:\n*BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 346-301-000004045\n- mudanzasteclenas@hotmail.com\n\n*BANCO DE AMÉRICA CENTRAL (BAC)*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 201659943\n\n`;
+  msg += `Le facilito nuestra información bancaria:\n*BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 346-301-000004045\n- mudanzasteclenas@hotmail.com\n\n*BANCO AGRÍCOLA*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 005280005521\n\n*BANCO DE AMÉRICA CENTRAL (BAC)*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 201659943\n\n`;
   // Vendedor: usar el de la reserva si existe, sino el usuario logueado
   const vendedorWA = (r.vendedor || (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '').trim();
   const firmaWA = vendedorWA
@@ -7067,7 +7067,7 @@ function generarMensajeWhatsApp(r) {
     if (r.empaque && parseInt(r.empaque.percheros) > 0) msg += `\n👔 *Se envían ${r.empaque.percheros} perchero(s) metálico(s) para transportar ropa.*`;
   }
   msg += `\n\nEl pago del movimiento se realiza en efectivo al finalizar el transporte, por transferencia bancaria antes de terminar la descarga de la unidad, o con sus tarjetas de crédito y débito VISA o Mastercard, por botón de pago electrónico por este medio.\n\n`;
-  msg += `Le facilito nuestra información bancaria:\n*BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 346-301-000004045\n- mudanzasteclenas@hotmail.com\n\n*BANCO DE AMÉRICA CENTRAL (BAC)*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 201659943\n\n`;
+  msg += `Le facilito nuestra información bancaria:\n*BANCO CUSCATLÁN*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 346-301-000004045\n- mudanzasteclenas@hotmail.com\n\n*BANCO AGRÍCOLA*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 005280005521\n\n*BANCO DE AMÉRICA CENTRAL (BAC)*\n- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.\n- Cuenta corriente, persona jurídica\n- Número de cuenta: 201659943\n\n`;
   const vendedor = (r.vendedor || (typeof usuarioActual !== 'undefined' && usuarioActual && usuarioActual.nombre) || '').trim();
   const firma = vendedor
     ? `Mi nombre es *${vendedor}*, cualquier consulta estamos para servirle. ¡Esperamos que tenga un excelente día! 😊`
@@ -8090,24 +8090,29 @@ function ensureDatalistPersonal() {
 }
 
 const HORARIOS = ['8:00 AM','11:00 AM','2:30 PM'];
-const METODOS_PAGO = ['EFECTIVO','CUSCA','BAC','LINK','PENDIENTE','CANCELADO'];
+const METODOS_PAGO = ['EFECTIVO','CUSCA','BAC','AGRICOLA','LINK','PENDIENTE','CANCELADO'];
 const LINK_NETO = 0.96228;    // FIX (2026-07-04): comision real link Cuscatlan = 3.772% medida en conciliacion de junio (antes se asumia 5%)
 const LINK_COMISION = 1 - LINK_NETO;
 // v102 (2026-07-17): CAMBIO 3 — la palabra "LINK" se MUESTRA al usuario como "TARJETA"
 // (link de pago, POS electronico o cobro con tarjeta en oficina). El VALOR interno sigue
 // siendo 'LINK' en datos/logica/Supabase para NO romper miles de registros historicos; solo
 // cambia la ETIQUETA visible. Usar metodoLabel(m) en TODO texto mostrado al usuario.
-const METODO_LABELS = { EFECTIVO:'EFECTIVO', CUSCA:'CUSCA', BAC:'BAC', LINK:'TARJETA', PENDIENTE:'PENDIENTE', CANCELADO:'CANCELADO' };
+const METODO_LABELS = { EFECTIVO:'EFECTIVO', CUSCA:'CUSCA', BAC:'BAC', AGRICOLA:'AGRÍCOLA', LINK:'TARJETA', PENDIENTE:'PENDIENTE', CANCELADO:'CANCELADO' };
 function metodoLabel(m){ return METODO_LABELS[m] || m || ''; }
 // Metodos de pago para OTROS INGRESOS (CAMBIO 2): mismo sistema que reservaciones, sin CANCELADO.
-const METODOS_OI = ['EFECTIVO','CUSCA','BAC','LINK','PENDIENTE'];
-const COLOR_METODO = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', BAC:'#e11d48', LINK:'#7c3aed', PENDIENTE:'#d97706', CANCELADO:'#991b1b' };
+const METODOS_OI = ['EFECTIVO','CUSCA','BAC','AGRICOLA','LINK','PENDIENTE'];
+const COLOR_METODO = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', BAC:'#e11d48', AGRICOLA:'#0f766e', LINK:'#7c3aed', PENDIENTE:'#d97706', CANCELADO:'#991b1b' };
 // Deriva un metodo de pago a partir del 'destino' (cuenta) de registros VIEJOS sin metodo.
-function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : d==='BAC' ? 'BAC' : 'EFECTIVO'; }
+function _metodoDesdeDestino(d){ return d==='CUSCATLAN' ? 'CUSCA' : d==='BAC' ? 'BAC' : d==='AGRICOLA' ? 'AGRICOLA' : 'EFECTIVO'; }
 // v133 (2026-10-10): cuenta nueva de BANCO DE AMÉRICA CENTRAL. Un pago por BAC entra a la cuenta BAC
 // el MISMO día (igual que CUSCA a CUSCATLAN), nunca a CUSCATLAN. TARJETA sigue cayendo en CUSCATLAN.
 // Cuenta (bolsa) a la que entra cada método. Fuente única para el 'destino' de otros ingresos.
-function _cuentaDeMetodo(m){ return m==='EFECTIVO' ? 'CAJA CHICA' : (m==='CUSCA'||m==='LINK') ? 'CUSCATLAN' : m==='BAC' ? 'BAC' : null; }
+function _cuentaDeMetodo(m){ return m==='EFECTIVO' ? 'CAJA CHICA' : (m==='CUSCA'||m==='LINK') ? 'CUSCATLAN' : m==='BAC' ? 'BAC' : m==='AGRICOLA' ? 'AGRICOLA' : null; }
+// v135 (2026-11-09): cuenta nueva de BANCO AGRÍCOLA (Cta. Cte. 005280005521, abierta 09-nov-2026). Mismo
+// trato que BAC: lo cobrado por AGRICOLA entra a la cuenta AGRICOLA el MISMO día, nunca a CUSCATLAN.
+// Cuentas de BANCO (bolsas donde el dinero llega por transferencia/depósito): fuente única.
+const METODOS_BANCO = ['CUSCA','BAC','AGRICOLA'];
+function _esMetodoBanco(m){ return METODOS_BANCO.indexOf(m) >= 0; }
 // v134 (2026-10-23): REGLA DE PEDRO — desde el 24-oct-2026 todo servicio de la pizarra entra como
 // PENDIENTE de confirmar su ingreso. El programa ya NO pone EFECTIVO solo: el método cambia únicamente
 // cuando una persona elige cómo entró el dinero (queda sellado en `metodoConf` + bitácora). PENDIENTE
@@ -8173,10 +8178,10 @@ function _aplicarReglaPendienteYGuardar(){
 // cuenta elegida (recalcCerramos ya trabajaba con las 3 cuentas, solo faltaba poder elegirla).
 // Mantener el mismo orden y los mismos nombres exactos que CUENTAS: los saldos se cruzan por
 // nombre (gastosPorFondo[c]) y un rótulo distinto dejaría el gasto sin descontar de nada.
-const FONDOS = ['CAJA CHICA','GUARDADO','CUSCATLAN','BAC'];
+const FONDOS = ['CAJA CHICA','GUARDADO','CUSCATLAN','BAC','AGRICOLA'];
 // Color por fondo — solo ayuda visual para no equivocarse de bolsa al anotar un gasto.
-const COLOR_FONDO = { 'CAJA CHICA':'#16a34a', 'GUARDADO':'#7c3aed', 'CUSCATLAN':'#1e4fa0', 'BAC':'#e11d48' };
-const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN','BAC'];
+const COLOR_FONDO = { 'CAJA CHICA':'#16a34a', 'GUARDADO':'#7c3aed', 'CUSCATLAN':'#1e4fa0', 'BAC':'#e11d48', 'AGRICOLA':'#0f766e' };
+const CUENTAS = ['CAJA CHICA','GUARDADO','CUSCATLAN','BAC','AGRICOLA'];
 
 // Data structure: { fecha: { columnas:[{nombre,camion,tipo,miembros:[{nombre,pago}], slots:{hora:{carga,descarga,costo,metodo}}}], gastos:[{monto,titulo,desc,fondo}], cuentas:{abrimos:{},cerramos:{}} } }
 let pdData; try { pdData = JSON.parse(localStorage.getItem('mt_pd3') || '{}'); } catch(e) { pdData = {}; }
@@ -8613,7 +8618,7 @@ function buildColumna2(col, idx, f) {
   // Build each horario slot
   const slotsHtml = HORARIOS.map((h, hi) => {
     const slot = col.slots[h] || {costo:'',metodo:'EFECTIVO',reservaCodigo:''};
-    const MC = {EFECTIVO:'#16a34a',CUSCA:'#1e4fa0',BAC:'#e11d48',LINK:'#7c3aed',PENDIENTE:'#d97706',CANCELADO:'#991b1b'};
+    const MC = {EFECTIVO:'#16a34a',CUSCA:'#1e4fa0',BAC:'#e11d48',AGRICOLA:'#0f766e',LINK:'#7c3aed',PENDIENTE:'#d97706',CANCELADO:'#991b1b'};
     const mc = MC[slot.metodo] || '#16a34a';
     const sid = `sl${idx}h${hi}`;
 
@@ -8830,8 +8835,8 @@ function buildColumna2(col, idx, f) {
   [...HORARIOS, 'otra'].forEach(h => { const c = col.slots?.[h]?.reservaCodigo; if (c) _codsSlotsPropios.add(c); });
   const resDiaParaExtra = reservas.filter(r => r.fecha === f && r.estado !== 'cancelado'
     && !codsExtra.has(r.codigo) && !asignadas.has(r.codigo) && !_codsSlotsPropios.has(r.codigo));
-  const _METODOS_EXTRA = ['EFECTIVO','CUSCA','BAC','LINK','PENDIENTE'];
-  const _colorMetodoExtra = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', BAC:'#e11d48', LINK:'#7c3aed', PENDIENTE:'#d97706' };
+  const _METODOS_EXTRA = ['EFECTIVO','CUSCA','BAC','AGRICOLA','LINK','PENDIENTE'];
+  const _colorMetodoExtra = { EFECTIVO:'#16a34a', CUSCA:'#1e4fa0', BAC:'#e11d48', AGRICOLA:'#0f766e', LINK:'#7c3aed', PENDIENTE:'#d97706' };
   const serviciosExtraHtml = `
     <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #d97706;">
       <div style="font-size:10px;font-weight:800;color:#d97706;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">⭐ Servicios extra (fuera de cuota)</div>
@@ -9329,6 +9334,7 @@ function renderStats2(f) {
       <div class="sc c"><div class="sc-lbl">Efectivo</div><div class="sc-val" style="color:#16a34a;font-size:22px;">$${totalEfectivo.toFixed(2)}</div><div class="sc-sub">en mano</div></div>
       <div class="sc c"><div class="sc-lbl">CUSCA</div><div class="sc-val" style="color:#1e4fa0;font-size:20px;">$${totalCusca.toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
       <div class="sc c"><div class="sc-lbl">BAC</div><div class="sc-val" style="color:#e11d48;font-size:20px;">$${(t.metodos.BAC||0).toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
+      <div class="sc c"><div class="sc-lbl">AGRÍCOLA</div><div class="sc-val" style="color:#0f766e;font-size:20px;">$${(t.metodos.AGRICOLA||0).toFixed(2)}</div><div class="sc-sub">cae el mismo día</div></div>
       <div class="sc a"><div class="sc-lbl">TARJETA CUSCATLÁN</div><div class="sc-val" style="color:#7c3aed;font-size:20px;">$${linkNeto.toFixed(2)}</div><div class="sc-sub">neto -3.772% · cae sig. día hábil<br>acumulado banco: $${_calcLinkPorDia(f,13).total.toFixed(2)}</div></div>
       <div class="sc d"><div class="sc-lbl">Pendiente</div><div class="sc-val" style="color:#d97706;font-size:22px;">$${totalPendiente.toFixed(2)}</div><div class="sc-sub">por cobrar</div></div>
       <div class="sc b"><div class="sc-lbl">Neto estimado</div><div class="sc-val" style="color:${neto>=0?'#16a34a':'#d42b2b'};font-size:22px;">$${neto.toFixed(2)}</div><div class="sc-sub">tras gastos y personal</div></div>`;
@@ -9689,7 +9695,7 @@ function renderCuaderno() {
   // Ingresos por método
   const cuadIng = document.getElementById('cuad-ingresos');
   if (cuadIng) {
-    const ing = {EFECTIVO:0,CUSCA:0,BAC:0,LINK:0,PENDIENTE:0,CANCELADO:0};
+    const ing = {EFECTIVO:0,CUSCA:0,BAC:0,AGRICOLA:0,LINK:0,PENDIENTE:0,CANCELADO:0};
     // FIX F7 (2026-07-02): incluir 'otra' hora y servicios extra — el cuadre (recalcCerramos)
     // YA los cuenta desde v87/v88; el cuaderno mostraba menos que el cerramos. Dedupe global.
     const contadosIng = new Set();
@@ -9728,12 +9734,13 @@ function renderCuaderno() {
         <span style="font-size:13px;font-weight:600;">EFECTIVO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#16a34a;">$${ing.EFECTIVO.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">CUSCA (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#1e4fa0;">$${ing.CUSCA.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">BAC (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#e11d48;">$${ing.BAC.toFixed(2)}</span>
+        <span style="font-size:13px;font-weight:600;">AGRÍCOLA (banco)</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#0f766e;">$${ing.AGRICOLA.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">TARJETA <span style="font-size:10px;font-weight:500;color:#7c3aed;">(bruto $${ing.LINK.toFixed(2)} − 3.772% = neto)</span></span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#7c3aed;">$${linkNeto.toFixed(2)}</span>
         <span style="font-size:13px;font-weight:600;">PENDIENTE</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#d97706;">$${ing.PENDIENTE.toFixed(2)}</span>
         ${ing.CANCELADO>0?`<span style="font-size:13px;font-weight:600;color:#991b1b;">CANCELADO</span><span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:800;color:#991b1b;text-decoration:line-through;">$${ing.CANCELADO.toFixed(2)}</span>`:''}
         <div style="grid-column:1/-1;border-top:2px solid #1a2236;padding-top:6px;display:flex;justify-content:space-between;align-items:center;">
           <span style="font-weight:800;">TOTAL DEL DÍA <span style="font-size:10px;font-weight:600;color:#6b7280;">(incluye pendiente)</span>:</span>
-          <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:#16a34a;">$${(ing.EFECTIVO+ing.CUSCA+ing.BAC+linkNeto+ing.PENDIENTE).toFixed(2)}</span>
+          <span style="font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:900;color:#16a34a;">$${(ing.EFECTIVO+ing.CUSCA+ing.BAC+ing.AGRICOLA+linkNeto+ing.PENDIENTE).toFixed(2)}</span>
         </div>
       </div>`;
   }
@@ -10664,12 +10671,12 @@ function updateOtroIngreso(id, campo, val) {
   // v128: un AJUSTE de cobro no puede pasar a PENDIENTE (su dinero dejaría de contar y el cobro del
   // pendiente no lo recupera, porque registra solo la BASE).
   if (campo === 'metodo' && g.ajuste && (val === 'PENDIENTE' || val === 'CANCELADO')){
-    alert('⚠️ Un ajuste de cobro no puede quedar PENDIENTE: ese dinero no entraría a ninguna cuenta. Elegí EFECTIVO, CUSCA o TARJETA.');
+    alert('⚠️ Un ajuste de cobro no puede quedar PENDIENTE: ese dinero no entraría a ninguna cuenta. Elegí EFECTIVO, CUSCA, BAC, AGRÍCOLA o TARJETA.');
     try { renderOtrosIngresos(); } catch(e) {}
     return;
   }
-  if (campo === 'metodo' && val !== _PROPINA_METODO_UNICO && _esPropinaTexto(g)){
-    alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina registrada en el programa es siempre dinero DEPOSITADO en CUSCATLÁN, así que no se le puede poner ' + metodoLabel(val) + '.\n\nSi esta propina en realidad la recibió el personal en efectivo, no corresponde tenerla como ingreso: borrala con el 🗑 (o invalidala desde el cuadro de auditoría si vino de un ajuste de cobro).');
+  if (campo === 'metodo' && !_esMetodoPropina(val) && _esPropinaTexto(g)){
+    alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina registrada en el programa es siempre dinero DEPOSITADO en un BANCO (' + _PROPINA_METODOS_TXT + '), así que no se le puede poner ' + metodoLabel(val) + '.\n\nSi esta propina en realidad la recibió el personal en efectivo, no corresponde tenerla como ingreso: borrala con el 🗑 (o invalidala desde el cuadro de auditoría si vino de un ajuste de cobro).');
     renderOtrosIngresos();
     return;
   }
@@ -11089,7 +11096,7 @@ function _serviciosColumna(col, vistos){
 // Método CANCELADO: no produce dinero, sale del total (se guarda aparte para poder mostrarlo).
 function _totalizarServicios(lista){
   const t = { base:0, ajustes:0, vigente:0, cancelado:0,
-              metodos:{EFECTIVO:0, CUSCA:0, BAC:0, LINK:0, PENDIENTE:0} };
+              metodos:{EFECTIVO:0, CUSCA:0, BAC:0, AGRICOLA:0, LINK:0, PENDIENTE:0} };
   (lista||[]).forEach(s => {
     if (s.metodo === 'CANCELADO') { t.cancelado += s.base; return; }
     t.base += s.base;
@@ -11264,11 +11271,19 @@ function _esPropinaTexto(g){
 // al banco un neto de TARJETA que no existe) y taparia un faltante real.
 // Se aplica en los DOS unicos lugares donde se puede elegir el metodo de un ajuste:
 // confirmarAjusteCobro (al registrarlo) y updateOtroIngreso (al cambiarlo despues, a mano).
-const _PROPINA_METODO_UNICO = 'CUSCA';
+// v135 (2026-11-09, Pedro): la regla era "solo CUSCA" porque CUSCATLÁN era la ÚNICA cuenta bancaria.
+// Hoy hay tres (CUSCATLÁN, BAC, AGRÍCOLA) y el cliente puede depositar la propina en cualquiera.
+// La ESENCIA de la regla no cambia: una propina solo se registra si entró a un BANCO (nunca
+// EFECTIVO, nunca TARJETA/LINK — que difiere un neto —, nunca PENDIENTE). Sigue saliendo del
+// efectivo de CAJA CHICA al pagarla al personal.
+const _PROPINA_METODOS = METODOS_BANCO;                 // ['CUSCA','BAC','AGRICOLA']
+const _PROPINA_METODO_UNICO = 'CUSCA';                  // método por defecto al elegir "Propina" (compatibilidad)
+function _esMetodoPropina(m){ return _PROPINA_METODOS.indexOf(m) >= 0; }
+const _PROPINA_METODOS_TXT = 'CUSCA, BAC o AGRÍCOLA';
 function _esPropinaAjuste(tipoMod, motivo, desc, titulo){
   return _esPropinaTexto({ ajuste:true, tipoMod: tipoMod, motivo: motivo, desc: desc, titulo: titulo });
 }
-// Propinas del dia registradas FUERA de la regla (metodo distinto de CUSCA). Solo LEE: sirve para
+// Propinas del dia registradas FUERA de la regla (metodo que no es de BANCO). Solo LEE: sirve para
 // avisar en el panel. No corrige registros historicos: eso lo decide Pedro dia por dia.
 function _propinasFueraDeRegla(f){
   const day = pdData && pdData[f];
@@ -11276,7 +11291,7 @@ function _propinasFueraDeRegla(f){
   ((day && day.otrosIngresos) || []).forEach(g => {
     if (!g || g.anulado || !_esPropinaTexto(g)) return;
     const met = g.metodo || _metodoDesdeDestino(g.destino);
-    if (met && met !== _PROPINA_METODO_UNICO) out.push({ g, monto: parseFloat(g.monto)||0, metodo: met });
+    if (met && !_esMetodoPropina(met)) out.push({ g, monto: parseFloat(g.monto)||0, metodo: met });
   });
   return out;
 }
@@ -11287,9 +11302,11 @@ function _propinasBancoDelDia(f){
   ((day && day.otrosIngresos) || []).forEach(g => {
     if (!g || g.anulado || !_esPropinaTexto(g)) return;
     const met = g.metodo || '';
-    const alBanco = (met === 'CUSCA' || met === 'LINK') || (!met && g.destino === 'CUSCATLAN');
+    // v135: cualquier cuenta de BANCO cuenta como "entró al banco" (CUSCA, BAC, AGRÍCOLA); TARJETA
+    // se sigue mostrando (histórico) con la aclaración del neto diferido.
+    const alBanco = (_esMetodoPropina(met) || met === 'LINK') || (!met && (g.destino === 'CUSCATLAN' || g.destino === 'BAC' || g.destino === 'AGRICOLA'));
     if (!alBanco) return;
-    out.push({ g, monto: parseFloat(g.monto)||0, metodo: met || 'CUSCA' });
+    out.push({ g, monto: parseFloat(g.monto)||0, metodo: met || _metodoDesdeDestino(g.destino) });
   });
   return out;
 }
@@ -11610,7 +11627,7 @@ function renderPropinasBanco(){
       ? ' <span title="Ya hay otra propina igual (mismo servicio y mismo monto) este día. Revisá que no esté anotada dos veces." style="font-size:9px;font-weight:900;color:#fff;background:#d42b2b;border-radius:8px;padding:0 5px;">⚠ POSIBLE DUPLICADO</span>'
       : '';
     return `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed #ede9fe;align-items:center;">
-      <span>${cod} ${quien}${it.metodo==='LINK'?' <span style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 4px;font-weight:800;">TARJETA</span>':''}${avisoRep}</span>
+      <span>${cod} ${quien}${it.metodo==='LINK'?' <span style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 4px;font-weight:800;">TARJETA</span>':(it.metodo&&it.metodo!=='CUSCA'?' <span style="font-size:9px;background:'+(it.metodo==='BAC'?'#ffe4e6':'#ccfbf1')+';color:'+(COLOR_METODO[it.metodo]||'#111')+';border-radius:4px;padding:1px 4px;font-weight:800;">'+escHtml(metodoLabel(it.metodo))+'</span>':'')}${avisoRep}</span>
       <span style="display:flex;align-items:center;gap:6px;">${btn}<strong style="color:#16a34a;">+$${it.monto.toFixed(2)}</strong></span></div>`;
   }).join('');
   const sinRevisar = banco.filter(it => !_propinaVerificada(it.g));
@@ -11626,7 +11643,7 @@ function renderPropinasBanco(){
   cont.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
       <div>
-        <div style="font-size:10px;font-weight:800;color:#6d28d9;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">🏦 Ingresó al banco (Cuscatlán)</div>
+        <div style="font-size:10px;font-weight:800;color:#6d28d9;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">🏦 Ingresó al banco (Cuscatlán · BAC · Agrícola)</div>
         ${filaBanco || '<div style="color:var(--gris2);">Nada registrado.</div>'}
         <div style="display:flex;justify-content:space-between;margin-top:6px;font-weight:900;"><span>Total</span><span style="color:#16a34a;">$${totBanco.toFixed(2)}</span></div>
         ${hayTarjeta ? '<div style="font-size:9px;color:var(--gris2);margin-top:2px;">Las de TARJETA se muestran en bruto; el neto (96.228%) entra al banco al día siguiente.</div>' : ''}
@@ -11639,7 +11656,7 @@ function renderPropinasBanco(){
     </div>
     <div style="margin-top:10px;">${sem}</div>
     ${(gastoManual.length && totEfectivo > 0) ? `<div style="margin-top:8px;background:#fee2e2;border-left:4px solid #d42b2b;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#991b1b;font-weight:700;">⚠ POSIBLE PROPINA DESCONTADA DOS VECES de CAJA CHICA: además de las casillas de propina de la pizarra ($${totEfectivo.toFixed(2)}) hay ${gastoManual.length} gasto(s) que dicen "propina" (${gastoManual.map(x=>escHtml(x.g.titulo||'')+' $'+x.monto.toFixed(2)).join(', ')}). Si es el mismo dinero, dejá UNO solo.</div>` : ''}
-    ${_propinasFueraDeRegla(f).length ? `<div style="margin-top:8px;background:#fee2e2;border-left:4px solid #d42b2b;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#991b1b;font-weight:700;">⚠ PROPINA FUERA DE LA REGLA: ${_propinasFueraDeRegla(f).map(x=>escHtml(x.g.resCodigo||x.g.titulo||'')+' $'+x.monto.toFixed(2)+' como '+escHtml(metodoLabel(x.metodo))).join(', ')}. Una propina solo se registra cuando la depositaron en CUSCATLÁN; si esa la recibió el personal en efectivo, no debería estar como ingreso.</div>` : ''}
+    ${_propinasFueraDeRegla(f).length ? `<div style="margin-top:8px;background:#fee2e2;border-left:4px solid #d42b2b;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#991b1b;font-weight:700;">⚠ PROPINA FUERA DE LA REGLA: ${_propinasFueraDeRegla(f).map(x=>escHtml(x.g.resCodigo||x.g.titulo||'')+' $'+x.monto.toFixed(2)+' como '+escHtml(metodoLabel(x.metodo))).join(', ')}. Una propina solo se registra cuando la depositaron en un banco (CUSCATLÁN, BAC o AGRÍCOLA); si esa la recibió el personal en efectivo, no debería estar como ingreso.</div>` : ''}
     ${sinRevisar.length ? `<div style="margin-top:8px;background:#fef9c3;border-left:4px solid #d97706;border-radius:0 8px 8px 0;padding:8px 12px;font-size:11px;color:#854d0e;font-weight:700;">🔎 ${sinRevisar.length} propina(s) del banco SIN REVISAR por $${sinRevisar.reduce((t,x)=>t+x.monto,0).toFixed(2)}. Tocá "sin revisar" cuando confirmes que ese dinero entró a la cuenta (transferencia u otro medio). El programa no suma nada por su cuenta: solo deja constancia.</div>` : ''}
     <div style="margin-top:6px;font-size:11px;color:var(--gris2);text-align:right;">Mes ${mes}: al banco $${mesBanco.toFixed(2)} · en efectivo $${mesEfectivo.toFixed(2)}</div>`;
 }
@@ -11744,8 +11761,18 @@ function _ajusteTipoChange(){
   // (solo se registran las depositadas en el banco). Al cambiar a otro tipo se vuelve a liberar.
   const met = document.getElementById('aj-metodo');
   if (met){
-    if (t && t.value === 'Propina'){ met.value = _PROPINA_METODO_UNICO; met.disabled = true; met.title = 'Las propinas solo se registran cuando se depositaron en CUSCATLÁN.'; }
-    else if (met.disabled){ met.disabled = false; met.value = 'AUTO'; met.title = ''; }
+    // v135: la propina puede entrar a CUALQUIER banco (CUSCA, BAC, AGRÍCOLA): se dejan solo esas
+    // opciones habilitadas (antes se fijaba CUSCA y se bloqueaba el selector).
+    const opts = Array.from(met.options || []);
+    if (t && t.value === 'Propina'){
+      opts.forEach(o => { o.disabled = !_esMetodoPropina(o.value); });
+      if (!_esMetodoPropina(met.value)) met.value = _PROPINA_METODO_UNICO;
+      met.disabled = false; met.dataset.propina = '1';
+      met.title = 'Las propinas solo se registran cuando se depositaron en un banco (' + _PROPINA_METODOS_TXT + ').';
+    } else if (met.dataset.propina){
+      opts.forEach(o => { o.disabled = false; });
+      met.disabled = false; met.value = 'AUTO'; met.title = ''; delete met.dataset.propina;
+    }
   }
   if (t && t.value === 'Descuento') setAjusteSigno('-');
   else if (t && _ajusteSigno === '-' && (t.value==='Servicio adicional'||t.value==='Venta de cajas'||t.value==='Venta de plástico stretch'||t.value==='Recargo'||t.value==='Propina')) setAjusteSigno('+');
@@ -11783,7 +11810,7 @@ function abrirModificarCosto(){
   const set = (id,val)=>{ const e=document.getElementById(id); if(e) e.value=val; };
   set('aj-tipo','Servicio adicional'); set('aj-monto',''); set('aj-metodo','AUTO'); set('aj-motivo','');
   // v120: soltar el bloqueo que deja la regla de las propinas si el modal se cerró con ese tipo.
-  try { const _m = document.getElementById('aj-metodo'); if (_m){ _m.disabled = false; _m.title = ''; } } catch(e){}
+  try { const _m = document.getElementById('aj-metodo'); if (_m){ _m.disabled = false; _m.title = ''; Array.from(_m.options||[]).forEach(o => { o.disabled = false; }); delete _m.dataset.propina; } } catch(e){}  // v135: también las opciones
   _renderAjusteInfo(r);
   setAjusteSigno('+');
   closeVer();
@@ -11815,15 +11842,15 @@ function confirmarAjusteCobro(){
   // Método AUTOMÁTICO: mismo método de pago con que se cobró la reservación (nunca PENDIENTE/CANCELADO).
   if (metodo === 'AUTO') {
     metodo = _metodoDeReserva(r.codigo);
-    if (metodo === 'PENDIENTE') { alert('⏳ Este servicio todavía no tiene confirmado cómo ingresó el dinero, así que el método "Automático" no sabe a qué cuenta mandar el ajuste.\n\nElegí el método a mano (EFECTIVO, CUSCA, BAC o TARJETA).'); return; }
+    if (metodo === 'PENDIENTE') { alert('⏳ Este servicio todavía no tiene confirmado cómo ingresó el dinero, así que el método "Automático" no sabe a qué cuenta mandar el ajuste.\n\nElegí el método a mano (EFECTIVO, CUSCA, BAC, AGRÍCOLA o TARJETA).'); return; }
   }
   // v128: nunca PENDIENTE: su dinero no entraba a ninguna cuenta (el cobro del pendiente registra la BASE).
-  if (metodo === 'PENDIENTE' || metodo === 'CANCELADO') { alert('⚠️ Un ajuste de cobro necesita el método con que el cliente paga (EFECTIVO, CUSCA o TARJETA).\n\nSi todavía no pagó, registrá el ajuste cuando pague.'); return; }
+  if (metodo === 'PENDIENTE' || metodo === 'CANCELADO') { alert('⚠️ Un ajuste de cobro necesita el método con que el cliente paga (EFECTIVO, CUSCA, BAC, AGRÍCOLA o TARJETA).\n\nSi todavía no pagó, registrá el ajuste cuando pague.'); return; }
   if (isNaN(montoAbs) || montoAbs <= 0){ alert('Ingresá un monto mayor que 0.'); return; }
   // REGLA DE ORO DE LAS PROPINAS (v120): una propina solo se registra si la DEPOSITARON en
   // CUSCATLÁN. La que el cliente da en efectivo no se registra — nunca pasa por la empresa.
-  if (_esPropinaAjuste(tipo, motivo, motivo, '') && metodo !== _PROPINA_METODO_UNICO){
-    alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina solo se registra acá cuando la DEPOSITARON en la cuenta de CUSCATLÁN, así que su método tiene que ser CUSCA (estabas por guardarla como ' + metodoLabel(metodo) + ').\n\nSi el cliente le dio la propina al personal EN EFECTIVO, NO se registra: ese dinero nunca entró a la empresa. Solo se anota en la casilla 🪙 de la pizarra lo que la empresa pagó de su caja.');
+  if (_esPropinaAjuste(tipo, motivo, motivo, '') && !_esMetodoPropina(metodo)){
+    alert('🪙 REGLA DE LAS PROPINAS\n\nUna propina solo se registra acá cuando la DEPOSITARON en una cuenta de BANCO, así que su método tiene que ser ' + _PROPINA_METODOS_TXT + ' (estabas por guardarla como ' + metodoLabel(metodo) + ').\n\nSi el cliente le dio la propina al personal EN EFECTIVO, NO se registra: ese dinero nunca entró a la empresa. Solo se anota en la casilla 🪙 de la pizarra lo que la empresa pagó de su caja.');
     return;
   }
   // CIERRE DE DÍA: solo bloquea si el DÍA DEL SERVICIO ya está cerrado (v107).
@@ -12071,7 +12098,7 @@ function buildTitulosDatalist() {
 function calcIngresosServiciosPorCuenta(day) {
   // EFECTIVO → CAJA CHICA, CUSCA → CUSCATLAN
   // LINK → NO se suma hoy (cae al día siguiente en CUSCATLAN)
-  const ing = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, '_LINK_PENDIENTE':0};
+  const ing = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, 'AGRICOLA':0, '_LINK_PENDIENTE':0};
   const slotCodigos = new Set(); // todo lo ya contado en slots (para no duplicar con extras)
   day.columnas.forEach(col => {
     // FIX (2026-06-29): incluir el slot 'otra' (hora especial). Antes solo se iteraba
@@ -12104,6 +12131,7 @@ function calcIngresosServiciosPorCuenta(day) {
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
       else if (m==='CUSCA') ing['CUSCATLAN'] += c;
       else if (m==='BAC') ing['BAC'] += c;
+      else if (m==='AGRICOLA') ing['AGRICOLA'] += c;
       else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * LINK_NETO; // no se suma hoy
     });
   });
@@ -12123,6 +12151,7 @@ function calcIngresosServiciosPorCuenta(day) {
       if (m==='EFECTIVO') ing['CAJA CHICA'] += c;
       else if (m==='CUSCA') ing['CUSCATLAN'] += c;
       else if (m==='BAC') ing['BAC'] += c;
+      else if (m==='AGRICOLA') ing['AGRICOLA'] += c;
       else if (m==='LINK') ing['_LINK_PENDIENTE'] += c * LINK_NETO;
       // PENDIENTE / CANCELADO: no suma a cuentas (queda por cobrar)
     });
@@ -12170,7 +12199,7 @@ function recalcCerramos(fArg) {
   // Otros ingresos por cuenta (v102, CAMBIO 2): según MÉTODO de pago, mismo criterio que las
   // reservaciones. EFECTIVO→CAJA CHICA, CUSCA→CUSCATLAN, LINK(TARJETA)→diferido (cae mañana en
   // CUSCATLAN, 96.228%), PENDIENTE→no suma. Registros VIEJOS sin `metodo` usan su `destino`.
-  const ingOtros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
+  const ingOtros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, 'AGRICOLA':0};
   let linkOtrosHoy = 0;
   (day.otrosIngresos||[]).forEach(g => {
     const monto = parseFloat(g.monto)||0;
@@ -12179,6 +12208,7 @@ function recalcCerramos(fArg) {
       if (g.metodo === 'EFECTIVO') ingOtros['CAJA CHICA'] += monto;
       else if (g.metodo === 'CUSCA') ingOtros['CUSCATLAN'] += monto;
       else if (g.metodo === 'BAC') ingOtros['BAC'] += monto;
+      else if (g.metodo === 'AGRICOLA') ingOtros['AGRICOLA'] += monto;
       else if (g.metodo === 'LINK') linkOtrosHoy += monto * LINK_NETO;
       // PENDIENTE / CANCELADO: no suma a cuentas hoy
     } else {
@@ -12188,7 +12218,7 @@ function recalcCerramos(fArg) {
   });
 
   // Gastos por fondo
-  const gastosPorFondo = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
+  const gastosPorFondo = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, 'AGRICOLA':0};
   (day.gastos||[]).forEach(g => {
     const fondo = g.fondo || 'CAJA CHICA';
     gastosPorFondo[fondo] = (gastosPorFondo[fondo]||0) + (parseFloat(g.monto)||0);
@@ -12202,8 +12232,8 @@ function recalcCerramos(fArg) {
   const totalComisionEq = _totalComisionesEquipo(day);
 
   // Movimientos entre cuentas
-  const movIn = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
-  const movOut = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0};
+  const movIn = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, 'AGRICOLA':0};
+  const movOut = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, 'AGRICOLA':0};
   (day.movimientos||[]).forEach(m => {
     const monto = parseFloat(m.monto)||0;
     if (m.origen && movOut[m.origen] !== undefined) movOut[m.origen] += monto;
@@ -12211,12 +12241,13 @@ function recalcCerramos(fArg) {
   });
 
   // Cobros de pagos pendientes recibidos hoy
-  const ingCobros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, '_LINK_PENDIENTE':0};
+  const ingCobros = {'CAJA CHICA':0, 'GUARDADO':0, 'CUSCATLAN':0, 'BAC':0, 'AGRICOLA':0, '_LINK_PENDIENTE':0};
   (day.cobrosPendientes||[]).forEach(cb => {
     const monto = parseFloat(cb.monto)||0;
     if (cb.metodo === 'EFECTIVO') ingCobros['CAJA CHICA'] += monto;
     else if (cb.metodo === 'CUSCA') ingCobros['CUSCATLAN'] += monto;
     else if (cb.metodo === 'BAC') ingCobros['BAC'] += monto;
+    else if (cb.metodo === 'AGRICOLA') ingCobros['AGRICOLA'] += monto;
     else if (cb.metodo === 'LINK') ingCobros['_LINK_PENDIENTE'] += monto * LINK_NETO;
   });
 
@@ -12481,7 +12512,7 @@ async function descargarReporteDia() {
   const day = getDayData(f);
   const fechaLegible = new Date(f + 'T12:00:00').toLocaleDateString('es-SV', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
   const esc = _pdfEsc;
-  const MC = { EFECTIVO:['#dcfce7','#15803d'], CUSCA:['#dbeafe','#1d4ed8'], BAC:['#ffe4e6','#be123c'], LINK:['#ede9fe','#6d28d9'], PENDIENTE:['#fef9c3','#a16207'], CANCELADO:['#fee2e2','#b91c1c'] };
+  const MC = { EFECTIVO:['#dcfce7','#15803d'], CUSCA:['#dbeafe','#1d4ed8'], BAC:['#ffe4e6','#be123c'], AGRICOLA:['#ccfbf1','#0f766e'], LINK:['#ede9fe','#6d28d9'], PENDIENTE:['#fef9c3','#a16207'], CANCELADO:['#fee2e2','#b91c1c'] };
   const metBadge = (m) => { const c = MC[m]||['#e5e7eb','#111']; return `<span style="font-size:7pt;font-weight:700;padding:0.3mm 1.5mm;border-radius:3px;background:${c[0]};color:${c[1]};">${esc(metodoLabel(m||'EFECTIVO'))}</span>`; };
 
   // ===== Sección 1: SERVICIOS POR EQUIPO (quién los hizo + pago) =====
@@ -12672,7 +12703,7 @@ async function descargarReporteDia() {
       <tbody>${Array.from({length: Math.max(propBanco.length, propEfe.length, 1)}).map((_,i) => {
         const b = propBanco[i], e = propEfe[i];
         return `<tr>
-          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${b ? esc((b.g.resCodigo?b.g.resCodigo+' · ':'')+(b.g.resCliente||b.g.titulo||'')) + (b.metodo==='LINK'?' (TARJETA)':'') + (_propinaVerificada(b.g) ? ' <span style="font-size:7pt;color:#166534;font-weight:800;">✔ EN CUENTA ('+esc(b.g._verif.medio||'')+' · '+esc(b.g._verif.por||'')+')</span>' : ' <span style="font-size:7pt;color:#b45309;font-weight:800;">— sin revisar</span>') : ''}</td>
+          <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${b ? esc((b.g.resCodigo?b.g.resCodigo+' · ':'')+(b.g.resCliente||b.g.titulo||'')) + (b.metodo==='LINK'?' (TARJETA)':(b.metodo&&b.metodo!=='CUSCA'?' ('+metodoLabel(b.metodo)+')':'')) + (_propinaVerificada(b.g) ? ' <span style="font-size:7pt;color:#166534;font-weight:800;">✔ EN CUENTA ('+esc(b.g._verif.medio||'')+' · '+esc(b.g._verif.por||'')+')</span>' : ' <span style="font-size:7pt;color:#b45309;font-weight:800;">— sin revisar</span>') : ''}</td>
           <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#16a34a;">${b ? '+$'+b.monto.toFixed(2) : ''}</td>
           <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;">${e ? esc(e.equipo) : ''}</td>
           <td style="padding:1.2mm 3mm;border-bottom:1px solid #f0f0f0;text-align:right;font-weight:700;color:#d42b2b;">${e ? '−$'+e.monto.toFixed(2) : ''}</td>
@@ -12680,7 +12711,7 @@ async function descargarReporteDia() {
       }).join('')}
       <tr style="background:#f5f3ff;font-weight:900;"><td style="padding:1.2mm 3mm;">TOTAL AL BANCO</td><td style="padding:1.2mm 3mm;text-align:right;color:#16a34a;">$${propTotB.toFixed(2)}</td><td style="padding:1.2mm 3mm;">TOTAL EN EFECTIVO</td><td style="padding:1.2mm 3mm;text-align:right;color:#d42b2b;">$${propTotE.toFixed(2)}</td></tr></tbody>
     </table>
-    <div style="margin-top:1.5mm;font-size:7.5pt;color:#555;font-style:italic;">La propina se paga al personal en EFECTIVO (sale de Caja Chica) y el cliente la transfiere a la cuenta CUSCATLÁN. El programa no suma ese dinero al banco por su cuenta: cada ingreso se marca "EN CUENTA" cuando se revisa y se confirma que llegó.</div>
+    <div style="margin-top:1.5mm;font-size:7.5pt;color:#555;font-style:italic;">La propina se paga al personal en EFECTIVO (sale de Caja Chica) y el cliente la transfiere a una cuenta bancaria (CUSCATLÁN, BAC o AGRÍCOLA). El programa no suma ese dinero al banco por su cuenta: cada ingreso se marca "EN CUENTA" cuando se revisa y se confirma que llegó.</div>
     <div style="margin-top:1.5mm;font-size:8pt;font-weight:800;color:${Math.abs(propDif)<0.005?'#166534':'#854d0e'};">${Math.abs(propDif)<0.005 ? '✔ CUADRA: el efectivo pagado está respaldado por lo que ingresó a la cuenta bancaria.' : (propDif>0 ? '⚠ Ingresó al banco $'+propDif.toFixed(2)+' más de lo pagado en efectivo.' : '⚠ Se pagó en efectivo $'+Math.abs(propDif).toFixed(2)+' más de lo que ingresó al banco.')}</div>` : '';
 
   const linkPend = parseFloat(cu._linkPendiente)||0;
@@ -13445,6 +13476,11 @@ Le facilito nuestra información bancaria:
 - Número de cuenta: 346-301-000004045
 - mudanzasteclenas@hotmail.com
 
+*BANCO AGRÍCOLA*
+- Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.
+- Cuenta corriente, persona jurídica
+- Número de cuenta: 005280005521
+
 *BANCO DE AMÉRICA CENTRAL (BAC)*
 - Nombre: MUDANZAS TECLEÑAS S.A. DE C.V.
 - Cuenta corriente, persona jurídica
@@ -14155,6 +14191,7 @@ function alertaPendientesUrgentes() {
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
         <option value="BAC">BAC → Banco de América Central</option>
+        <option value="AGRICOLA">AGRÍCOLA → Banco Agrícola</option>
         <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
       </select>
       <!-- v128: se quitó PENDIENTE. Un ajuste PENDIENTE subía el precio a cobrar pero su dinero no entraba
@@ -14187,6 +14224,7 @@ function alertaPendientesUrgentes() {
         <option value="EFECTIVO">EFECTIVO → Caja Chica</option>
         <option value="CUSCA">CUSCA → Cuscatlán</option>
         <option value="BAC">BAC → Banco de América Central</option>
+        <option value="AGRICOLA">AGRÍCOLA → Banco Agrícola</option>
         <option value="LINK">TARJETA → Cuscatlán mañana (96.228%)</option>
       </select>
     </div>
