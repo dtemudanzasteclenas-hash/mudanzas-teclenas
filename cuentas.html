@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cuentas para transferencia · Mudanzas Tecleñas</title>
+<meta name="description" content="Cuentas bancarias de MUDANZAS TECLEÑAS S.A. DE C.V. — Banco Cuscatlán, BAC y Banco Agrícola.">
+<!-- Vista previa de WhatsApp: muestra la imagen de las cuentas dentro del chat -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mudanzas Tecleñas">
+<meta property="og:title" content="Pago por transferencia · Mudanzas Tecleñas">
+<meta property="og:description" content="Banco Cuscatlán 346-301-000004045 · BAC 201659943 · Banco Agrícola 005280005521 — Cuenta corriente, persona jurídica.">
+<meta property="og:url" content="https://dtemudanzasteclenas-hash.github.io/mudanzas-teclenas/cuentas.html">
+<meta property="og:image" content="https://dtemudanzasteclenas-hash.github.io/mudanzas-teclenas/cuentas-vista-previa.png">
+<meta property="og:image:secure_url" content="https://dtemudanzasteclenas-hash.github.io/mudanzas-teclenas/cuentas-vista-previa.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Cuentas bancarias de Mudanzas Tecleñas para pago por transferencia">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root { --fondo:#faf8f2; --texto:#1a2236; --tenue:#6b7280; --borde:#e5e7eb; --tarjeta:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --fondo:#14181f; --texto:#f1f5f9; --tenue:#9ca3af; --borde:#334155; --tarjeta:#1e2530; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--texto); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:16px; }
+  img { width:100%; height:auto; display:block; border-radius:14px; }
+  .cta { margin-top:14px; display:grid; gap:10px; }
+  .cta div { background:var(--tarjeta); border:1px solid var(--borde); border-radius:12px; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .cta b { display:block; font-size:15px; }
+  .cta span { font-size:18px; font-weight:800; letter-spacing:.02em; font-variant-numeric:tabular-nums; }
+  button { border:1px solid var(--borde); background:transparent; color:var(--texto); border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer; }
+  p { color:var(--tenue); font-size:13px; text-align:center; }
+</style>
+</head>
+<body>
+<main>
+  <img src="cuentas-bancarias.png" alt="Cuentas bancarias de Mudanzas Tecleñas: Banco Cuscatlán 346-301-000004045, BAC 201659943, Banco Agrícola 005280005521" width="528" height="816">
+  <div class="cta">
+    <div><div><b>Banco Cuscatlán</b><span>346-301-000004045</span></div><button data-c="346301000004045">Copiar</button></div>
+    <div><div><b>BAC</b><span>201659943</span></div><button data-c="201659943">Copiar</button></div>
+    <div><div><b>Banco Agrícola</b><span>005280005521</span></div><button data-c="005280005521">Copiar</button></div>
+  </div>
+  <p>MUDANZAS TECLEÑAS S.A. DE C.V. · Cuenta corriente, persona jurídica<br>📞 2229-8822 · 📱 6198-4772</p>
+</main>
+<script>
+document.querySelectorAll('button[data-c]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = b.getAttribute('data-c');
+    try { navigator.clipboard.writeText(t).then(function () { b.textContent = '✓ Copiado'; setTimeout(function () { b.textContent = 'Copiar'; }, 1800); }); } catch (e) {}
+  });
+});
+</script>
+</body>
+</html>
