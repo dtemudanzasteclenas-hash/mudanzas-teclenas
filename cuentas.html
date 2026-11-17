@@ -18,36 +18,76 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Cuentas bancarias de Mudanzas Tecleñas para pago por transferencia">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="color-scheme" content="light">
 <style>
-  :root { --fondo:#faf8f2; --texto:#1a2236; --tenue:#6b7280; --borde:#e5e7eb; --tarjeta:#fff; }
-  @media (prefers-color-scheme: dark) { :root { --fondo:#14181f; --texto:#f1f5f9; --tenue:#9ca3af; --borde:#334155; --tarjeta:#1e2530; } }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--fondo); color:var(--texto); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  main { max-width:560px; margin:0 auto; padding:16px; }
-  img { width:100%; height:auto; display:block; border-radius:14px; }
-  .cta { margin-top:14px; display:grid; gap:10px; }
-  .cta div { background:var(--tarjeta); border:1px solid var(--borde); border-radius:12px; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
-  .cta b { display:block; font-size:15px; }
-  .cta span { font-size:18px; font-weight:800; letter-spacing:.02em; font-variant-numeric:tabular-nums; }
-  button { border:1px solid var(--borde); background:transparent; color:var(--texto); border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer; }
-  p { color:var(--tenue); font-size:13px; text-align:center; }
+  body { margin:0; background:#faf8f2; color:#16181d; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  body::before { content:""; display:block; height:6px; background:linear-gradient(90deg,#1e3a8a 50%,#a51c30 50%); }
+  main { max-width:520px; margin:0 auto; padding:12px 14px 20px; }
+  h1 { margin:4px 0 10px; text-align:center; font-size:15px; letter-spacing:.12em; color:#1e3a8a; }
+  .titular { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; text-align:center; margin-bottom:10px; }
+  .titular strong { display:block; font-size:clamp(14px,4.4vw,18px); white-space:nowrap; letter-spacing:.02em; }
+  .titular span { font-size:14px; }
+  .banco { background:#fff; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; margin-bottom:10px; }
+  .banco::before { content:""; display:block; height:6px; background:linear-gradient(90deg,var(--c1) 75%,var(--c2) 75%); }
+  .banco .in { padding:10px 12px 12px; }
+  .banco h2 { margin:0 0 8px; font-size:19px; color:var(--nombre); }
+  .banco h2 small { font-size:12px; font-weight:500; color:#555; margin-left:6px; }
+  .fila { display:flex; gap:8px; align-items:stretch; }
+  .num { flex:1; min-width:0; background:var(--fondo); border:1px solid var(--borde); border-radius:10px; padding:6px 10px; cursor:pointer; }
+  .num i { display:block; font-style:normal; font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--txt); }
+  .num b { display:block; font-size:clamp(15px,4.7vw,26px); font-weight:800; letter-spacing:0; font-variant-numeric:tabular-nums; color:var(--txt); white-space:nowrap; }
+  button { border:0; background:var(--btn); color:var(--btntxt); border-radius:10px; padding:0 10px; font-size:15px; font-weight:800; cursor:pointer; min-width:78px; }
+  button:active { transform:scale(.97); }
+  button.ok { background:#15803d; color:#fff; }
+  .correo { margin:8px 0 0; font-size:13px; color:#555; }
+  .correo b { color:#0b3a8f; }
+  .cus { --c1:#0b3a8f; --c2:#06b6d4; --nombre:#0b3a8f; --fondo:#eaf2fc; --borde:#cfe0f5; --txt:#0b2a66; --btn:#0b3a8f; --btntxt:#fff; }
+  .bac { --c1:#d9232e; --c2:#9ca3af; --nombre:#d9232e; --fondo:#fdeeee; --borde:#f5cfd1; --txt:#8f1219; --btn:#d9232e; --btntxt:#fff; }
+  .agr { --c1:#111; --c2:#ffd91a; --nombre:#111; --fondo:#fff7cc; --borde:#f3e08a; --txt:#111; --btn:#ffd91a; --btntxt:#111; }
+  footer { text-align:center; font-size:13px; color:#6b7280; margin-top:4px; }
 </style>
 </head>
 <body>
 <main>
-  <img src="cuentas-bancarias.png" alt="Cuentas bancarias de Mudanzas Tecleñas: Banco Cuscatlán 346-301-000004045, BAC 201659943, Banco Agrícola 005280005521" width="528" height="816">
-  <div class="cta">
-    <div><div><b>Banco Cuscatlán</b><span>346-301-000004045</span></div><button data-c="346301000004045">Copiar</button></div>
-    <div><div><b>BAC</b><span>201659943</span></div><button data-c="201659943">Copiar</button></div>
-    <div><div><b>Banco Agrícola</b><span>005280005521</span></div><button data-c="005280005521">Copiar</button></div>
-  </div>
-  <p>MUDANZAS TECLEÑAS S.A. DE C.V. · Cuenta corriente, persona jurídica<br>📞 2229-8822 · 📱 6198-4772</p>
+  <h1>PAGO POR TRANSFERENCIA</h1>
+  <div class="titular"><strong>MUDANZAS TECLEÑAS, S.A. DE C.V.</strong><span>Cuenta <b>CORRIENTE</b>, persona <b>JURÍDICA</b></span></div>
+
+  <section class="banco cus"><div class="in">
+    <h2>Banco Cuscatlán</h2>
+    <div class="fila"><div class="num" data-c="346301000004045"><i>NÚMERO DE CUENTA</i><b>346-301-000004045</b></div><button data-c="346301000004045">Copiar</button></div>
+    <p class="correo">Correo: <b>mudanzasteclenas@hotmail.com</b></p>
+  </div></section>
+
+  <section class="banco bac"><div class="in">
+    <h2>BAC <small>Banco de América Central</small></h2>
+    <div class="fila"><div class="num" data-c="201659943"><i>NÚMERO DE CUENTA</i><b>201659943</b></div><button data-c="201659943">Copiar</button></div>
+  </div></section>
+
+  <section class="banco agr"><div class="in">
+    <h2>Banco Agrícola</h2>
+    <div class="fila"><div class="num" data-c="005280005521"><i>NÚMERO DE CUENTA</i><b>005280005521</b></div><button data-c="005280005521">Copiar</button></div>
+  </div></section>
+
+  <footer>📞 2229-8822 · 📱 6198-4772</footer>
 </main>
 <script>
-document.querySelectorAll('button[data-c]').forEach(function (b) {
-  b.addEventListener('click', function () {
-    var t = b.getAttribute('data-c');
-    try { navigator.clipboard.writeText(t).then(function () { b.textContent = '✓ Copiado'; setTimeout(function () { b.textContent = 'Copiar'; }, 1800); }); } catch (e) {}
+function copiar(t) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t);
+  return new Promise(function (ok, no) {
+    var a = document.createElement('textarea'); a.value = t; a.style.position = 'fixed'; a.style.opacity = '0';
+    document.body.appendChild(a); a.select();
+    try { document.execCommand('copy') ? ok() : no(); } catch (e) { no(e); }
+    document.body.removeChild(a);
+  });
+}
+document.querySelectorAll('[data-c]').forEach(function (el) {
+  el.addEventListener('click', function () {
+    var b = el.closest('.fila').querySelector('button');
+    copiar(el.getAttribute('data-c')).then(function () {
+      b.textContent = '✓ Copiado'; b.classList.add('ok');
+      setTimeout(function () { b.textContent = 'Copiar'; b.classList.remove('ok'); }, 1800);
+    }).catch(function () {});
   });
 });
 </script>
